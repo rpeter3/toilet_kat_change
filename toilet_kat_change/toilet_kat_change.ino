@@ -71,7 +71,7 @@ struct VersionInfo {
   char hardware_description[32];
 };
 
-const char* SOFTWARE_VERSION = "2.4.0";
+const char* SOFTWARE_VERSION = "2.4.2"; //HOPEFULLY FIX MD5
 const char* SOFTWARE_BUILD_DATE = __DATE__ " " __TIME__;
 
 // Forward declarations
@@ -86,6 +86,8 @@ VersionInfo readHardwareVersion();
 void writeHardwareVersion(uint16_t version, const char* description);
 String getVersionString();
 void enterEEPROMInvalidErrorState(const char* reason);
+void maintainEEPROMErrorIndicator();
+void startEEPROMWakeAlert();
 bool prepareForOTA();
 void notifyUpdateProgress(int percentage);
 bool rollbackOTAUpdate();
@@ -312,6 +314,9 @@ const int EEPROM_INVALID_ERROR_CODE = 7;
 const uint16_t VIRGIN_EEPROM_MAGIC = 0xFFFF;
 bool eepromErrorState = false;
 bool lastEEPROMWriteVerified = false;
+bool eepromWakeAlertActive = false;
+unsigned long eepromWakeAlertStartMillis = 0;
+const unsigned long EEPROM_WAKE_ALERT_MS = 10000;
 
 // Motor Driver Definitions
 const uint8_t M1DIR_PIN = 1;     // GPIO1 (M1DIR)
@@ -425,12 +430,7 @@ class server_callbacks: public BLEServerCallbacks {
     
     // Save parameters to EEPROM for persistence
     saveParametersToEEPROM();
-    if (eepromErrorState && lastEEPROMWriteVerified) {
-      Serial.println("EEPROM recovery successful from BLE disconnect sync. Restarting.");
-      sendSerialToBLE("EEPROM RECOVERED - restarting device");
-      delay(200);
-      ESP.restart();
-    }
+    // Keep EEPROM latch logic tied to explicit BLE parameter writes only.
     
     Serial.printf("Parameters updated! H=%ld, K=%.1f\n", H, K);
   }
@@ -563,10 +563,13 @@ class characteristic_callbacks: public BLECharacteristicCallbacks {
         saveParametersToEEPROM();
         if (eepromErrorState) {
           if (lastEEPROMWriteVerified) {
-            Serial.println("EEPROM recovery successful from BLE parameter write. Restarting.");
-            sendSerialToBLE("EEPROM RECOVERED - restarting device");
-            delay(200);
-            ESP.restart();
+            eepromErrorState = false;
+            eepromWakeAlertActive = false;
+            if (ERROR_CODE == EEPROM_INVALID_ERROR_CODE) {
+              ERROR_CODE = 0;
+            }
+            Serial.println("EEPROM recovery successful from BLE parameter write. Clearing latched EEPROM error.");
+            sendSerialToBLE("EEPROM RECOVERED - latched error cleared");
           } else {
             Serial.println("EEPROM recovery attempt failed - still in EEPROM error state");
             sendSerialToBLE("EEPROM RECOVERY FAILED - write not verified");
@@ -823,6 +826,24 @@ void enterEEPROMInvalidErrorState(const char* reason) {
   LEDErrorCode(ERROR_CODE);
 }
 
+void maintainEEPROMErrorIndicator() {
+  if (!eepromErrorState || ERROR_CODE != EEPROM_INVALID_ERROR_CODE) {
+    return;
+  }
+  // Keep the EEPROM error LED latched high whenever the device is awake.
+  mcp_digitalWrite(ledPins[EEPROM_INVALID_ERROR_CODE], HIGH);
+}
+
+void startEEPROMWakeAlert() {
+  if (!eepromErrorState) {
+    return;
+  }
+  eepromWakeAlertActive = true;
+  eepromWakeAlertStartMillis = millis();
+  Serial.println("EEPROM error wake alert active for 10 seconds.");
+  sendSerialToBLE("EEPROM error wake alert active for 10 seconds");
+}
+
 // Function to load parameters from EEPROM
 void loadParametersFromEEPROM() {
   EEPROM.begin(EEPROM_SIZE);
@@ -899,6 +920,15 @@ void loadParametersFromEEPROM() {
     SerialBLE_print(String(magic, HEX));
     SerialBLE_println();
     EEPROM.end();
+    // Keep toilet operational: rewrite defaults, but latch EEPROM error until BLE update succeeds.
+    saveParametersToEEPROM();
+    if (!lastEEPROMWriteVerified) {
+      Serial.println("WARNING: Failed to rewrite defaults after EEPROM corruption.");
+      SerialBLE_println("WARNING: Failed to rewrite defaults after EEPROM corruption.");
+    } else {
+      Serial.println("Defaults rewritten after EEPROM corruption.");
+      SerialBLE_println("Defaults rewritten after EEPROM corruption.");
+    }
     enterEEPROMInvalidErrorState("magic mismatch");
     return;
   }
@@ -1264,6 +1294,8 @@ void handleOTAChunk(uint8_t* data, size_t length) {
       }
       md5_received = true;
       Serial.println("MD5 hash received");
+      setOTAState(OTA_VALIDATING, "md5 received");
+      publishOTAStatus("UPDATE_VALIDATING");
     }
     return;
   }
@@ -1313,9 +1345,7 @@ void handleOTAChunk(uint8_t* data, size_t length) {
     mbedtls_md5_finish(&md5_ctx, calculated_md5);
     mbedtls_md5_free(&md5_ctx);
     md5_initialized = false;
-    Serial.println("Firmware reception complete, validating...");
-    setOTAState(OTA_VALIDATING, "all bytes received");
-    publishOTAStatus("UPDATE_VALIDATING");
+    Serial.println("Firmware reception complete, awaiting MD5.");
   }
 }
 
@@ -1415,13 +1445,8 @@ void setup() {
     loadParametersFromEEPROM();
     knownResistor = thermistorResistance;
     setpoint = K;
-    if (eepromErrorState) {
-      Serial.println("EEPROM error state on wake path - enabling BLE for recovery and halting normal ops.");
-      bleStartupTime = millis();
-      bleEnabled = true;
-      server_setup(false);
-      return;
-    }
+    startEEPROMWakeAlert();
+    maintainEEPROMErrorIndicator();
 
     pinMode(heaterPin, OUTPUT);
     pinMode(buzzerPin, OUTPUT);
@@ -1502,11 +1527,7 @@ void setup() {
   SerialBLE_print(", K=");
   SerialBLE_print(K);
   SerialBLE_println();
-  if (eepromErrorState) {
-    Serial.println("EEPROM error state active - BLE recovery mode only.");
-    sendSerialToBLE("EEPROM ERROR MODE: update parameters via BLE to recover");
-    return;
-  }
+  maintainEEPROMErrorIndicator();
 
   setpoint = K;
 
@@ -1539,6 +1560,7 @@ void loop() {
   if (lastActivityMillis == 0) {
     lastActivityMillis = millis();
   }
+  maintainEEPROMErrorIndicator();
 
   // OTA mode handling
   if (otaEnabled) {
@@ -1571,7 +1593,7 @@ void loop() {
   }
   
   // Check for BLE timeout (10 minutes from startup) - never shut down during OTA transfer
-  if (!DEVELOPMENT_MODE && bleEnabled && !eepromErrorState && !otaTransferInProgress() && (millis() - bleStartupTime > BLE_TIMEOUT)) {
+  if (!DEVELOPMENT_MODE && bleEnabled && !otaTransferInProgress() && (millis() - bleStartupTime > BLE_TIMEOUT)) {
     Serial.println("BLE shutting down after 10 minutes to save power");
     SerialBLE_println("BLE shutting down after 10 minutes to save power");
     
@@ -1643,9 +1665,15 @@ void loop() {
   }
   } // End of BLE-specific operations
 
-  if (eepromErrorState) {
-    // Lock out non-BLE operation while awaiting EEPROM recovery.
-    return;
+  if (eepromWakeAlertActive) {
+    if (millis() - eepromWakeAlertStartMillis < EEPROM_WAKE_ALERT_MS) {
+      // Show latched EEPROM error indicator while holding controls for user awareness.
+      maintainEEPROMErrorIndicator();
+      return;
+    }
+    eepromWakeAlertActive = false;
+    Serial.println("EEPROM wake alert ended. Normal operation resumed.");
+    sendSerialToBLE("EEPROM wake alert ended. Normal operation resumed");
   }
   
   // OTA update handling is now done via update_characteristic_callbacks class
@@ -1660,7 +1688,7 @@ void loop() {
   bool bothButtonsPressedNow = button1Pressed && button2Pressed;
   
   // Check for both buttons pressed simultaneously
-  if (bothButtonsPressedNow && !bothButtonsPressed) {
+  if (bothButtonsPressedNow && !bothButtonsPressed && !otaEnabled) {
     SerialBLE_println("Both buttons pressed - Stopping all operations and displaying battery charge level");
     
     // Stop all ongoing operations immediately
@@ -1926,6 +1954,8 @@ void loop() {
     esp_sleep_enable_ext0_wakeup((gpio_num_t)controlPanelWake, 0);  // LOW = button pressed
     esp_light_sleep_start();
     circleLeds();
+    startEEPROMWakeAlert();
+    maintainEEPROMErrorIndicator();
     lastActivityMillis = millis();
   }
 
@@ -1979,6 +2009,7 @@ void loop() {
     ledIndex = 0;
     ledLastUpdateMillis = millis();
   }
+  maintainEEPROMErrorIndicator();
 }
 
 void flushSequence() {
@@ -3035,6 +3066,11 @@ void LEDErrorCode(int errorCode) { // Modified to accept errorCode
   Serial.println(errorCode);
   for (int j = 0; j < totalLeds; j++) {
     mcp_digitalWrite(ledPins[j], LOW);
+  }
+  if (errorCode == EEPROM_INVALID_ERROR_CODE) {
+    // EEPROM warning mode: steady indicator while allowing device operation.
+    mcp_digitalWrite(ledPins[EEPROM_INVALID_ERROR_CODE], HIGH);
+    return;
   }
   for (int j = 0; j < 10; j++) {
     mcp_digitalWrite(ledPins[errorCode], HIGH);
