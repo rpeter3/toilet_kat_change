@@ -71,7 +71,7 @@ struct VersionInfo {
   char hardware_description[32];
 };
 
-const char* SOFTWARE_VERSION = "2.3.3";
+const char* SOFTWARE_VERSION = "2.4.0";
 const char* SOFTWARE_BUILD_DATE = __DATE__ " " __TIME__;
 
 // Forward declarations
@@ -85,6 +85,7 @@ void initializeHardwareVersion();
 VersionInfo readHardwareVersion();
 void writeHardwareVersion(uint16_t version, const char* description);
 String getVersionString();
+void enterEEPROMInvalidErrorState(const char* reason);
 bool prepareForOTA();
 void notifyUpdateProgress(int percentage);
 bool rollbackOTAUpdate();
@@ -306,6 +307,11 @@ int ERROR_CODE = 0;
 //ERROR_CODE = 4 ==> Motor Fault Detected
 //ERROR_CODE = 5 ==> Heater current detection failure
 //ERROR_CODE = 6 ==> Heater max wall time - time above K not reached
+//ERROR_CODE = 7 ==> EEPROM invalid (reflash/parameter recovery required)
+const int EEPROM_INVALID_ERROR_CODE = 7;
+const uint16_t VIRGIN_EEPROM_MAGIC = 0xFFFF;
+bool eepromErrorState = false;
+bool lastEEPROMWriteVerified = false;
 
 // Motor Driver Definitions
 const uint8_t M1DIR_PIN = 1;     // GPIO1 (M1DIR)
@@ -419,6 +425,12 @@ class server_callbacks: public BLEServerCallbacks {
     
     // Save parameters to EEPROM for persistence
     saveParametersToEEPROM();
+    if (eepromErrorState && lastEEPROMWriteVerified) {
+      Serial.println("EEPROM recovery successful from BLE disconnect sync. Restarting.");
+      sendSerialToBLE("EEPROM RECOVERED - restarting device");
+      delay(200);
+      ESP.restart();
+    }
     
     Serial.printf("Parameters updated! H=%ld, K=%.1f\n", H, K);
   }
@@ -549,6 +561,17 @@ class characteristic_callbacks: public BLECharacteristicCallbacks {
         
         // Save parameters to EEPROM for persistence
         saveParametersToEEPROM();
+        if (eepromErrorState) {
+          if (lastEEPROMWriteVerified) {
+            Serial.println("EEPROM recovery successful from BLE parameter write. Restarting.");
+            sendSerialToBLE("EEPROM RECOVERED - restarting device");
+            delay(200);
+            ESP.restart();
+          } else {
+            Serial.println("EEPROM recovery attempt failed - still in EEPROM error state");
+            sendSerialToBLE("EEPROM RECOVERY FAILED - write not verified");
+          }
+        }
         
         // Update characteristic value with new parameters (18 values)
         String paramString = String(batteryThreshold) + "," +
@@ -726,6 +749,7 @@ void server_setup(bool includeOTA = false) {
 // Function to save parameters to EEPROM
 void saveParametersToEEPROM() {
   EEPROM.begin(EEPROM_SIZE);
+  lastEEPROMWriteVerified = false;
   
   // Write magic number to verify valid data
   EEPROM.put(PARAM_START_ADDR, PARAM_MAGIC_NUMBER);
@@ -754,18 +778,19 @@ void saveParametersToEEPROM() {
   EEPROM.put(addr, backupTimeAfterReopen); addr += sizeof(backupTimeAfterReopen);
   EEPROM.put(addr, CUT_MODE_TEMP); addr += sizeof(CUT_MODE_TEMP);
   
-  EEPROM.commit();
+  bool commitOk = EEPROM.commit();
   
   // Verify the write by reading back the magic number
   uint16_t verifyMagic;
   EEPROM.get(PARAM_START_ADDR, verifyMagic);
   
-  if (verifyMagic == PARAM_MAGIC_NUMBER) {
+  if (commitOk && verifyMagic == PARAM_MAGIC_NUMBER) {
+    lastEEPROMWriteVerified = true;
     Serial.println("Parameters saved to EEPROM - verification successful");
     SerialBLE_println("Parameters saved to EEPROM - verification successful");
   } else {
-    Serial.printf("ERROR: EEPROM write verification failed! Expected: 0x%04X, Read: 0x%04X\n", 
-                  PARAM_MAGIC_NUMBER, verifyMagic);
+    Serial.printf("ERROR: EEPROM write verification failed! Commit OK: %s, Expected: 0x%04X, Read: 0x%04X\n", 
+                  commitOk ? "true" : "false", PARAM_MAGIC_NUMBER, verifyMagic);
     SerialBLE_print("ERROR: EEPROM write verification failed! Expected: 0x");
     SerialBLE_print(String(PARAM_MAGIC_NUMBER, HEX));
     SerialBLE_print(", Read: 0x");
@@ -774,6 +799,28 @@ void saveParametersToEEPROM() {
   }
   
   EEPROM.end();
+}
+
+void enterEEPROMInvalidErrorState(const char* reason) {
+  Serial.printf("EEPROM INVALID: %s\n", reason);
+  SerialBLE_print("EEPROM INVALID: ");
+  SerialBLE_println(reason);
+
+  // Flash all LEDs 5 times before showing dedicated EEPROM error code.
+  for (int i = 0; i < 5; i++) {
+    for (int j = 0; j < totalLeds; j++) {
+      mcp_digitalWrite(ledPins[j], HIGH);
+    }
+    delay(100);
+    for (int j = 0; j < totalLeds; j++) {
+      mcp_digitalWrite(ledPins[j], LOW);
+    }
+    delay(100);
+  }
+
+  ERROR_CODE = EEPROM_INVALID_ERROR_CODE;
+  eepromErrorState = true;
+  LEDErrorCode(ERROR_CODE);
 }
 
 // Function to load parameters from EEPROM
@@ -830,27 +877,31 @@ void loadParametersFromEEPROM() {
     SerialBLE_print(", backupTime=");
     SerialBLE_print(backupTime);
     SerialBLE_println();
-  } else {
-    Serial.println("No valid parameters in EEPROM, using defaults");
-    SerialBLE_println("No valid parameters in EEPROM, using defaults");
-    
-    // Flash LEDs 5 times in 1 second to indicate EEPROM error
-    for (int i = 0; i < 5; i++) {
-      // Turn on all LEDs
-      for (int j = 0; j < totalLeds; j++) {
-        mcp_digitalWrite(ledPins[j], HIGH);
-      }
-      delay(100); // 100ms on
-      
-      // Turn off all LEDs
-      for (int j = 0; j < totalLeds; j++) {
-        mcp_digitalWrite(ledPins[j], LOW);
-      }
-      delay(100); // 100ms off
-    }
+    EEPROM.end();
+    return;
   }
-  
-  EEPROM.end();
+
+  if (magic == VIRGIN_EEPROM_MAGIC) {
+    Serial.println("Virgin EEPROM detected (0xFFFF). Writing default parameters.");
+    SerialBLE_println("Virgin EEPROM detected (0xFFFF). Writing default parameters.");
+    EEPROM.end();
+    saveParametersToEEPROM();
+    if (!lastEEPROMWriteVerified) {
+      enterEEPROMInvalidErrorState("failed to initialize defaults");
+    } else {
+      Serial.println("Virgin EEPROM initialized with defaults.");
+      SerialBLE_println("Virgin EEPROM initialized with defaults.");
+    }
+    return;
+  } else {
+    Serial.printf("EEPROM magic invalid/corrupt (0x%04X). Entering EEPROM error state.\n", magic);
+    SerialBLE_print("EEPROM magic invalid/corrupt: 0x");
+    SerialBLE_print(String(magic, HEX));
+    SerialBLE_println();
+    EEPROM.end();
+    enterEEPROMInvalidErrorState("magic mismatch");
+    return;
+  }
 }
 
 // Initialize hardware version (write once when device is first programmed)
@@ -1360,11 +1411,17 @@ void setup() {
     mcp_setup();
     Serial.println("MCP23017 Initialized");
     circleLeds();
-    circleLeds();
 
     loadParametersFromEEPROM();
     knownResistor = thermistorResistance;
     setpoint = K;
+    if (eepromErrorState) {
+      Serial.println("EEPROM error state on wake path - enabling BLE for recovery and halting normal ops.");
+      bleStartupTime = millis();
+      bleEnabled = true;
+      server_setup(false);
+      return;
+    }
 
     pinMode(heaterPin, OUTPUT);
     pinMode(buzzerPin, OUTPUT);
@@ -1445,6 +1502,11 @@ void setup() {
   SerialBLE_print(", K=");
   SerialBLE_print(K);
   SerialBLE_println();
+  if (eepromErrorState) {
+    Serial.println("EEPROM error state active - BLE recovery mode only.");
+    sendSerialToBLE("EEPROM ERROR MODE: update parameters via BLE to recover");
+    return;
+  }
 
   setpoint = K;
 
@@ -1509,7 +1571,7 @@ void loop() {
   }
   
   // Check for BLE timeout (10 minutes from startup) - never shut down during OTA transfer
-  if (!DEVELOPMENT_MODE && bleEnabled && !otaTransferInProgress() && (millis() - bleStartupTime > BLE_TIMEOUT)) {
+  if (!DEVELOPMENT_MODE && bleEnabled && !eepromErrorState && !otaTransferInProgress() && (millis() - bleStartupTime > BLE_TIMEOUT)) {
     Serial.println("BLE shutting down after 10 minutes to save power");
     SerialBLE_println("BLE shutting down after 10 minutes to save power");
     
@@ -1528,7 +1590,7 @@ void loop() {
   // BLE-specific operations - only run if BLE is enabled and OTA is not active
   if (bleEnabled && !otaEnabled) {
     if (!is_device_connected) {
-    Serial.println("hi");
+    //Serial.println("hi");
   } else {
     // Send periodic status when connected
     static unsigned long lastStatusPrint = 0;
@@ -1580,6 +1642,11 @@ void loop() {
     }
   }
   } // End of BLE-specific operations
+
+  if (eepromErrorState) {
+    // Lock out non-BLE operation while awaiting EEPROM recovery.
+    return;
+  }
   
   // OTA update handling is now done via update_characteristic_callbacks class
   // Read button states
