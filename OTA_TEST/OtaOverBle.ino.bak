@@ -8,6 +8,7 @@
   * NOTE:
     - This base sketch enables OTA firmware updates via BLE on the ESP32.
     - Flash this code first before attempting any over-the-air updates.
+    - RENAMED TO .ino.bak so it is NOT compiled with OTA_TEST (only one .ino allowed per sketch).
 
   * Export Update File:
     - In the Arduino IDE, select the correct board from Tools --> Board.
@@ -18,7 +19,7 @@
     - Locate the file with the '.ino.bin' extension and move it to your phone.
 
   * Instructions:
-    - Once you’ve completed the steps above, launch the Wible app on your smartphone.
+    - Once you've completed the steps above, launch the Wible app on your smartphone.
     - Then select "OTA Update" and look for the listing called "Wible".
     - Select the '.ino.bin' file you placed on your phone.
     - Tap the "Start" button in the Wible app to begin the OTA update (file transfer).  

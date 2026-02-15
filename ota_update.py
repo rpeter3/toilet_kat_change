@@ -43,7 +43,7 @@ class OTAUpdater:
     def notification_handler(self, sender, data):
         """Handle notifications from device"""
         try:
-            message = data.decode('utf-8')
+            message = data.decode('utf-8', errors='replace')
             if "UPDATE_PROGRESS:" in message:
                 # Extract progress percentage
                 progress_str = message.split(":")[1]
@@ -341,7 +341,7 @@ class OTAUpdater:
 
         firmware_size = len(firmware_data)
         print(f"Firmware size: {firmware_size} bytes")
-        MAX_OTA_PARTITION_SIZE = 0x1C0000
+        MAX_OTA_PARTITION_SIZE = 0x480000
         if firmware_size > MAX_OTA_PARTITION_SIZE:
             print(f"WARNING: Firmware size ({firmware_size} bytes) exceeds OTA partition size ({MAX_OTA_PARTITION_SIZE} bytes)")
         else:

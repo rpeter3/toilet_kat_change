@@ -71,7 +71,7 @@ struct VersionInfo {
   char hardware_description[32];
 };
 
-const char* SOFTWARE_VERSION = "2.1.0";
+const char* SOFTWARE_VERSION = "2.3.3";
 const char* SOFTWARE_BUILD_DATE = __DATE__ " " __TIME__;
 
 // Forward declarations
@@ -164,7 +164,7 @@ int F = 6; //parameters_list[2]
 long T = 40; //parameters_list[3] - Cooling Time (Seconds)
 float thermistorResistance = 10000.0; // constant, not in BLE
 int r2 = 2; // constant, not in BLE
-float backupTime = 1.7; //parameters_list[6]
+float backupTime = 1.0; //parameters_list[6]
 int r4 = 2; // constant, not in BLE
 int fanDuration = 5; //parameters_list[8]
 long H = 20; //parameters_list[9] - Time (seconds) thermistor must be above K
@@ -175,9 +175,9 @@ float MOTOR_CUT_TIME = 0.5; //parameters_list[13]
 float CUT_MODE_HEAT_TIME = 10.0; //parameters_list[14] - Additional time (seconds) above K in cut mode
 float postCoolingBagDuration = 5.0; //parameters_list[15]
 float preFeedFan = 2.0; //parameters_list[16]
-float fanReverseTime = 3.0; //parameters_list[17]
+float fanReverseTime = 10.0; //parameters_list[17]
 float fanReverseStartTime = 0.0; //parameters_list[18]
-float backupTimeAfterReopen = 1.7; //parameters_list[19]
+float backupTimeAfterReopen = 1.0; //parameters_list[19]
 float CUT_MODE_TEMP = 105.0;      //parameters_list[20] - Temp to maintain for CUT_MODE_HEAT_TIME after cut (125 High barrier, 105 Compostable)
 
 bool isFlushing = false;
@@ -235,6 +235,7 @@ unsigned long otaWindowStartTime = 0;
 bool batteryMonitoringActive = false;
 const unsigned long BATTERY_MONITOR_DURATION = 10000; // 10 seconds
 const unsigned long OTA_WINDOW_DURATION = 60000; // 1 minute
+const unsigned long OTA_MODE_MAX_DURATION = 2 * 60 * 1000; // 2 minutes - then always exit OTA and stop circle
 unsigned long lastBatteryCheckTime = 0;
 const unsigned long BATTERY_CHECK_INTERVAL = 1000; // Check battery every 1 second
 
@@ -254,6 +255,22 @@ enum OTAState {
 };
 
 OTAState otaState = OTA_IDLE;
+inline bool otaTransferInProgress() {
+  return (otaState == OTA_PREPARING || otaState == OTA_RECEIVING ||
+          otaState == OTA_VALIDATING || otaState == OTA_FINALIZING);
+}
+void publishOTAStatus(const String& status, bool notify = true);
+void publishOTAErrorStatus(const char* reasonCode);
+bool setOTAState(OTAState nextState, const char* reason);
+bool isKnownOTACommand(const String& command);
+void handleOTACommand(const String& command);
+void checkOTATimeouts();
+String last_update_status = "UPDATE_IDLE";
+unsigned long otaStateEnteredAt = 0;
+unsigned long otaLastChunkMillis = 0;
+const unsigned long OTA_PREPARE_TIMEOUT_MS = 15000;
+const unsigned long OTA_RECEIVE_INACTIVITY_TIMEOUT_MS = 20000;
+const unsigned long OTA_FINALIZE_TIMEOUT_MS = 15000;
 esp_ota_handle_t ota_handle = 0;
 const esp_partition_t *ota_partition = NULL;
 const esp_partition_t *running_partition = NULL;
@@ -413,8 +430,7 @@ class update_characteristic_callbacks: public BLECharacteristicCallbacks {
     if (pCharacteristic->getUUID().toString() == UPDATE_CHARACTERISTIC_UUID) {
       // Check if OTA is enabled - reject all operations if disabled
       if (!otaEnabled) {
-        update_characteristic->setValue("OTA_DISABLED");
-        update_characteristic->notify();
+        publishOTAStatus("OTA_DISABLED");
         Serial.println("OTA request rejected - OTA mode not enabled");
         return;
       }
@@ -422,123 +438,26 @@ class update_characteristic_callbacks: public BLECharacteristicCallbacks {
       int message_length = pCharacteristic->getLength();
       if (message_length > 0) {
         uint8_t* data = pCharacteristic->getData();
-        
+
+        // Use length-aware parsing (BLE payload is not guaranteed null-terminated)
+        String command = String((char*)data, (unsigned int)message_length);
+        command.trim();
+
+        if (isKnownOTACommand(command)) {
+          handleOTACommand(command);
+          return;
+        }
+
         // Handle OTA chunks
         if (otaState == OTA_RECEIVING) {
           handleOTAChunk(data, message_length);
           return;
         }
         
-        // Handle commands
-        String command = String((char*)data);
-        command.trim();
-        
         Serial.print("DEBUG: Received update command: '");
         Serial.print(command);
         Serial.println("'");
-        
-        if (command == "CHECK_VERSION") {
-          String versionInfo = getVersionString();
-          version_characteristic->setValue(versionInfo.c_str());
-          version_characteristic->notify();
-          SerialBLE_println("Version check requested");
-        } else if (command == "PREPARE_UPDATE") {
-          if (prepareForOTA()) {
-            update_characteristic->setValue("UPDATE_PREPARED");
-            update_characteristic->notify();
-            SerialBLE_println("Device prepared for update");
-          } else {
-            update_characteristic->setValue("UPDATE_BLOCKED");
-            update_characteristic->notify();
-            SerialBLE_println("Update preparation blocked");
-          }
-        } else if (command == "START_UPDATE") {
-          if (otaState == OTA_PREPARING) {
-            // Initialize OTA
-            esp_err_t err = esp_ota_begin(update_partition, OTA_SIZE_UNKNOWN, &ota_handle);
-            if (err != ESP_OK) {
-              Serial.printf("ERROR: esp_ota_begin failed: %s\n", esp_err_to_name(err));
-              otaState = OTA_ERROR;
-              ota_error_message = "OTA begin failed: " + String(esp_err_to_name(err));
-              update_characteristic->setValue("UPDATE_ERROR");
-              update_characteristic->notify();
-              return;
-            }
-            
-            otaState = OTA_RECEIVING;
-            update_characteristic->setValue("UPDATE_STARTED");
-            update_characteristic->notify();
-            SerialBLE_println("OTA update started");
-            notifyUpdateProgress(0);
-          } else {
-            update_characteristic->setValue("UPDATE_NOT_PREPARED");
-            update_characteristic->notify();
-            SerialBLE_println("Update not prepared");
-          }
-        } else if (command == "FINALIZE_UPDATE") {
-          if (otaState == OTA_VALIDATING) {
-            // Validate firmware
-            if (!validateFirmware()) {
-              SerialBLE_println("Firmware validation failed, rolling back...");
-              otaState = OTA_ERROR;
-              rollback_required = true;
-              
-              // Abort OTA
-              esp_ota_abort(ota_handle);
-              ota_handle = 0;
-              
-              update_characteristic->setValue("UPDATE_VALIDATION_FAILED");
-              update_characteristic->notify();
-              
-              // Attempt rollback
-              if (rollbackOTAUpdate()) {
-                SerialBLE_println("Rollback successful, rebooting...");
-                delay(1000);
-                esp_restart();
-              }
-              return;
-            }
-            
-            // Finalize OTA
-            otaState = OTA_FINALIZING;
-            esp_err_t err = esp_ota_end(ota_handle);
-            if (err != ESP_OK) {
-              Serial.printf("ERROR: esp_ota_end failed: %s\n", esp_err_to_name(err));
-              otaState = OTA_ERROR;
-              ota_error_message = "OTA end failed: " + String(esp_err_to_name(err));
-              update_characteristic->setValue("UPDATE_ERROR");
-              update_characteristic->notify();
-              return;
-            }
-            
-            // Set boot partition
-            err = esp_ota_set_boot_partition(update_partition);
-            if (err != ESP_OK) {
-              Serial.printf("ERROR: esp_ota_set_boot_partition failed: %s\n", esp_err_to_name(err));
-              otaState = OTA_ERROR;
-              ota_error_message = "Set boot partition failed: " + String(esp_err_to_name(err));
-              update_characteristic->setValue("UPDATE_ERROR");
-              update_characteristic->notify();
-              return;
-            }
-            
-            update_characteristic->setValue("UPDATE_COMPLETE");
-            update_characteristic->notify();
-            SerialBLE_println("OTA update completed successfully, rebooting...");
-            notifyUpdateProgress(100);
-            
-            delay(1000);
-            esp_restart();
-          } else {
-            update_characteristic->setValue("UPDATE_NOT_READY");
-            update_characteristic->notify();
-            SerialBLE_println("Update not ready for finalization");
-          }
-        } else {
-          Serial.print("DEBUG: Unknown update command: '");
-          Serial.print(command);
-          Serial.println("'");
-        }
+        SerialBLE_println("Unknown OTA payload while not receiving");
       }
     }
   }
@@ -581,8 +500,17 @@ class characteristic_callbacks: public BLECharacteristicCallbacks {
       int message_length = pCharacteristic->getLength();
       if (message_length > 0) {
         unsigned char* message = pCharacteristic->getData();
+        // Allow remote clients to request OTA mode via BLE write
+        String cmd = String((char*)message);
+        cmd.trim();
+        if (cmd == "ENABLE_OTA") {
+          Serial.println("Received ENABLE_OTA command via BLE");
+          sendSerialToBLE("Received ENABLE_OTA command via BLE");
+          enableOTA();
+          pCharacteristic->setValue("ENABLE_OTA_ACK");
+          return;
+        }
         Serial.printf("Immediate parameter update received, length: %d\n", message_length);
-        
         // Parse 18 comma-separated float values (thermistorResistance, r2, r4 are constants)
         char * parameters_string = strtok((char*) message, ",");
         float parameters_list[100];
@@ -760,19 +688,25 @@ void server_setup(bool includeOTA = false) {
                                                            );
   version_characteristic->setValue("v1.0");
   Serial.println("Version characteristic set to dummy value");
-  
-  // DON'T create update service at startup - create it dynamically in enableOTA()
+
+  // Create update characteristic as part of main service (OTA commands; Python client uses it after ENABLE_OTA)
+  Serial.println("Creating update characteristic in main service...");
+  update_characteristic = blue_service->createCharacteristic(
+    UPDATE_CHARACTERISTIC_UUID,
+    BLECharacteristic::PROPERTY_READ |
+    BLECharacteristic::PROPERTY_WRITE
+  );
+  update_characteristic->setCallbacks(new update_characteristic_callbacks());
+  update_characteristic->setValue("READY");
+  Serial.println("Update characteristic created and callback set");
   update_service = NULL;
-  update_characteristic = NULL;
-  
+
   // Starts the service on the server
   blue_service->start();
-  
+
   // Starts broadcasting so any devices can now find it and connect
-  // Only advertise main service - OTA service will be added in enableOTA()
   BLEAdvertising * blue_advert = blue_server->getAdvertising();
   blue_advert->addServiceUUID(SERVICE_UUID);
-  // Don't add UPDATE_SERVICE_UUID here - it will be added in enableOTA()
   blue_advert->setScanResponse(true);
   // Functions that help with iPhone connections issue
   blue_advert->setMinPreferred(0x06);
@@ -997,19 +931,26 @@ String getVersionString() {
   
   if (hwInfo.magic == HW_VERSION_MAGIC) {
     versionString += "|Desc:";
-    versionString += hwInfo.hardware_description;
+    // Sanitize description: only append printable ASCII so BLE payload is valid UTF-8
+    for (size_t i = 0; i < sizeof(hwInfo.hardware_description) && hwInfo.hardware_description[i] != '\0'; i++) {
+      char c = hwInfo.hardware_description[i];
+      versionString += (c >= 0x20 && c <= 0x7E) ? c : '?';
+    }
   }
-  
   return versionString;
 }
 
 // Prepare device for OTA update
 bool prepareForOTA() {
+  // When OTA mode is enabled, allow preparation (we already idled in enableOTA())
+  if (otaEnabled) {
+    isFlushing = false;
+    updateInProgress = false;
+  }
   if (isFlushing || updateInProgress) {
     SerialBLE_println("Update preparation blocked - flush in progress");
     return false;
   }
-  
   // Get current running partition
   running_partition = esp_ota_get_running_partition();
   if (running_partition == NULL) {
@@ -1052,12 +993,12 @@ bool prepareForOTA() {
   
   // Reset OTA state
   resetOTAState();
-  otaState = OTA_PREPARING;
+  if (!setOTAState(OTA_PREPARING, "prepare command")) {
+    publishOTAErrorStatus("INVALID_PREPARE_TRANSITION");
+    return false;
+  }
   updateInProgress = true;
-  
-  // Indicate update mode with LEDs
-  flashLeds(); // Flash LEDs to indicate update mode
-  
+  otaLastChunkMillis = millis();
   SerialBLE_println("Device prepared for OTA update");
   Serial.printf("Current partition: %s, Update partition: %s\n", 
                 running_partition->label, update_partition->label);
@@ -1080,7 +1021,7 @@ void notifyUpdateProgress(int percentage) {
 
 // Reset OTA state variables
 void resetOTAState() {
-  otaState = OTA_IDLE;
+  setOTAState(OTA_IDLE, "reset");
   ota_handle = 0;
   firmware_size = 0;
   bytes_received = 0;
@@ -1088,6 +1029,8 @@ void resetOTAState() {
   md5_received = false;
   rollback_required = false;
   ota_error_message = "";
+  last_update_status = "UPDATE_IDLE";
+  otaLastChunkMillis = 0;
   memset(expected_md5, 0, 16);
   memset(calculated_md5, 0, 16);
   
@@ -1248,6 +1191,7 @@ void handleOTAChunk(uint8_t* data, size_t length) {
     Serial.println("ERROR: Received chunk but not in RECEIVING state");
     return;
   }
+  otaLastChunkMillis = millis();
   
   // Check if this is a metadata chunk (firmware size or MD5)
   if (length >= 4 && data[0] == 'S' && data[1] == 'I' && data[2] == 'Z' && data[3] == 'E') {
@@ -1276,8 +1220,9 @@ void handleOTAChunk(uint8_t* data, size_t length) {
   // Regular firmware data chunk
   if (ota_handle == 0) {
     Serial.println("ERROR: OTA handle not initialized");
-    otaState = OTA_ERROR;
+    setOTAState(OTA_ERROR, "chunk received without handle");
     ota_error_message = "OTA handle not initialized";
+    publishOTAErrorStatus("HANDLE_NOT_INITIALIZED");
     return;
   }
   
@@ -1295,8 +1240,9 @@ void handleOTAChunk(uint8_t* data, size_t length) {
   esp_err_t err = esp_ota_write(ota_handle, data, length);
   if (err != ESP_OK) {
     Serial.printf("ERROR: Failed to write OTA chunk: %s\n", esp_err_to_name(err));
-    otaState = OTA_ERROR;
+    setOTAState(OTA_ERROR, "esp_ota_write failed");
     ota_error_message = "OTA write failed: " + String(esp_err_to_name(err));
+    publishOTAErrorStatus("WRITE_FAILED");
     mbedtls_md5_free(&md5_ctx);
     md5_initialized = false;
     return;
@@ -1317,7 +1263,8 @@ void handleOTAChunk(uint8_t* data, size_t length) {
     mbedtls_md5_free(&md5_ctx);
     md5_initialized = false;
     Serial.println("Firmware reception complete, validating...");
-    otaState = OTA_VALIDATING;
+    setOTAState(OTA_VALIDATING, "all bytes received");
+    publishOTAStatus("UPDATE_VALIDATING");
   }
 }
 
@@ -1412,6 +1359,7 @@ void setup() {
 
     mcp_setup();
     Serial.println("MCP23017 Initialized");
+    circleLeds();
     circleLeds();
 
     loadParametersFromEEPROM();
@@ -1534,27 +1482,34 @@ void loop() {
   if (otaEnabled) {
     // OTA mode is active - run slow circle animation
     slowCircleLeds();
+    checkOTATimeouts();
     
-    // Check if OTA window has expired (1 minute)
+    // Check if OTA window has expired - never expire while transfer in progress
     unsigned long currentMillis = millis();
-    if (currentMillis - otaWindowStartTime >= OTA_WINDOW_DURATION) {
-      // Check if there's an active OTA connection
-      bool hasOTAConnection = (is_device_connected && update_characteristic != NULL);
-      
-      if (!hasOTAConnection) {
-        Serial.println("OTA window expired with no connections - disabling OTA and restarting BLE");
+    if (!otaTransferInProgress()) {
+      if (currentMillis - otaWindowStartTime >= OTA_MODE_MAX_DURATION) {
+        // 2 minutes reached - always exit OTA and stop circle
+        Serial.println("OTA mode max duration (2 min) reached - disabling OTA and restarting BLE");
         restartBLEServer();
-        batteryMonitoringActive = false; // Reset monitoring state
-        lastBatteryCheckTime = millis(); // Reset battery check timer
-      } else {
-        // OTA connection exists, extend window or keep it open
-        Serial.println("OTA connection active - keeping OTA mode enabled");
+        batteryMonitoringActive = false;
+        lastBatteryCheckTime = millis();
+      } else if (currentMillis - otaWindowStartTime >= OTA_WINDOW_DURATION) {
+        // 1 minute - expire only if no OTA connection
+        bool hasOTAConnection = (is_device_connected && update_characteristic != NULL);
+        if (!hasOTAConnection) {
+          Serial.println("OTA window expired with no connections - disabling OTA and restarting BLE");
+          restartBLEServer();
+          batteryMonitoringActive = false;
+          lastBatteryCheckTime = millis();
+        } else {
+          Serial.println("OTA connection active - keeping OTA mode enabled");
+        }
       }
     }
   }
   
-  // Check for BLE timeout (10 minutes from startup)
-  if (!DEVELOPMENT_MODE && bleEnabled && (millis() - bleStartupTime > BLE_TIMEOUT)) {
+  // Check for BLE timeout (10 minutes from startup) - never shut down during OTA transfer
+  if (!DEVELOPMENT_MODE && bleEnabled && !otaTransferInProgress() && (millis() - bleStartupTime > BLE_TIMEOUT)) {
     Serial.println("BLE shutting down after 10 minutes to save power");
     SerialBLE_println("BLE shutting down after 10 minutes to save power");
     
@@ -2374,129 +2329,35 @@ void slowCircleLeds() {
   }
 }
 
-// Enable OTA mode - create service dynamically
+// Enable OTA mode - set flags and clear battery display; update characteristic already exists in main service
 void enableOTA() {
   if (otaEnabled) {
     Serial.println("OTA already enabled - returning");
     return; // Already enabled
   }
-  
-  Serial.println("\n=== ENABLING OTA MODE ===");
-  sendSerialToBLE("\n=== ENABLING OTA MODE ===");
-  delay(10);
-  
-  Serial.println("=== MEMORY DIAGNOSTICS ===");
-  sendSerialToBLE("=== MEMORY DIAGNOSTICS ===");
-  
-  size_t freeHeap = ESP.getFreeHeap();
-  size_t maxAlloc = ESP.getMaxAllocHeap();
-  size_t minFree = ESP.getMinFreeHeap();
-  size_t heapSize = ESP.getHeapSize();
-  
-  Serial.printf("Free heap: %d bytes\n", freeHeap);
-  sendSerialToBLE("Free heap: " + String(freeHeap) + " bytes");
-  
-  Serial.printf("Largest free block: %d bytes\n", maxAlloc);
-  sendSerialToBLE("Largest free block: " + String(maxAlloc) + " bytes");
-  
-  Serial.printf("Min free heap ever: %d bytes\n", minFree);
-  sendSerialToBLE("Min free heap ever: " + String(minFree) + " bytes");
-  
-  Serial.printf("Heap size: %d bytes\n", heapSize);
-  sendSerialToBLE("Heap size: " + String(heapSize) + " bytes");
-  
-  // Check for memory fragmentation
-  float fragmentation = ((float)(freeHeap - maxAlloc) / freeHeap) * 100.0;
-  Serial.printf("Memory fragmentation: %.1f%%\n", fragmentation);
-  sendSerialToBLE("Memory fragmentation: " + String(fragmentation, 1) + "%");
-  
-  // Check if we have enough memory (BLE services typically need ~10-20KB)
-  if (maxAlloc < 20000) {
-    Serial.println("WARNING: Largest free block is less than 20KB - may cause issues!");
-    sendSerialToBLE("WARNING: Largest free block is less than 20KB - may cause issues!");
+  // Force hardware idle so PREPARE_UPDATE is not blocked (flush/motors/heater off)
+  stopEverything();
+  // Exit battery display so battery level LEDs don't stay lit; only slow circle will show
+  batteryDisplayMode = false;
+  batteryMonitoringActive = false;
+  // Turn off all LEDs immediately (clear battery level display if it was on)
+  for (int i = 0; i < totalLeds; i++) {
+    mcp_digitalWrite(ledPins[i], LOW);
   }
-  
-  // Stop advertising temporarily
-  if (bleEnabled && blue_server) {
-    blue_server->getAdvertising()->stop();
-  }
-  
-  // Create update service dynamically
-  if (update_service == NULL) {
-    Serial.println("Creating OTA service...");
-    sendSerialToBLE("Creating OTA service...");
-    update_service = blue_server->createService(UPDATE_SERVICE_UUID);
-    
-    freeHeap = ESP.getFreeHeap();
-    Serial.printf("Free heap AFTER createService: %d bytes\n", freeHeap);
-    sendSerialToBLE("Free heap AFTER createService: " + String(freeHeap) + " bytes");
-    
-    // Create update characteristic
-    update_characteristic = update_service->createCharacteristic(
-      UPDATE_CHARACTERISTIC_UUID,
-      BLECharacteristic::PROPERTY_READ |
-      BLECharacteristic::PROPERTY_WRITE |
-      BLECharacteristic::PROPERTY_NOTIFY
-    );
-    
-    freeHeap = ESP.getFreeHeap();
-    Serial.printf("Free heap AFTER createCharacteristic: %d bytes\n", freeHeap);
-    sendSerialToBLE("Free heap AFTER createCharacteristic: " + String(freeHeap) + " bytes");
-    
-    update_characteristic->setValue("OTA_READY");
-    
-    Serial.println("Creating callback object...");
-    sendSerialToBLE("Creating callback object...");
-    update_characteristic->setCallbacks(new update_characteristic_callbacks());
-    
-    freeHeap = ESP.getFreeHeap();
-    Serial.printf("Free heap AFTER setCallbacks: %d bytes\n", freeHeap);
-    sendSerialToBLE("Free heap AFTER setCallbacks: " + String(freeHeap) + " bytes");
-    
-    // Start update service
-    update_service->start();
-    
-    freeHeap = ESP.getFreeHeap();
-    Serial.printf("Free heap AFTER start service: %d bytes\n", freeHeap);
-    sendSerialToBLE("Free heap AFTER start service: " + String(freeHeap) + " bytes");
-  }
-  
-  // Add OTA service to advertising
-  BLEAdvertising * blue_advert = blue_server->getAdvertising();
-  blue_advert->addServiceUUID(UPDATE_SERVICE_UUID);
-  blue_advert->setScanResponse(true);
-  blue_advert->setMinPreferred(0x06);
-  blue_advert->setMinPreferred(0x12);
-  
-  // Restart advertising
-  Serial.println("Restarting advertising...");
-  sendSerialToBLE("Restarting advertising...");
-  BLEDevice::startAdvertising();
-  
-  freeHeap = ESP.getFreeHeap();
-  maxAlloc = ESP.getMaxAllocHeap();
-  Serial.printf("Free heap AFTER startAdvertising: %d bytes\n", freeHeap);
-  sendSerialToBLE("Free heap AFTER startAdvertising: " + String(freeHeap) + " bytes");
-  
-  // Final memory check
-  fragmentation = ((float)(freeHeap - maxAlloc) / freeHeap) * 100.0;
-  Serial.printf("Final memory fragmentation: %.1f%%\n", fragmentation);
-  sendSerialToBLE("Final memory fragmentation: " + String(fragmentation, 1) + "%");
-  
-  Serial.println("=== OTA MODE ENABLED ===");
+  Serial.println("\n=== OTA MODE ENABLED ===");
+  Serial.println("OTA window open for 1 minute - awaiting firmware update over USB serial or BLE");
   sendSerialToBLE("=== OTA MODE ENABLED ===");
-  
+  sendSerialToBLE("OTA window open for 1 minute");
+  // Reset OTA state to ensure clean slate for new update attempt
+  resetOTAState();
+  updateInProgress = false;
+  isFlushing = false;
   otaEnabled = true;
   otaWindowStartTime = millis();
   slowCircleLedIndex = 0;
   slowCircleLastUpdate = millis();
-  
-  // Turn off all LEDs first
-  for (int i = 0; i < totalLeds; i++) {
-    mcp_digitalWrite(ledPins[i], LOW);
-  }
-  
-  Serial.println("OTA mode enabled - window open for 1 minute");
+  Serial.println("OTA state reset complete - ready for update");
+  sendSerialToBLE("OTA state reset - ready for update");
 }
 
 // Disable OTA mode
@@ -2516,7 +2377,7 @@ void disableOTA() {
   // The service will remain in memory but won't be advertised
   otaEnabled = false;
   updateInProgress = false;
-  otaState = OTA_IDLE;
+  setOTAState(OTA_IDLE, "ota disabled");
   
   // Turn off all LEDs
   for (int i = 0; i < totalLeds; i++) {
@@ -2524,6 +2385,234 @@ void disableOTA() {
   }
   
   Serial.println("OTA mode disabled");
+}
+
+const char* otaStateToString(OTAState state) {
+  switch (state) {
+    case OTA_IDLE: return "OTA_IDLE";
+    case OTA_PREPARING: return "OTA_PREPARING";
+    case OTA_RECEIVING: return "OTA_RECEIVING";
+    case OTA_VALIDATING: return "OTA_VALIDATING";
+    case OTA_FINALIZING: return "OTA_FINALIZING";
+    case OTA_ERROR: return "OTA_ERROR";
+    case OTA_ROLLBACK: return "OTA_ROLLBACK";
+    default: return "OTA_UNKNOWN";
+  }
+}
+
+bool isValidOTATransition(OTAState from, OTAState to) {
+  if (from == to) {
+    return true;
+  }
+  if (to == OTA_ERROR || to == OTA_IDLE) {
+    return true;
+  }
+  switch (from) {
+    case OTA_IDLE:
+      return to == OTA_PREPARING;
+    case OTA_PREPARING:
+      return to == OTA_RECEIVING;
+    case OTA_RECEIVING:
+      return to == OTA_VALIDATING;
+    case OTA_VALIDATING:
+      return to == OTA_FINALIZING;
+    case OTA_ERROR:
+      return to == OTA_PREPARING;
+    default:
+      return false;
+  }
+}
+
+bool setOTAState(OTAState nextState, const char* reason) {
+  if (!isValidOTATransition(otaState, nextState)) {
+    Serial.printf("WARN: Illegal OTA transition %s -> %s (%s)\n",
+                  otaStateToString(otaState), otaStateToString(nextState), reason);
+    return false;
+  }
+  otaState = nextState;
+  otaStateEnteredAt = millis();
+  Serial.printf("OTA state: %s (%s)\n", otaStateToString(otaState), reason);
+  return true;
+}
+
+void publishOTAStatus(const String& status, bool notify) {
+  last_update_status = status;
+  if (update_characteristic) {
+    update_characteristic->setValue(status.c_str());
+    if (notify) {
+      update_characteristic->notify();
+    }
+  }
+}
+
+void publishOTAErrorStatus(const char* reasonCode) {
+  String status = "UPDATE_ERROR:";
+  status += reasonCode;
+  publishOTAStatus(status);
+}
+
+bool isKnownOTACommand(const String& command) {
+  return command == "CHECK_VERSION" ||
+         command == "PREPARE_UPDATE" ||
+         command == "START_UPDATE" ||
+         command == "FINALIZE_UPDATE";
+}
+
+void handleOTACommand(const String& command) {
+  Serial.print("DEBUG: OTA command: '");
+  Serial.print(command);
+  Serial.println("'");
+
+  if (command == "CHECK_VERSION") {
+    String versionInfo = getVersionString();
+    version_characteristic->setValue(versionInfo.c_str());
+    version_characteristic->notify();
+    SerialBLE_println("Version check requested");
+    return;
+  }
+
+  if (command == "PREPARE_UPDATE") {
+    if (otaState == OTA_PREPARING) {
+      publishOTAStatus("UPDATE_PREPARED");
+      return;
+    }
+    if (otaState == OTA_RECEIVING || otaState == OTA_VALIDATING || otaState == OTA_FINALIZING) {
+      publishOTAStatus("UPDATE_IN_PROGRESS");
+      return;
+    }
+    publishOTAStatus("PREPARING");
+    if (prepareForOTA()) {
+      publishOTAStatus("UPDATE_PREPARED");
+      SerialBLE_println("Device prepared for update");
+    } else {
+      publishOTAStatus("UPDATE_BLOCKED");
+      SerialBLE_println("Update preparation blocked");
+    }
+    return;
+  }
+
+  if (command == "START_UPDATE") {
+    if (otaState == OTA_RECEIVING || otaState == OTA_VALIDATING || otaState == OTA_FINALIZING) {
+      publishOTAStatus("UPDATE_STARTED");
+      return;
+    }
+    if (otaState != OTA_PREPARING) {
+      publishOTAStatus("UPDATE_NOT_PREPARED");
+      SerialBLE_println("Update not prepared");
+      return;
+    }
+    if (ota_handle == 0) {
+      esp_err_t err = esp_ota_begin(update_partition, OTA_SIZE_UNKNOWN, &ota_handle);
+      if (err != ESP_OK) {
+        Serial.printf("ERROR: esp_ota_begin failed: %s\n", esp_err_to_name(err));
+        setOTAState(OTA_ERROR, "esp_ota_begin failed");
+        ota_error_message = "OTA begin failed: " + String(esp_err_to_name(err));
+        publishOTAErrorStatus("BEGIN_FAILED");
+        return;
+      }
+    }
+    if (!setOTAState(OTA_RECEIVING, "start update command")) {
+      publishOTAErrorStatus("INVALID_START_TRANSITION");
+      return;
+    }
+    otaLastChunkMillis = millis();
+    publishOTAStatus("UPDATE_STARTED");
+    SerialBLE_println("OTA update started");
+    notifyUpdateProgress(0);
+    return;
+  }
+
+  if (command == "FINALIZE_UPDATE") {
+    if (last_update_status == "UPDATE_COMPLETE" || otaState == OTA_FINALIZING) {
+      publishOTAStatus("UPDATE_COMPLETE");
+      return;
+    }
+    if (otaState != OTA_VALIDATING) {
+      publishOTAStatus("UPDATE_NOT_READY");
+      SerialBLE_println("Update not ready for finalization");
+      return;
+    }
+    if (!validateFirmware()) {
+      SerialBLE_println("Firmware validation failed, rolling back...");
+      setOTAState(OTA_ERROR, "firmware validation failed");
+      rollback_required = true;
+      if (ota_handle != 0) {
+        esp_ota_abort(ota_handle);
+        ota_handle = 0;
+      }
+      publishOTAStatus("UPDATE_VALIDATION_FAILED");
+      if (rollbackOTAUpdate()) {
+        SerialBLE_println("Rollback successful, rebooting...");
+        delay(1000);
+        esp_restart();
+      }
+      return;
+    }
+
+    if (!setOTAState(OTA_FINALIZING, "finalize command")) {
+      publishOTAErrorStatus("INVALID_FINALIZE_TRANSITION");
+      return;
+    }
+    publishOTAStatus("UPDATE_FINALIZING");
+    esp_err_t err = esp_ota_end(ota_handle);
+    if (err != ESP_OK) {
+      Serial.printf("ERROR: esp_ota_end failed: %s\n", esp_err_to_name(err));
+      setOTAState(OTA_ERROR, "esp_ota_end failed");
+      ota_error_message = "OTA end failed: " + String(esp_err_to_name(err));
+      publishOTAErrorStatus("END_FAILED");
+      return;
+    }
+    err = esp_ota_set_boot_partition(update_partition);
+    if (err != ESP_OK) {
+      Serial.printf("ERROR: esp_ota_set_boot_partition failed: %s\n", esp_err_to_name(err));
+      setOTAState(OTA_ERROR, "set boot partition failed");
+      ota_error_message = "Set boot partition failed: " + String(esp_err_to_name(err));
+      publishOTAErrorStatus("BOOT_PARTITION_FAILED");
+      return;
+    }
+    publishOTAStatus("UPDATE_COMPLETE");
+    notifyUpdateProgress(100);
+    SerialBLE_println("OTA update completed successfully, rebooting...");
+    delay(1000);
+    esp_restart();
+  }
+}
+
+void checkOTATimeouts() {
+  unsigned long now = millis();
+  if (otaState == OTA_PREPARING && (now - otaStateEnteredAt > OTA_PREPARE_TIMEOUT_MS)) {
+    setOTAState(OTA_ERROR, "prepare timeout");
+    publishOTAErrorStatus("TIMEOUT_PREPARE");
+    resetOTAState();
+    publishOTAStatus("UPDATE_TIMEOUT_RECOVERED");
+    return;
+  }
+
+  if (otaState == OTA_RECEIVING) {
+    unsigned long lastActivity = (otaLastChunkMillis > 0) ? otaLastChunkMillis : otaStateEnteredAt;
+    if (now - lastActivity > OTA_RECEIVE_INACTIVITY_TIMEOUT_MS) {
+      if (ota_handle != 0) {
+        esp_ota_abort(ota_handle);
+        ota_handle = 0;
+      }
+      setOTAState(OTA_ERROR, "receive timeout");
+      publishOTAErrorStatus("TIMEOUT_RECEIVE");
+      resetOTAState();
+      publishOTAStatus("UPDATE_TIMEOUT_RECOVERED");
+      return;
+    }
+  }
+
+  if (otaState == OTA_FINALIZING && (now - otaStateEnteredAt > OTA_FINALIZE_TIMEOUT_MS)) {
+    if (ota_handle != 0) {
+      esp_ota_abort(ota_handle);
+      ota_handle = 0;
+    }
+    setOTAState(OTA_ERROR, "finalize timeout");
+    publishOTAErrorStatus("TIMEOUT_FINALIZE");
+    resetOTAState();
+    publishOTAStatus("UPDATE_TIMEOUT_RECOVERED");
+  }
 }
 
 // Restart BLE server without OTA
