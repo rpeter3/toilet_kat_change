@@ -24,127 +24,98 @@ class ToiletSystemInterface:
         self.current_params = {}
         self.serial_streaming = False
         
-        # Parameter definitions with descriptions and units
+        # Parameter definitions with descriptions and units (defaults = Compostable 1.5mil from material_parameters.csv)
         self.param_definitions = {
-            "batteryThreshold": {"description": "Battery voltage threshold", "units": "ADC", "default": 5},
-            "K": {"description": "Temperature setpoint", "units": "°C", "default": 60.0},
-            "F": {"description": "How long to feed the bag at the START of a flush", "units": "sec", "default": 6},
-            "T": {"description": "Cooling Time", "units": "sec", "default": 40},
-            "thermistorResistance": {"description": "Thermistor Resistance", "units": "Ohms", "default": 10000},
-            "r2": {"description": "Thermistor resistance 2", "units": "ohms", "default": 2},
-            "backupTime": {"description": "How long to back up the bag when re-opening", "units": "sec", "default": 1.7},
-            "r4": {"description": "Thermistor resistance 4", "units": "ohms", "default": 2},
-            "fanDuration": {"description": "How long to run the fan after feeding at the end of a flush", "units": "sec", "default": 5},
-            "H": {"description": "Heater On time", "units": "sec", "default": 10},
-            "continueFeeder": {"description": "Feeder continue time", "units": "sec", "default": 7},
-            "maxOpeningTime": {"description": "Max opening time", "units": "sec", "default": 12},
-            "typicalOpeningTime": {"description": "Typical opening time", "units": "sec", "default": 10},
+            "batteryThreshold": {"description": "Battery voltage threshold", "units": "ADC", "default": 5.0},
+            "K": {"description": "Temperature setpoint", "units": "°C", "default": 90.0},
+            "F": {"description": "How long to feed the bag at the START of a flush", "units": "sec", "default": 6.0},
+            "T": {"description": "Cooling Time", "units": "sec", "default": 40.0},
+            "backupTime": {"description": "How long to back up the bag when re-opening", "units": "sec", "default": 1.0},
+            "fanDuration": {"description": "How long to run the fan after feeding at the end of a flush", "units": "sec", "default": 5.0},
+            "H": {"description": "Heater On time", "units": "sec", "default": 20.0},
+            "continueFeeder": {"description": "Feeder continue time", "units": "sec", "default": 6.0},
+            "maxOpeningTime": {"description": "Max opening time", "units": "sec", "default": 12.0},
+            "typicalOpeningTime": {"description": "Typical opening time", "units": "sec", "default": 10.0},
             "MOTOR_CUT_TIME": {"description": "Motor cut duration", "units": "sec", "default": 0.5},
             "CUT_MODE_HEAT_TIME": {"description": "Additional heater time in cut mode", "units": "sec", "default": 10.0},
             "postCoolingBagDuration": {"description": "Fan duration before feed motors start in case 10", "units": "sec", "default": 5.0},
-            "preFeedFan": {"description": "Fan duration before feed motor starts in case 1 and button 2", "units": "sec", "default": 3.0},
-            "fanReverseTime": {"description": "Duration M3 runs in reverse after starting", "units": "sec", "default": 3.0},
+            "preFeedFan": {"description": "Fan duration before feed motor starts in case 1 and button 2", "units": "sec", "default": 2.0},
+            "fanReverseTime": {"description": "Duration M3 runs in reverse after starting", "units": "sec", "default": 10.0},
             "fanReverseStartTime": {"description": "Delay before M3 reverse starts as percentage of typicalOpeningTime after M1 begins closing", "units": "%", "default": 0.0},
-            "backupTimeAfterReopen": {"description": "Feed bag backup duration after mechanism motor finishes opening", "units": "sec", "default": 1.7}
+            "backupTimeAfterReopen": {"description": "Feed bag backup duration after mechanism motor finishes opening", "units": "sec", "default": 1.7},
+            "CUT_MODE_TEMP": {"description": "Temperature to maintain for CUT_MODE_HEAT_TIME after cut motor (125 High barrier, 105 Compostable)", "units": "°C", "default": 105.0}
         }
         
-        # Predefined parameter sets for different materials
+        # Predefined parameter sets for different materials (match material_parameters.csv)
         self.parameter_sets = {
-            "1mil High Barrier Plastic": {
-                "batteryThreshold": 5,
-                "K": 90.0,  # Higher temperature for plastic
-                "F": 6,     # Shorter feed time
-                "T": 60,    # Longer cooling time
-                "thermistorResistance": 10000,
-                "r2": 2,
-                "backupTime": 1.7,
-                "r4": 2,
-                "fanDuration": 5,
-                "H": 30,    # Longer heater time
-                "continueFeeder": 7,
-                "maxOpeningTime": 12,
-                "typicalOpeningTime": 10,
-                "MOTOR_CUT_TIME": 0.5,
-                "CUT_MODE_HEAT_TIME": 15.0,
-                "postCoolingBagDuration": 5.0,
-                "preFeedFan": 2.0,
-                "fanReverseTime": 3.0,
-                "fanReverseStartTime": 0.0,
-                "backupTimeAfterReopen": 1.7
-            },
             "1.5mil High Barrier Plastic": {
-                "batteryThreshold": 5,
-                "K": 90.0,  # Higher temperature for plastic
-                "F": 6,     # Shorter feed time
-                "T": 60,    # Longer cooling time
-                "thermistorResistance": 10000,
-                "r2": 2,
-                "backupTime": 1.7,
-                "r4": 2,
-                "fanDuration": 5,
-                "H": 30,    # Longer heater time
-                "continueFeeder": 7,
-                "maxOpeningTime": 12,
-                "typicalOpeningTime": 10,
+                "batteryThreshold": 5.0,
+                "K": 120.0,
+                "F": 6.0,
+                "T": 60.0,
+                "backupTime": 1.0,
+                "fanDuration": 5.0,
+                "H": 30.0,
+                "continueFeeder": 6.0,
+                "maxOpeningTime": 12.0,
+                "typicalOpeningTime": 10.0,
                 "MOTOR_CUT_TIME": 0.5,
                 "CUT_MODE_HEAT_TIME": 15.0,
                 "postCoolingBagDuration": 5.0,
                 "preFeedFan": 2.0,
-                "fanReverseTime": 3.0,
+                "fanReverseTime": 10.0,
                 "fanReverseStartTime": 0.0,
-                "backupTimeAfterReopen": 1.7
+                "backupTimeAfterReopen": 1.7,
+                "CUT_MODE_TEMP": 125.0
             },
             "Compostable 1mil": {
-                "batteryThreshold": 5,
-                "K": 60.0,  # Lower temperature for thin compostable
-                "F": 6,     # Longer feed time
-                "T": 40,    # Shorter cooling time
-                "thermistorResistance": 10000,
-                "r2": 2,
-                "backupTime": 1.7,
-                "r4": 2,
-                "fanDuration": 5,
-                "H": 10,    # Shorter heater time
-                "continueFeeder": 7,
-                "maxOpeningTime": 12,
-                "typicalOpeningTime": 10,
+                "batteryThreshold": 5.0,
+                "K": 90.0,
+                "F": 6.0,
+                "T": 40.0,
+                "backupTime": 1.0,
+                "fanDuration": 5.0,
+                "H": 15.0,
+                "continueFeeder": 6.0,
+                "maxOpeningTime": 12.0,
+                "typicalOpeningTime": 10.0,
                 "MOTOR_CUT_TIME": 0.5,
                 "CUT_MODE_HEAT_TIME": 5.0,
                 "postCoolingBagDuration": 5.0,
                 "preFeedFan": 2.0,
-                "fanReverseTime": 3.0,
+                "fanReverseTime": 10.0,
                 "fanReverseStartTime": 0.0,
-                "backupTimeAfterReopen": 1.7
+                "backupTimeAfterReopen": 1.7,
+                "CUT_MODE_TEMP": 105.0
             },
             "Compostable 1.5mil": {
-                "batteryThreshold": 5,
-                "K": 60.0,  # Medium temperature for thicker compostable
-                "F": 6,     # Medium feed time
-                "T": 40,    # Medium cooling time
-                "thermistorResistance": 10000,
-                "r2": 2,
-                "backupTime": 1.7,
-                "r4": 2,
-                "fanDuration": 5,
-                "H": 12,    # Medium heater time
-                "continueFeeder": 7,
-                "maxOpeningTime": 12,
-                "typicalOpeningTime": 10,
+                "batteryThreshold": 5.0,
+                "K": 90.0,
+                "F": 6.0,
+                "T": 40.0,
+                "backupTime": 1.0,
+                "fanDuration": 5.0,
+                "H": 20.0,
+                "continueFeeder": 6.0,
+                "maxOpeningTime": 12.0,
+                "typicalOpeningTime": 10.0,
                 "MOTOR_CUT_TIME": 0.5,
                 "CUT_MODE_HEAT_TIME": 10.0,
                 "postCoolingBagDuration": 5.0,
                 "preFeedFan": 2.0,
-                "fanReverseTime": 3.0,
-                "fanReverseStartTime": 0.0
+                "fanReverseTime": 10.0,
+                "fanReverseStartTime": 0.0,
+                "backupTimeAfterReopen": 1.7,
+                "CUT_MODE_TEMP": 105.0
             }
         }
         
-        # Parameter order (as expected by ESP32)
+        # Parameter order (18 values, as expected by ESP32 BLE)
         self.param_order = [
-            "batteryThreshold", "K", "F", "T", "thermistorResistance", "r2", "backupTime", "r4", 
+            "batteryThreshold", "K", "F", "T", "backupTime",
             "fanDuration", "H", "continueFeeder", "maxOpeningTime", "typicalOpeningTime",
             "MOTOR_CUT_TIME", "CUT_MODE_HEAT_TIME", "postCoolingBagDuration", "preFeedFan",
-            "fanReverseTime", "fanReverseStartTime", "backupTimeAfterReopen"
+            "fanReverseTime", "fanReverseStartTime", "backupTimeAfterReopen", "CUT_MODE_TEMP"
         ]
 
     async def scan_for_device(self) -> Optional[str]:
@@ -205,16 +176,12 @@ class ToiletSystemInterface:
             for i, param_name in enumerate(self.param_order):
                 if i < len(values):
                     try:
-                        # Try to convert to float first, then int
-                        value = float(values[i])
-                        if value.is_integer():
-                            value = int(value)
-                        params[param_name] = value
+                        params[param_name] = float(values[i])
                     except ValueError:
                         print(f"Invalid value for {param_name}: {values[i]}")
-                        params[param_name] = self.param_definitions[param_name]["default"]
+                        params[param_name] = float(self.param_definitions[param_name]["default"])
                 else:
-                    params[param_name] = self.param_definitions[param_name]["default"]
+                    params[param_name] = float(self.param_definitions[param_name]["default"])
             
             self.current_params = params
             return params
@@ -230,13 +197,14 @@ class ToiletSystemInterface:
             return False
         
         try:
-            # Create comma-separated message
+            # Create comma-separated message (all values as float strings for BLE)
             message_parts = []
             for param_name in self.param_order:
                 if param_name in new_params:
-                    message_parts.append(str(new_params[param_name]))
+                    val = new_params[param_name]
                 else:
-                    message_parts.append(str(self.current_params.get(param_name, self.param_definitions[param_name]["default"])))
+                    val = self.current_params.get(param_name, self.param_definitions[param_name]["default"])
+                message_parts.append(str(float(val)))
             
             message = ",".join(message_parts)
             print(f"Sending message: {message}")
@@ -479,15 +447,11 @@ async def main():
                     
                     if user_input:
                         try:
-                            # Try to convert to appropriate type
-                            if '.' in user_input:
-                                new_params[param_name] = float(user_input)
-                            else:
-                                new_params[param_name] = int(user_input)
+                            new_params[param_name] = float(user_input)
                         except ValueError:
                             print(f"Invalid value for {param_name}, keeping current value")
                     else:
-                        new_params[param_name] = current
+                        new_params[param_name] = float(current)
                 
                 if await interface.update_params(new_params):
                     interface.current_params.update(new_params)
@@ -576,13 +540,7 @@ async def main():
                         
                         if user_input:
                             try:
-                                # Try to convert to appropriate type
-                                if '.' in user_input:
-                                    new_value = float(user_input)
-                                else:
-                                    new_value = int(user_input)
-                                
-                                # Update the single parameter
+                                new_value = float(user_input)
                                 if await interface.update_single_param(selected_param, new_value):
                                     interface.current_params[selected_param] = new_value
                                     print(f"\nParameter '{selected_param}' updated successfully to {new_value}!")
