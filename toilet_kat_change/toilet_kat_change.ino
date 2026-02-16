@@ -71,7 +71,7 @@ struct VersionInfo {
   char hardware_description[32];
 };
 
-const char* SOFTWARE_VERSION = "2.4.2"; //HOPEFULLY FIX MD5
+const char* SOFTWARE_VERSION = "2.4.3"; //HOPEFULLY FIX MD5
 const char* SOFTWARE_BUILD_DATE = __DATE__ " " __TIME__;
 
 // Forward declarations
@@ -129,6 +129,10 @@ unsigned long timeAboveSetpointMillis = 0;   // Cumulative ms thermistor has bee
 unsigned long lastHeaterCheckMillis = 0;     // Last millis() when we updated the time-above-K accumulator
 unsigned long timeAboveCutModeTempMillis = 0;   // After cut motor: cumulative ms temp >= CUT_MODE_TEMP
 unsigned long lastCutModeTempCheckMillis = 0;   // Last millis() for time-above-CUT_MODE_TEMP accumulator
+unsigned long lastHeaterPidLogMillis = 0;  // Last millis() when heater temp/PWM were logged
+const unsigned long HEATER_PID_LOG_INTERVAL_MS = 1000;  // 1s heater debug log cadence
+unsigned long lastCoolingTempLogMillis = 0;  // Last millis() when cooling temp was sent to BLE
+const unsigned long COOLING_TEMP_LOG_INTERVAL_MS = 1000;  // 1s cooling temperature log cadence
 
 // Temperature setup
 const int thermistorPin = 14;    // GPIO14 (IO14)
@@ -159,10 +163,10 @@ const float continueFeeder = 6; //parameters_list[10]
 const int maxOpeningTime = 10; //parameters_list[11]
 const int typicalOpeningTime = 5; //parameters_list[12] */
 
-// Parameters (defaults: Compostable 1.5mil from material_parameters.csv)
+// Parameters (defaults: 1.5mil High Barrier Plastic from material_parameters.csv)
 // Can't have global constant variables in C
 int batteryThreshold = 5; //parameters_list[0]
-float K = 90.0; //parameters_list[1]
+float K = 150.0; //parameters_list[1]
 int F = 6; //parameters_list[2]
 long T = 40; //parameters_list[3] - Cooling Time (Seconds)
 float thermistorResistance = 10000.0; // constant, not in BLE
@@ -181,7 +185,7 @@ float preFeedFan = 2.0; //parameters_list[16]
 float fanReverseTime = 10.0; //parameters_list[17]
 float fanReverseStartTime = 0.0; //parameters_list[18]
 float backupTimeAfterReopen = 1.0; //parameters_list[19]
-float CUT_MODE_TEMP = 105.0;      //parameters_list[20] - Temp to maintain for CUT_MODE_HEAT_TIME after cut (125 High barrier, 105 Compostable)
+float CUT_MODE_TEMP = 175.0;      //parameters_list[20] - Temp to maintain for CUT_MODE_HEAT_TIME after cut
 
 bool isFlushing = false;
 int flushStep = 0;
@@ -1973,11 +1977,13 @@ void loop() {
       }
       lastCutModeTempCheckMillis = now;
     }
-    //SerialBLE_print("DEBUG: K value = ");
-    //SerialBLE_println(K);
-    //SerialBLE_print("DEBUG: Overheat threshold = ");
-    //SerialBLE_println(K * 1.2);
-    if (readTemperature() >= setpoint * 1.2 && ERROR_CODE == 0) {
+    // In cut-bag flushes, allow headroom relative to the higher cut-mode target.
+    // This prevents false overheat trips when K is intentionally lower than CUT_MODE_TEMP.
+    float overheatBaseTemp = setpoint;
+    if (isFlushing && cutBag) {
+      overheatBaseTemp = max(K, CUT_MODE_TEMP);
+    }
+    if (readTemperature() >= overheatBaseTemp * 1.2 && ERROR_CODE == 0) {
       SerialBLE_println("Heater Too Hot - stopping");
       ERROR_CODE = 3;
       stopEverything();
@@ -2101,6 +2107,7 @@ void flushSequence() {
       setpoint = K;  // Target K until cut motor runs (then CUT_MODE_TEMP in cut mode)
       timeAboveSetpointMillis = 0;
       lastHeaterCheckMillis = currentMillis;
+      lastHeaterPidLogMillis = 0;  // Force immediate first heater temp/PWM log for this heating phase
       updateHeaterPID();
       
       // Check if it's time to start M3 reverse (based on fanReverseStartTime percentage of typicalOpeningTime)
@@ -2263,11 +2270,20 @@ void flushSequence() {
         heaterOff();
         setpoint = K;  // Restore setpoint for next flush
         stepStartMillis = currentMillis;
+        lastCoolingTempLogMillis = 0;  // Reset cooling log timer for immediate first reading in case 7
       }
       break;
     }
 
     case 7:
+      if (currentMillis - lastCoolingTempLogMillis >= COOLING_TEMP_LOG_INTERVAL_MS) {
+        float coolingTemp = readTemperature();
+        SerialBLE_print("Cooling temp: ");
+        SerialBLE_print(coolingTemp);
+        SerialBLE_println(" C");
+        lastCoolingTempLogMillis = currentMillis;
+      }
+
       if (currentMillis - stepStartMillis >= T * 1000) {
         Serial.print(currentMillis);
         SerialBLE_println("  Cooling complete opening sealer");
@@ -2954,10 +2970,10 @@ void calculateSequenceTiming() {
     totalHeaterTime += (long)CUT_MODE_HEAT_TIME;
   }
   
-  // Estimate ramp time: heat from current temp to target (K or CUT_MODE_TEMP) at 10 °C/s
+  // Estimate ramp time: heat from current temp to target (K or CUT_MODE_TEMP) at 1 C/s
   float currentTemp = readTemperature();
   float targetTemp = cutBag ? CUT_MODE_TEMP : K;
-  float rampSecondsF = (targetTemp - currentTemp) / 10.0f;
+  float rampSecondsF = (targetTemp - currentTemp) / 1.0f;
   if (rampSecondsF < 0.0f) rampSecondsF = 0.0f;
   unsigned long heatRampSeconds = (unsigned long)(rampSecondsF + 0.5f);
   
@@ -3092,23 +3108,27 @@ void checkMotorFaults() {
 }
 
 void updateHeaterPID() {
+  unsigned long now = millis();
   input = readTemperature();
   myPID.Compute();
   analogWrite(heaterPin, (int)output);
-  
-  // Read analog voltage from thermistor pin
-  int analogValue = analogRead(thermistorPin);
-  float voltage = analogValue * (3.3 / 4095.0);
-  
-  SerialBLE_print("temperature: ");
-  SerialBLE_println(input);
-  SerialBLE_print("PWM Output: ");
-  SerialBLE_println(output);
-  SerialBLE_print("Analog Voltage: ");
-  SerialBLE_print(voltage);
-  SerialBLE_println(" V");
-  Serial.printf("Heater Debug: GPIO%d PWM=%d, Setpoint=%.1f, Input=%.1f, Analog=%d, Voltage=%.3fV\n", 
-                heaterPin, (int)output, setpoint, input, analogValue, voltage);
+
+  if (lastHeaterPidLogMillis == 0 || (now - lastHeaterPidLogMillis >= HEATER_PID_LOG_INTERVAL_MS)) {
+    // Read analog voltage only when we are actually logging to avoid high-frequency spam.
+    int analogValue = analogRead(thermistorPin);
+    float voltage = analogValue * (3.3 / 4095.0);
+
+    SerialBLE_print("temperature: ");
+    SerialBLE_println(input);
+    SerialBLE_print("PWM Output: ");
+    SerialBLE_println(output);
+    SerialBLE_print("Analog Voltage: ");
+    SerialBLE_print(voltage);
+    SerialBLE_println(" V");
+    Serial.printf("Heater Debug: GPIO%d PWM=%d, Setpoint=%.1f, Input=%.1f, Analog=%d, Voltage=%.3fV\n",
+                  heaterPin, (int)output, setpoint, input, analogValue, voltage);
+    lastHeaterPidLogMillis = now;
+  }
 }
 
 void heaterOff() {

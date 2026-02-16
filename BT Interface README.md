@@ -70,7 +70,7 @@ The system supports 20 configurable parameters. Default values are set for 1mil 
 | fanReverseStartTime | Fan reverse start time (percentage) | % | 0.0 |
 | backupTimeAfterReopen | Backup time after reopen | seconds | 1.7 |
 
-**Note**: Material-specific parameters can be found in `material_parameters.csv` for different bag materials (1mil/1.5mil High Barrier Plastic, Compostable 1mil/1.5mil).
+**Note**: Material-specific parameters can be found in `material_parameters.csv` for different bag materials (1mil/1.5mil High Barrier Plastic, Compostable 1.5mil).
 
 ## Example Usage
 

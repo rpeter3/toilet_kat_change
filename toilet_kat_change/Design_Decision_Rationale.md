@@ -39,3 +39,20 @@ Implications:
 - If EEPROM is invalid/non-virgin, firmware rewrites defaults and sets `ERROR_CODE = 7` for that runtime session.
 - A successful BLE parameter update clears the latched runtime EEPROM warning.
 - Because the latch itself is not persisted, power cycling does not preserve the warning state on its own; warning reappearance depends on EEPROM validity at next boot.
+
+## Heater over-temperature shutdown threshold
+
+The firmware enforces a hard safety shutdown when measured heater temperature reaches 20% above the active target temperature.
+
+Behavior:
+
+- Safety threshold is computed as `active_target * 1.2`.
+- In normal heating, `active_target` is the current PID setpoint (`K`).
+- During cut-bag flushing, overheat protection uses the higher heating target (`max(K, CUT_MODE_TEMP)`) to avoid false trips while still preserving the 20% safety margin.
+- If exceeded, firmware raises heater over-temp error (`ERROR_CODE = 3`), stops all relevant activity, and signals the fault via BLE/LED error handling.
+
+Rationale:
+
+- Protect hardware and surrounding components from runaway heating.
+- Keep overheat logic proportional to the intended process temperature, rather than using a fixed absolute threshold.
+- Maintain process continuity in cut mode by preventing premature shutdown at temperatures that are expected for `CUT_MODE_TEMP`, while preserving a clear safety boundary.

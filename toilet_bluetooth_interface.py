@@ -24,10 +24,10 @@ class ToiletSystemInterface:
         self.current_params = {}
         self.serial_streaming = False
         
-        # Parameter definitions with descriptions and units (defaults = Compostable 1.5mil from material_parameters.csv)
+        # Parameter definitions with descriptions and units (defaults = 1.5mil High Barrier Plastic from material_parameters.csv)
         self.param_definitions = {
             "batteryThreshold": {"description": "Battery voltage threshold", "units": "ADC", "default": 5.0},
-            "K": {"description": "Temperature setpoint", "units": "°C", "default": 90.0},
+            "K": {"description": "Temperature setpoint", "units": "°C", "default": 150.0},
             "F": {"description": "How long to feed the bag at the START of a flush", "units": "sec", "default": 6.0},
             "T": {"description": "Cooling Time", "units": "sec", "default": 40.0},
             "backupTime": {"description": "How long to back up the bag when re-opening", "units": "sec", "default": 1.0},
@@ -43,14 +43,14 @@ class ToiletSystemInterface:
             "fanReverseTime": {"description": "Duration M3 runs in reverse after starting", "units": "sec", "default": 10.0},
             "fanReverseStartTime": {"description": "Delay before M3 reverse starts as percentage of typicalOpeningTime after M1 begins closing", "units": "%", "default": 0.0},
             "backupTimeAfterReopen": {"description": "Feed bag backup duration after mechanism motor finishes opening", "units": "sec", "default": 1.7},
-            "CUT_MODE_TEMP": {"description": "Temperature to maintain for CUT_MODE_HEAT_TIME after cut motor (125 High barrier, 105 Compostable)", "units": "°C", "default": 105.0}
+            "CUT_MODE_TEMP": {"description": "Temperature to maintain for CUT_MODE_HEAT_TIME after cut motor", "units": "°C", "default": 175.0}
         }
         
         # Predefined parameter sets for different materials (match material_parameters.csv)
         self.parameter_sets = {
             "1.5mil High Barrier Plastic": {
                 "batteryThreshold": 5.0,
-                "K": 120.0,
+                "K": 150.0,
                 "F": 6.0,
                 "T": 60.0,
                 "backupTime": 1.0,
@@ -66,27 +66,7 @@ class ToiletSystemInterface:
                 "fanReverseTime": 10.0,
                 "fanReverseStartTime": 0.0,
                 "backupTimeAfterReopen": 1.7,
-                "CUT_MODE_TEMP": 125.0
-            },
-            "Compostable 1mil": {
-                "batteryThreshold": 5.0,
-                "K": 90.0,
-                "F": 6.0,
-                "T": 40.0,
-                "backupTime": 1.0,
-                "fanDuration": 5.0,
-                "H": 15.0,
-                "continueFeeder": 6.0,
-                "maxOpeningTime": 12.0,
-                "typicalOpeningTime": 10.0,
-                "MOTOR_CUT_TIME": 0.5,
-                "CUT_MODE_HEAT_TIME": 5.0,
-                "postCoolingBagDuration": 5.0,
-                "preFeedFan": 2.0,
-                "fanReverseTime": 10.0,
-                "fanReverseStartTime": 0.0,
-                "backupTimeAfterReopen": 1.7,
-                "CUT_MODE_TEMP": 105.0
+                "CUT_MODE_TEMP": 175.0
             },
             "Compostable 1.5mil": {
                 "batteryThreshold": 5.0,

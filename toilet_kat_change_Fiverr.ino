@@ -1544,8 +1544,8 @@ void loop() {
     }
   }
   
-  // Check for BLE timeout (10 minutes from startup)
-  if (bleEnabled && (millis() - bleStartupTime > BLE_TIMEOUT)) {
+  // Check for BLE timeout (10 minutes from startup), but never during flush
+  if (bleEnabled && !isFlushing && (millis() - bleStartupTime > BLE_TIMEOUT)) {
     Serial.println("BLE shutting down after 10 minutes to save power");
     SerialBLE_println("BLE shutting down after 10 minutes to save power");
     
