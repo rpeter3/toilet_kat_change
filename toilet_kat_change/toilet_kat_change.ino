@@ -4,7 +4,6 @@
 #include <Wire.h>
 #include <Adafruit_MCP23X17.h>
 #include <DualMAX14870MotorShield.h> // Include the motor driver library
-#include <PID_v1_bc.h>  // Include the PID library
 #include <EEPROM.h>     // Include EEPROM library for parameter persistence
 #include <esp_ota_ops.h>  // Include OTA operations for updates
 #include <nvs_flash.h>   // Include NVS for rollback state storage
@@ -32,7 +31,7 @@ const int heaterCurrentPin = 12; // GPIO12 (HS_OUT) - Heater current sense outpu
 
 // Battery voltage monitoring
 const int batteryVoltagePin = 10;  // GPIO10 (VMON) - Battery voltage monitoring
-const int batteryTempPin = 11;     // GPIO11 (B_TEMP) - Battery temperature monitoring
+const int batteryTempPin = 5;      // GPIO5 (B_TEMP) - Battery temperature monitoring
 
 // Custom I2C instance
 TwoWire myI2C = TwoWire(0);
@@ -79,6 +78,7 @@ void sendSerialToBLE(const String& message);
 void sendSerialToBLE(float value);
 void sendSerialToBLE(int value);
 void sendSerialToBLE(unsigned long value);
+String buildMotorFaultStatusSnapshot();
 void saveParametersToEEPROM();
 void loadParametersFromEEPROM();
 void initializeHardwareVersion();
@@ -100,6 +100,14 @@ void enableOTA();
 void disableOTA();
 void restartBLEServer();
 void slowCircleLeds();
+bool loadDevModeSetting();
+bool saveDevModeSetting(bool enabled);
+bool setDevModeEnabled(bool enabled);
+String buildDevModeStatusMessage();
+void logMotorFaultDebug(const char* context);
+float readMainThermistorResistanceOhms();
+bool isHardwareLikelyDisconnectedForUserAction();
+void playHardwareNotConnectedAlert();
 
 // Macros to automatically forward Serial output to BLE when streaming is enabled
 #define SerialBLE_print(x) do { Serial.print(x); if(serial_streaming_enabled) sendSerialToBLE(x); } while(0)
@@ -115,6 +123,8 @@ const int ledPins[] = {1, 9, 13, 14, 10, 6, 11, 12, 8, 0, 2, 3, 4, 5};
 const int totalLeds = sizeof(ledPins) / sizeof(ledPins[0]);
 int ledIndex = 0;
 bool clockwise = true; // Direction flag for LED cycling
+const float HARDWARE_DISCONNECT_RESISTANCE_OHMS = 100000.0;
+const float THERMISTOR_VOLTAGE_GUARD_V = 0.01;
 
 // Timing variables
 unsigned long previousMillis = 0;
@@ -129,10 +139,16 @@ unsigned long timeAboveSetpointMillis = 0;   // Cumulative ms thermistor has bee
 unsigned long lastHeaterCheckMillis = 0;     // Last millis() when we updated the time-above-K accumulator
 unsigned long timeAboveCutModeTempMillis = 0;   // After cut motor: cumulative ms temp >= CUT_MODE_TEMP
 unsigned long lastCutModeTempCheckMillis = 0;   // Last millis() for time-above-CUT_MODE_TEMP accumulator
-unsigned long lastHeaterPidLogMillis = 0;  // Last millis() when heater temp/PWM were logged
-const unsigned long HEATER_PID_LOG_INTERVAL_MS = 1000;  // 1s heater debug log cadence
+unsigned long lastHeaterControlLogMillis = 0;  // Last millis() when heater control state was logged
+const unsigned long HEATER_CONTROL_LOG_INTERVAL_MS = 1000;  // 1s heater debug log cadence
 unsigned long lastCoolingTempLogMillis = 0;  // Last millis() when cooling temp was sent to BLE
 const unsigned long COOLING_TEMP_LOG_INTERVAL_MS = 1000;  // 1s cooling temperature log cadence
+const unsigned long BLE_STATUS_LOG_INTERVAL_MS = 2000;  // 2s status log cadence to avoid BLE spam
+const unsigned long M1_CURRENT_LOG_INTERVAL_MS = 3000;  // 3s max-current log window
+unsigned long m1CurrentLogWindowStartMillis = 0;
+float m1CurrentMaxInWindow = 0.0;
+bool heaterOutputOn = false;  // Physical heater output state (independent from heater phase state)
+unsigned long maxHeaterWallTimeMs = 0;  // Computed once at flush start (case 0) and reused for that cycle
 
 // Temperature setup
 const int thermistorPin = 14;    // GPIO14 (IO14)
@@ -168,24 +184,29 @@ const int typicalOpeningTime = 5; //parameters_list[12] */
 int batteryThreshold = 5; //parameters_list[0]
 float K = 150.0; //parameters_list[1]
 int F = 6; //parameters_list[2]
-long T = 40; //parameters_list[3] - Cooling Time (Seconds)
+long T = 40; //parameters_list[3] - Estimated cooling time for LED pacing (seconds)
 float thermistorResistance = 10000.0; // constant, not in BLE
 int r2 = 2; // constant, not in BLE
-float backupTime = 1.0; //parameters_list[6]
+float backupTime = 1.0; //parameters_list[4]
 int r4 = 2; // constant, not in BLE
-int fanDuration = 5; //parameters_list[8]
-long H = 20; //parameters_list[9] - Time (seconds) thermistor must be above K
-float continueFeeder = 6.0; //parameters_list[10]
-int maxOpeningTime = 12; //parameters_list[11]
-int typicalOpeningTime = 10; //parameters_list[12]
-float MOTOR_CUT_TIME = 0.5; //parameters_list[13]
-float CUT_MODE_HEAT_TIME = 10.0; //parameters_list[14] - Additional time (seconds) above K in cut mode
-float postCoolingBagDuration = 5.0; //parameters_list[15]
-float preFeedFan = 2.0; //parameters_list[16]
-float fanReverseTime = 10.0; //parameters_list[17]
-float fanReverseStartTime = 0.0; //parameters_list[18]
-float backupTimeAfterReopen = 1.0; //parameters_list[19]
-float CUT_MODE_TEMP = 175.0;      //parameters_list[20] - Temp to maintain for CUT_MODE_HEAT_TIME after cut
+int fanDuration = 5; //parameters_list[5]
+long H = 20; //parameters_list[6] - Time (seconds) thermistor must be above K
+float continueFeeder = 6.0; //parameters_list[7]
+int maxOpeningTime = 12; //parameters_list[8]
+int typicalOpeningTime = 10; //parameters_list[9]
+float MOTOR_CUT_TIME = 0.5; //parameters_list[10]
+float CUT_MODE_HEAT_TIME = 10.0; //parameters_list[11] - Additional time (seconds) above K in cut mode
+float postCoolingBagDuration = 5.0; //parameters_list[12]
+float preFeedFan = 2.0; //parameters_list[13]
+float fanReverseTime = 10.0; //parameters_list[14]
+float fanReverseStartTime = 0.0; //parameters_list[15]
+float backupTimeAfterReopen = 1.0; //parameters_list[16]
+float CUT_MODE_TEMP = 175.0;      //parameters_list[17] - Temp to maintain for CUT_MODE_HEAT_TIME after cut
+float heaterLowerToleranceC = 2.0; //parameters_list[18] - Turn heater ON at target-lower
+float heaterUpperToleranceC = 0.0; //parameters_list[19] - Turn heater OFF at target+upper (can be negative)
+float COOL_OPEN_TEMP_C = 80.0f; //parameters_list[20] - Open sealer below this thermistor temp
+long MAX_COOL_WAIT_S = 180; //parameters_list[21] - Safety fallback max cooling wait (seconds)
+float heaterTargetTemp = 150.0;    // Active heater target (K or CUT_MODE_TEMP)
 
 bool isFlushing = false;
 int flushStep = 0;
@@ -223,14 +244,35 @@ bool button2DelayActive = false;
 bool bothButtonsPressed = false;
 bool batteryDisplayMode = false;
 unsigned long batteryDisplayStartTime = 0;
+bool button1DisconnectAlertedForCurrentPress = false;
+bool button2DisconnectAlertedForCurrentPress = false;
 
 // BLE auto-shutdown variables
 unsigned long bleStartupTime = 0;
 const unsigned long BLE_TIMEOUT = 10 * 60 * 1000; // 10 minutes in milliseconds
 const unsigned long INACTIVITY_SLEEP_MS = 2 * 60 * 1000;  // 2 minutes - then light sleep
 
-// Set to 1 for development: no light sleep, BLE stays on. Set to 0 for production.
-#define DEVELOPMENT_MODE 0
+// Runtime DEV mode (persisted in NVS): when enabled, BLE stays on and inactivity sleep is disabled.
+const char* DEV_MODE_NAMESPACE = "system";
+const char* DEV_MODE_KEY = "dev_mode";
+bool devModeEnabled = true;
+// M1/M2 fault handling controls.
+bool ignoreM12Faults = true;
+bool hasIgnoredM12Fault = false;
+unsigned long ignoredM12FaultCount = 0;
+unsigned long lastIgnoredM12FaultMillis = 0;
+unsigned long lastIgnoredM12FaultLogMillis = 0;
+unsigned long suppressedIgnoredM12FaultLogs = 0;
+const unsigned long M12_FAULT_LOG_THROTTLE_MS = 5000;
+const bool latchM12FaultAfterRecoveryFailure = true;
+const uint8_t M12_FAULT_RECOVERY_MAX_ATTEMPTS = 3;
+const unsigned long M12_FAULT_RECOVERY_DISABLE_MS = 25;
+const unsigned long M12_FAULT_RECOVERY_SETTLE_MS = 60;
+const unsigned long M12_FAULT_RECOVERY_COOLDOWN_MS = 2000;
+unsigned long lastM12RecoveryCycleMillis = 0;
+unsigned long m12RecoverySuccessCount = 0;
+unsigned long m12RecoveryFailureCount = 0;
+unsigned long suppressedM12RecoveryCycles = 0;
 
 unsigned long lastActivityMillis = 0;
 bool bleEnabled = true;
@@ -343,12 +385,6 @@ const int FAN_PWM_RESOLUTION = 8;
 // Motor shield instance - M1&M2 only
 DualMAX14870MotorShield motors(M1DIR_PIN, M1PWM_PIN, M2DIR_PIN, M2PWM_PIN, M2NEN_PIN, M2NFAULT_PIN);
 
-// PID
-double setpoint = K;
-double input, output;
-double Kp = 100.0, Ki = 0.01, Kd = 0.1;
-PID myPID(&input, &output, &setpoint, Kp, Ki, Kd, DIRECT);
-
 // Setup BLE callbacks called onConnect and onDisconnect
 class server_callbacks: public BLEServerCallbacks {
   void onConnect(BLEServer * blue_server) {
@@ -356,7 +392,7 @@ class server_callbacks: public BLEServerCallbacks {
     Serial.println("Device connected!");
     sendSerialToBLE("BLE Device Connected!");
     
-    // Update characteristic with current parameters (18 values; thermistorResistance, r2, r4 are constants)
+    // Update characteristic with current parameters (22 BLE values; thermistorResistance, r2, r4 are constants)
     String paramString = String(batteryThreshold) + "," +
                         String(K) + "," +
                         String(F) + "," +
@@ -374,7 +410,11 @@ class server_callbacks: public BLEServerCallbacks {
                         String(fanReverseTime) + "," +
                         String(fanReverseStartTime) + "," +
                         String(backupTimeAfterReopen) + "," +
-                        String(CUT_MODE_TEMP);
+                        String(CUT_MODE_TEMP) + "," +
+                        String(heaterLowerToleranceC) + "," +
+                        String(heaterUpperToleranceC) + "," +
+                        String(COOL_OPEN_TEMP_C) + "," +
+                        String(MAX_COOL_WAIT_S);
     blue_characteristic->setValue(paramString.c_str());
     Serial.printf("Characteristic updated on connect: %s\n", paramString.c_str());
     SerialBLE_println("Characteristic updated on connect");
@@ -384,6 +424,11 @@ class server_callbacks: public BLEServerCallbacks {
     is_device_connected = false;
     serial_streaming_enabled = false;
     Serial.println("Device disconnected!");
+    if (isFlushing) {
+      Serial.println("Parameter update on disconnect blocked - flush in progress");
+      SerialBLE_println("Parameter update blocked - flush in progress");
+      return;
+    }
 
     // Receive message
     int message_length = blue_characteristic->getLength();
@@ -394,7 +439,7 @@ class server_callbacks: public BLEServerCallbacks {
       Serial.printf("%c", message[i]);
     }
 
-    // Parse 18 comma-separated float values (thermistorResistance, r2, r4 are constants, not in BLE)
+    // Parse BLE comma-separated float values (20 legacy or 22 current; thermistorResistance, r2, r4 are constants)
     char * parameters_string = strtok((char*) message, ",");
     float parameters_list[100];
     int k = 0;
@@ -408,7 +453,7 @@ class server_callbacks: public BLEServerCallbacks {
     for (int j = 0; j < k; j++) {
       Serial.printf("\n%f", parameters_list[j]);
     }
-    if (k >= 18) {
+    if (k >= 20) {
       batteryThreshold = (int)parameters_list[0];
       K = parameters_list[1];
       F = (int)parameters_list[2];
@@ -427,10 +472,18 @@ class server_callbacks: public BLEServerCallbacks {
       fanReverseStartTime = parameters_list[15];
       backupTimeAfterReopen = parameters_list[16];
       CUT_MODE_TEMP = parameters_list[17];
+      if (k >= 22) {
+        COOL_OPEN_TEMP_C = parameters_list[20];
+        MAX_COOL_WAIT_S = (long)parameters_list[21];
+      }
+      if (k >= 20) {
+        heaterLowerToleranceC = parameters_list[18];
+        heaterUpperToleranceC = parameters_list[19];
+      }
+      if (!(isFlushing && cutBag && case6CutMotorRun)) {
+        heaterTargetTemp = K;
+      }
     }
-    
-    // Update PID setpoint when K changes
-    setpoint = K;
     
     // Save parameters to EEPROM for persistence
     saveParametersToEEPROM();
@@ -483,7 +536,7 @@ class update_characteristic_callbacks: public BLECharacteristicCallbacks {
 class characteristic_callbacks: public BLECharacteristicCallbacks {
   void onRead(BLECharacteristic *pCharacteristic) {
     if (pCharacteristic->getUUID().toString() == CHARACTERISTIC_UUID) {
-      // Return current parameters as comma-separated string (18 values)
+      // Return current parameters as comma-separated string (22 values)
       String paramString = String(batteryThreshold) + "," +
                           String(K) + "," +
                           String(F) + "," +
@@ -501,7 +554,11 @@ class characteristic_callbacks: public BLECharacteristicCallbacks {
                           String(fanReverseTime) + "," +
                           String(fanReverseStartTime) + "," +
                           String(backupTimeAfterReopen) + "," +
-                          String(CUT_MODE_TEMP);
+                          String(CUT_MODE_TEMP) + "," +
+                          String(heaterLowerToleranceC) + "," +
+                          String(heaterUpperToleranceC) + "," +
+                          String(COOL_OPEN_TEMP_C) + "," +
+                          String(MAX_COOL_WAIT_S);
       
       pCharacteristic->setValue(paramString.c_str());
       Serial.printf("Read request - returning parameters: %s\n", paramString.c_str());
@@ -515,9 +572,15 @@ class characteristic_callbacks: public BLECharacteristicCallbacks {
       // Process parameters immediately when written
       int message_length = pCharacteristic->getLength();
       if (message_length > 0) {
+        if (isFlushing) {
+          pCharacteristic->setValue("PARAM_UPDATE_BLOCKED_FLUSH");
+          Serial.println("Immediate parameter update blocked - flush in progress");
+          SerialBLE_println("Parameter update blocked - flush in progress");
+          return;
+        }
         unsigned char* message = pCharacteristic->getData();
         // Allow remote clients to request OTA mode via BLE write
-        String cmd = String((char*)message);
+        String cmd = String((char*)message, (unsigned int)message_length);
         cmd.trim();
         if (cmd == "ENABLE_OTA") {
           Serial.println("Received ENABLE_OTA command via BLE");
@@ -526,8 +589,38 @@ class characteristic_callbacks: public BLECharacteristicCallbacks {
           pCharacteristic->setValue("ENABLE_OTA_ACK");
           return;
         }
+        if (cmd == "GET_DEV_MODE") {
+          String statusMessage = buildDevModeStatusMessage();
+          pCharacteristic->setValue(statusMessage.c_str());
+          Serial.printf("Processed GET_DEV_MODE, returned %s\n", statusMessage.c_str());
+          sendSerialToBLE("Processed GET_DEV_MODE");
+          return;
+        }
+        if (cmd.startsWith("SET_DEV_MODE:")) {
+          String valueString = cmd.substring(String("SET_DEV_MODE:").length());
+          valueString.trim();
+
+          if (valueString != "0" && valueString != "1") {
+            pCharacteristic->setValue("SET_DEV_MODE_ERR:INVALID_VALUE");
+            Serial.printf("Rejected SET_DEV_MODE with invalid value: '%s'\n", valueString.c_str());
+            sendSerialToBLE("SET_DEV_MODE rejected: invalid value");
+            return;
+          }
+
+          bool requestedValue = (valueString == "1");
+          if (!setDevModeEnabled(requestedValue)) {
+            pCharacteristic->setValue("SET_DEV_MODE_ERR:PERSIST_FAIL");
+            sendSerialToBLE("SET_DEV_MODE failed: persist error");
+            return;
+          }
+
+          String ack = String("SET_DEV_MODE_ACK:") + String(devModeEnabled ? 1 : 0);
+          pCharacteristic->setValue(ack.c_str());
+          sendSerialToBLE("SET_DEV_MODE applied");
+          return;
+        }
         Serial.printf("Immediate parameter update received, length: %d\n", message_length);
-        // Parse 18 comma-separated float values (thermistorResistance, r2, r4 are constants)
+        // Parse BLE comma-separated float values (20 legacy or 22 current)
         char * parameters_string = strtok((char*) message, ",");
         float parameters_list[100];
         int k = 0;
@@ -538,8 +631,8 @@ class characteristic_callbacks: public BLECharacteristicCallbacks {
           k++;
         }
         
-        // Apply parameters immediately (18 values)
-        if (k >= 18) {
+        // Apply parameters immediately (20 legacy or 22 current values)
+        if (k >= 20) {
           batteryThreshold = (int)parameters_list[0];
           K = parameters_list[1];
           F = (int)parameters_list[2];
@@ -558,10 +651,18 @@ class characteristic_callbacks: public BLECharacteristicCallbacks {
           fanReverseStartTime = parameters_list[15];
           backupTimeAfterReopen = parameters_list[16];
           CUT_MODE_TEMP = parameters_list[17];
+          if (k >= 20) {
+            heaterLowerToleranceC = parameters_list[18];
+            heaterUpperToleranceC = parameters_list[19];
+          }
+          if (k >= 22) {
+            COOL_OPEN_TEMP_C = parameters_list[20];
+            MAX_COOL_WAIT_S = (long)parameters_list[21];
+          }
+          if (!(isFlushing && cutBag && case6CutMotorRun)) {
+            heaterTargetTemp = K;
+          }
         }
-        
-        // Update PID setpoint immediately
-        setpoint = K;
         
         // Save parameters to EEPROM for persistence
         saveParametersToEEPROM();
@@ -580,7 +681,7 @@ class characteristic_callbacks: public BLECharacteristicCallbacks {
           }
         }
         
-        // Update characteristic value with new parameters (18 values)
+        // Update characteristic value with new parameters (22 values)
         String paramString = String(batteryThreshold) + "," +
                             String(K) + "," +
                             String(F) + "," +
@@ -598,7 +699,11 @@ class characteristic_callbacks: public BLECharacteristicCallbacks {
                             String(fanReverseTime) + "," +
                             String(fanReverseStartTime) + "," +
                             String(backupTimeAfterReopen) + "," +
-                            String(CUT_MODE_TEMP);
+                            String(CUT_MODE_TEMP) + "," +
+                            String(heaterLowerToleranceC) + "," +
+                            String(heaterUpperToleranceC) + "," +
+                            String(COOL_OPEN_TEMP_C) + "," +
+                            String(MAX_COOL_WAIT_S);
         pCharacteristic->setValue(paramString.c_str());
         
         Serial.printf("Parameters updated immediately! H=%ld, K=%.1f\n", H, K);
@@ -675,7 +780,7 @@ void server_setup(bool includeOTA = false) {
   // Set callback for immediate parameter updates
   blue_characteristic->setCallbacks(new characteristic_callbacks());
   
-  // Set initial value to current parameters (18 values)
+  // Set initial value to current parameters (22 values)
   String initialParams = String(batteryThreshold) + "," +
                         String(K) + "," +
                         String(F) + "," +
@@ -693,7 +798,11 @@ void server_setup(bool includeOTA = false) {
                         String(fanReverseTime) + "," +
                         String(fanReverseStartTime) + "," +
                         String(backupTimeAfterReopen) + "," +
-                        String(CUT_MODE_TEMP);
+                        String(CUT_MODE_TEMP) + "," +
+                        String(heaterLowerToleranceC) + "," +
+                        String(heaterUpperToleranceC) + "," +
+                        String(COOL_OPEN_TEMP_C) + "," +
+                        String(MAX_COOL_WAIT_S);
   blue_characteristic->setValue(initialParams.c_str());
   Serial.printf("Initial characteristic value set to: %s\n", initialParams.c_str());
   Serial.printf("DEBUG: H value at BLE init: %ld\n", H);
@@ -784,6 +893,10 @@ void saveParametersToEEPROM() {
   EEPROM.put(addr, fanReverseStartTime); addr += sizeof(fanReverseStartTime);
   EEPROM.put(addr, backupTimeAfterReopen); addr += sizeof(backupTimeAfterReopen);
   EEPROM.put(addr, CUT_MODE_TEMP); addr += sizeof(CUT_MODE_TEMP);
+  EEPROM.put(addr, heaterLowerToleranceC); addr += sizeof(heaterLowerToleranceC);
+  EEPROM.put(addr, heaterUpperToleranceC); addr += sizeof(heaterUpperToleranceC);
+  EEPROM.put(addr, COOL_OPEN_TEMP_C); addr += sizeof(COOL_OPEN_TEMP_C);
+  EEPROM.put(addr, MAX_COOL_WAIT_S); addr += sizeof(MAX_COOL_WAIT_S);
   
   bool commitOk = EEPROM.commit();
   
@@ -887,6 +1000,30 @@ void loadParametersFromEEPROM() {
     EEPROM.get(addr, fanReverseStartTime); addr += sizeof(fanReverseStartTime);
     EEPROM.get(addr, backupTimeAfterReopen); addr += sizeof(backupTimeAfterReopen);
     EEPROM.get(addr, CUT_MODE_TEMP); addr += sizeof(CUT_MODE_TEMP);
+
+    // New heater hysteresis parameters (may be absent in older EEPROM layouts)
+    EEPROM.get(addr, heaterLowerToleranceC); addr += sizeof(heaterLowerToleranceC);
+    EEPROM.get(addr, heaterUpperToleranceC); addr += sizeof(heaterUpperToleranceC);
+    EEPROM.get(addr, COOL_OPEN_TEMP_C); addr += sizeof(COOL_OPEN_TEMP_C);
+    EEPROM.get(addr, MAX_COOL_WAIT_S); addr += sizeof(MAX_COOL_WAIT_S);
+
+    // Guard invalid values and preserve a valid hysteresis band.
+    if ((heaterLowerToleranceC != heaterLowerToleranceC) || heaterLowerToleranceC <= 0.0f) {
+      heaterLowerToleranceC = 2.0f;
+    }
+    if (heaterUpperToleranceC != heaterUpperToleranceC) {
+      heaterUpperToleranceC = 0.0f;
+    }
+    if (heaterUpperToleranceC <= -heaterLowerToleranceC) {
+      heaterUpperToleranceC = 0.0f;
+    }
+    if ((COOL_OPEN_TEMP_C != COOL_OPEN_TEMP_C) || COOL_OPEN_TEMP_C < 20.0f || COOL_OPEN_TEMP_C > 150.0f) {
+      COOL_OPEN_TEMP_C = 80.0f;
+    }
+    if (MAX_COOL_WAIT_S <= 0 || MAX_COOL_WAIT_S > 1800) {
+      MAX_COOL_WAIT_S = 180;
+    }
+    heaterTargetTemp = K;
     
     Serial.println("Parameters loaded from EEPROM");
     Serial.printf("Loaded: H=%ld, K=%.1f, F=%d, T=%ld, backupTime=%.1f\n", H, K, F, T, backupTime);
@@ -1102,6 +1239,75 @@ void notifyUpdateProgress(int percentage) {
     SerialBLE_println("%");
   }
   updateProgress = percentage;
+}
+
+String buildDevModeStatusMessage() {
+  return String("DEV_MODE:") + String(devModeEnabled ? 1 : 0);
+}
+
+bool saveDevModeSetting(bool enabled) {
+  nvs_handle_t nvsHandle;
+  esp_err_t err = nvs_open(DEV_MODE_NAMESPACE, NVS_READWRITE, &nvsHandle);
+  if (err != ESP_OK) {
+    Serial.printf("Failed to open NVS for DEV mode write: %s\n", esp_err_to_name(err));
+    return false;
+  }
+
+  err = nvs_set_u8(nvsHandle, DEV_MODE_KEY, enabled ? 1 : 0);
+  if (err == ESP_OK) {
+    err = nvs_commit(nvsHandle);
+  }
+  nvs_close(nvsHandle);
+
+  if (err != ESP_OK) {
+    Serial.printf("Failed to persist DEV mode setting: %s\n", esp_err_to_name(err));
+    return false;
+  }
+  return true;
+}
+
+bool loadDevModeSetting() {
+  nvs_handle_t nvsHandle;
+  esp_err_t err = nvs_open(DEV_MODE_NAMESPACE, NVS_READONLY, &nvsHandle);
+  if (err == ESP_ERR_NVS_NOT_FOUND) {
+    devModeEnabled = false;
+    Serial.println("DEV mode setting namespace not found. Defaulting to NORMAL mode.");
+    return true;
+  }
+  if (err != ESP_OK) {
+    Serial.printf("Failed to open NVS for DEV mode read: %s\n", esp_err_to_name(err));
+    return false;
+  }
+
+  uint8_t storedValue = 0;
+  err = nvs_get_u8(nvsHandle, DEV_MODE_KEY, &storedValue);
+  nvs_close(nvsHandle);
+
+  if (err == ESP_ERR_NVS_NOT_FOUND) {
+    devModeEnabled = false;
+    Serial.println("DEV mode key missing. Defaulting to NORMAL mode.");
+    return true;
+  }
+  if (err != ESP_OK) {
+    Serial.printf("Failed to read DEV mode setting: %s\n", esp_err_to_name(err));
+    return false;
+  }
+
+  devModeEnabled = (storedValue == 1);
+  Serial.printf("Loaded DEV mode from NVS: %d\n", devModeEnabled ? 1 : 0);
+  return true;
+}
+
+bool setDevModeEnabled(bool enabled) {
+  if (!saveDevModeSetting(enabled)) {
+    return false;
+  }
+  devModeEnabled = enabled;
+  // Restart power-saving timers so mode transitions are predictable.
+  bleStartupTime = millis();
+  lastActivityMillis = millis();
+  Serial.printf("DEV mode updated: %d\n", devModeEnabled ? 1 : 0);
+  return true;
 }
 
 // Reset OTA state variables
@@ -1358,13 +1564,11 @@ void testHeaterCurrent() {
   Serial.println("Starting heater current detection test...");
   SerialBLE_println("Starting heater current detection test...");
   
-  // Set heater to 10% PWM (26 out of 255)
-  const int testPWM = 26; // 10% of 255
-  analogWrite(heaterPin, testPWM);
-  Serial.printf("Heater set to 10%% PWM (%d/255)\n", testPWM);
-  SerialBLE_print("Heater set to 10% PWM (");
-  SerialBLE_print(testPWM);
-  SerialBLE_println("/255)");
+  // Set heater fully ON for current detection.
+  digitalWrite(heaterPin, HIGH);
+  heaterOutputOn = true;
+  Serial.println("Heater set to ON for startup current test");
+  SerialBLE_println("Heater set to ON for startup current test");
   
   // Monitor for 0.5 seconds, checking every 50ms
   unsigned long testStartTime = millis();
@@ -1395,7 +1599,8 @@ void testHeaterCurrent() {
   }
   
   // Turn off heater
-  analogWrite(heaterPin, 0);
+  digitalWrite(heaterPin, LOW);
+  heaterOutputOn = false;
   Serial.println("Heater turned off after test");
   
   // Check result
@@ -1417,6 +1622,9 @@ void testHeaterCurrent() {
 void setup() {
   Serial.begin(115200); // Increased baud rate for faster output
   delay(500); // Longer delay to ensure Serial is ready
+  if (ignoreM12Faults) {
+    Serial.println("WARNING: M1/M2 motor faults are set to LOG-ONLY (ignoreM12Faults=true)");
+  }
 
   esp_sleep_wakeup_cause_t wakeCause = esp_sleep_get_wakeup_cause();
   bool wokeFromDeepSleep = (wakeCause == ESP_SLEEP_WAKEUP_EXT0);
@@ -1441,6 +1649,10 @@ void setup() {
       err = nvs_flash_init();
     }
     ESP_ERROR_CHECK(err);
+    loadDevModeSetting();
+    if (ignoreM12Faults) {
+      SerialBLE_println("WARNING: M1/M2 motor faults are LOG-ONLY");
+    }
 
     mcp_setup();
     Serial.println("MCP23017 Initialized");
@@ -1448,7 +1660,7 @@ void setup() {
 
     loadParametersFromEEPROM();
     knownResistor = thermistorResistance;
-    setpoint = K;
+    heaterTargetTemp = K;
     startEEPROMWakeAlert();
     maintainEEPROMErrorIndicator();
 
@@ -1473,8 +1685,6 @@ void setup() {
     testHeaterCurrent();
     motors.enableDrivers();
     // Skip locateMotorPos() on wake - mechanism has not moved
-    myPID.SetMode(AUTOMATIC);
-    myPID.SetOutputLimits(0, 255);
     return;
   }
 
@@ -1490,6 +1700,10 @@ void setup() {
     err = nvs_flash_init();
   }
   ESP_ERROR_CHECK(err);
+  loadDevModeSetting();
+  if (ignoreM12Faults) {
+    SerialBLE_println("WARNING: M1/M2 motor faults are LOG-ONLY");
+  }
 
   checkBootFailure();
 
@@ -1519,7 +1733,11 @@ void setup() {
   sendSerialToBLE("Largest free block: " + String(ESP.getMaxAllocHeap()) + " bytes");
   sendSerialToBLE("Min free heap: " + String(ESP.getMinFreeHeap()) + " bytes");
 
-  Serial.println("BLE enabled for 10 minutes to save power (OTA disabled initially)");
+  if (devModeEnabled) {
+    Serial.println("DEV mode is ON: BLE stays enabled and inactivity sleep is disabled.");
+  } else {
+    Serial.println("DEV mode is OFF: BLE timeout and inactivity sleep are active.");
+  }
 
   Serial.println("DEBUG: About to load parameters from EEPROM");
   loadParametersFromEEPROM();
@@ -1533,7 +1751,7 @@ void setup() {
   SerialBLE_println();
   maintainEEPROMErrorIndicator();
 
-  setpoint = K;
+  heaterTargetTemp = K;
 
   pinMode(heaterPin, OUTPUT);
   pinMode(buzzerPin, OUTPUT);
@@ -1556,8 +1774,6 @@ void setup() {
   testHeaterCurrent();
   motors.enableDrivers();
   locateMotorPos();
-  myPID.SetMode(AUTOMATIC);
-  myPID.SetOutputLimits(0, 255);
 }
 
 void loop() {
@@ -1597,7 +1813,7 @@ void loop() {
   }
   
   // Check for BLE timeout (10 minutes from startup) - never shut down during OTA transfer
-  if (!DEVELOPMENT_MODE && bleEnabled && !otaTransferInProgress() && (millis() - bleStartupTime > BLE_TIMEOUT)) {
+  if (!devModeEnabled && bleEnabled && !otaTransferInProgress() && (millis() - bleStartupTime > BLE_TIMEOUT)) {
     Serial.println("BLE shutting down after 10 minutes to save power");
     SerialBLE_println("BLE shutting down after 10 minutes to save power");
     
@@ -1624,6 +1840,9 @@ void loop() {
       lastStatusPrint = millis();
       Serial.println("BLE Connected - System Running");
       sendSerialToBLE("System Status: Running - " + String(millis() / 1000) + "s");
+      String motorFaultStatus = "Motor Fault Status: " + buildMotorFaultStatusSnapshot();
+      Serial.println(motorFaultStatus);
+      sendSerialToBLE(motorFaultStatus);
     }
   }
   if (!is_device_connected && old_device_connect) {
@@ -1692,7 +1911,15 @@ void loop() {
   bool bothButtonsPressedNow = button1Pressed && button2Pressed;
   
   // Check for both buttons pressed simultaneously
-  if (bothButtonsPressedNow && !bothButtonsPressed && !otaEnabled) {
+  if (bothButtonsPressedNow && isHardwareLikelyDisconnectedForUserAction()) {
+    if (!bothButtonsPressed) {
+      SerialBLE_println("Hardware not connected (thermistor open) - battery read blocked");
+      playHardwareNotConnectedAlert();
+    }
+    bothButtonsPressed = true;
+    batteryMonitoringActive = false;
+    batteryDisplayMode = false;
+  } else if (bothButtonsPressedNow && !bothButtonsPressed && !otaEnabled) {
     SerialBLE_println("Both buttons pressed - Stopping all operations and displaying battery charge level");
     
     // Stop all ongoing operations immediately
@@ -1795,6 +2022,7 @@ void loop() {
       // Button 1 just pressed - start delay timer
       button1PressStartTime = millis();
       button1DelayActive = true;
+      button1DisconnectAlertedForCurrentPress = false;
       Serial.println("Button 1 pressed - waiting for delay/hold detection");
     } else if (button1Pressed && button1DelayActive && (millis() - button1PressStartTime >= BUTTON_DELAY)) {
       // Delay passed, now start timing for hold detection
@@ -1807,28 +2035,36 @@ void loop() {
     } else if (button1Pressed && button1Held && (millis() - button1HoldStartTime >= BUTTON_HOLD_TIME)) {
       // Button 1 held for 1.5 seconds - enable cutBag and start flush sequence
       if (!isFlushing) {  // Only start if not already flushing
-        cutBag = true;
-        SerialBLE_println("Cut Bag mode enabled!");
-        Serial.printf("DEBUG: cutBag set to true, hold time: %lu ms\n", millis() - button1HoldStartTime);
-        cutModeLEDAnimation();
-        
-        // Start flush sequence with cut bag enabled
-        SerialBLE_println("Starting flush sequence with cut bag enabled");
-        
-        // Calculate sequence timing and reset LED state
-        calculateSequenceTiming();
-        ledIndex = 0;
-        clockwise = true; // Start clockwise when flushing begins.
-        ledLastUpdateMillis = millis();  // Reset the timer
-        
-        // Turn off all LEDs first, then turn on the first one
-        for (int i = 0; i < totalLeds; i++) {
-          mcp_digitalWrite(ledPins[i], LOW);
+        if (isHardwareLikelyDisconnectedForUserAction()) {
+          if (!button1DisconnectAlertedForCurrentPress) {
+            SerialBLE_println("Hardware not connected (thermistor open) - flush blocked");
+            playHardwareNotConnectedAlert();
+            button1DisconnectAlertedForCurrentPress = true;
+          }
+        } else {
+          cutBag = true;
+          SerialBLE_println("Cut Bag mode enabled!");
+          Serial.printf("DEBUG: cutBag set to true, hold time: %lu ms\n", millis() - button1HoldStartTime);
+          cutModeLEDAnimation();
+          
+          // Start flush sequence with cut bag enabled
+          SerialBLE_println("Starting flush sequence with cut bag enabled");
+          
+          // Calculate sequence timing and reset LED state
+          calculateSequenceTiming();
+          ledIndex = 0;
+          clockwise = true; // Start clockwise when flushing begins.
+          ledLastUpdateMillis = millis();  // Reset the timer
+          
+          // Turn off all LEDs first, then turn on the first one
+          for (int i = 0; i < totalLeds; i++) {
+            mcp_digitalWrite(ledPins[i], LOW);
+          }
+          mcp_digitalWrite(ledPins[0], HIGH);
+          
+          isFlushing = true;
+          flushStartMillis = millis();
         }
-        mcp_digitalWrite(ledPins[0], HIGH);
-        
-        isFlushing = true;
-        flushStartMillis = millis();
       }
     } else if (!button1Pressed && button1Held) {
       // Button 1 released - check if it was a short press
@@ -1836,8 +2072,17 @@ void loop() {
       button1Held = false;
       
       if (holdDuration < BUTTON_HOLD_TIME) {
-        // Short press - start flush sequence
-        SerialBLE_println("Short press - starting flush sequence");
+        if (isHardwareLikelyDisconnectedForUserAction()) {
+          SerialBLE_println("Hardware not connected (thermistor open) - flush blocked");
+          playHardwareNotConnectedAlert();
+          button1DisconnectAlertedForCurrentPress = true;
+        } else {
+        // Short press - also enable cutBag mode before starting flush
+        cutBag = true;
+        SerialBLE_println("Cut Bag mode enabled!");
+        SerialBLE_println("Short press - starting flush sequence with cut bag enabled");
+        Serial.printf("DEBUG: cutBag set to true, short press duration: %lu ms\n", holdDuration);
+        cutModeLEDAnimation();
         
         // Calculate sequence timing and reset LED state
         calculateSequenceTiming();
@@ -1853,6 +2098,7 @@ void loop() {
         
         isFlushing = true;
         flushStartMillis = millis();
+        }
       }
     }
     
@@ -1869,6 +2115,7 @@ void loop() {
       // Button 2 just pressed - start delay timer
       button2PressStartTime = millis();
       button2DelayActive = true;
+      button2DisconnectAlertedForCurrentPress = false;
       SerialBLE_println("Button 2 pressed - waiting for delay before starting feed");
       // Don't change motors yet - wait for delay
     } else if (button2Pressed && button2DelayActive && (millis() - button2PressStartTime >= BUTTON_DELAY)) {
@@ -1882,12 +2129,28 @@ void loop() {
     } else if (button2Pressed && !button2DelayActive && !button2FeedStarted) {
       // Button 2 pressed, delay passed, but M2 not started yet - wait for preFeedFan
       if (millis() - button2FanStartTime >= preFeedFan * 1000) {
-        SerialBLE_println("Pre-feed fan delay complete, starting feed motor");
-        motors.setM2Speed(-400);
-        button2FeedStarted = true;
+        if (isHardwareLikelyDisconnectedForUserAction()) {
+          if (!button2DisconnectAlertedForCurrentPress) {
+            SerialBLE_println("Hardware not connected (thermistor open) - feed blocked");
+            playHardwareNotConnectedAlert();
+            button2DisconnectAlertedForCurrentPress = true;
+          }
+          motors.setM2Speed(0);
+          setFanSpeed(0);
+          fanRunning = false;
+          button2FeedStarted = false;
+        } else {
+          SerialBLE_println("Pre-feed fan delay complete, starting feed motor");
+          motors.setM2Speed(-400);
+          button2FeedStarted = true;
+        }
       }
     } else if (button2Pressed && !button2DelayActive && button2FeedStarted) {
-      SerialBLE_println("b2 pressed, feed running - keep motors running");
+      static unsigned long lastFeedKeepRunningLog = 0;
+      if (millis() - lastFeedKeepRunningLog >= BLE_STATUS_LOG_INTERVAL_MS) {
+        SerialBLE_println("b2 pressed, feed running - keep motors running");
+        lastFeedKeepRunningLog = millis();
+      }
       // Button 2 is pressed, delay has passed, and feed has started - keep motors running
       //motors.setM2Speed(-400);  // Ensure M2 is running
       //setFanSpeed(400);  // Continuously ensure M3 at full power
@@ -1897,12 +2160,18 @@ void loop() {
       SerialBLE_println("Feed Down Released - Stopping feed, starting fan timer");
       motors.setM2Speed(0);
       button2FeedStarted = false;  // Reset flag for next button press
+      button2DisconnectAlertedForCurrentPress = false;
       button2FanStartTime = 0;
       fanStartTime = millis();  // Start fan timer
       fanRunning = true;        // Set fan running flag
       //setFanSpeed(255);  // Keep fan running during timer
     } else if (!button2Pressed && fanRunning && (millis() - fanStartTime < fanDuration * 1000)) {
-      SerialBLE_println("b2 not pressed, fan running, no time out - keep running ");
+      // Throttle keep-running status logs to avoid BLE spam in the loop.
+      static unsigned long lastFanKeepRunningLog = 0;
+      if (millis() - lastFanKeepRunningLog >= BLE_STATUS_LOG_INTERVAL_MS) {
+        SerialBLE_println("b2 not pressed, fan running, no time out - keep running ");
+        lastFanKeepRunningLog = millis();
+      }
       // Fan timer is active - keep M3 running
       //setFanSpeed(255);  // Keep fan running
     } else if (!button2Pressed && fanRunning && (millis() - fanStartTime >= fanDuration * 1000)) {
@@ -1926,10 +2195,12 @@ void loop() {
   // Clear delay flags if buttons released before delay completes
   if (!button1Pressed && button1DelayActive) {
     button1DelayActive = false;
+    button1DisconnectAlertedForCurrentPress = false;
     Serial.println("Button 1 released before delay - cancelled");
   }
   if (!button2Pressed && button2DelayActive) {
     button2DelayActive = false;
+    button2DisconnectAlertedForCurrentPress = false;
     Serial.println("Button 2 released before delay - cancelled");
   }
   
@@ -1945,7 +2216,7 @@ void loop() {
   // Inactivity light sleep: 2 min with no activity, wake on GPIO2 (controlPanelWake)
   // Only enter when wake button is released (HIGH) so pin does not trigger immediate wake.
   // Light sleep keeps GPIO state so fan pins stay LOW (fan off) without hold logic.
-  if (!DEVELOPMENT_MODE && !otaEnabled && !batteryDisplayMode && !isFlushing && !mechanismMotorRunning && !fanRunning &&
+  if (!devModeEnabled && !otaEnabled && !batteryDisplayMode && !isFlushing && !mechanismMotorRunning && !fanRunning &&
       (millis() - lastActivityMillis >= INACTIVITY_SLEEP_MS) &&
       (digitalRead(controlPanelWake) == HIGH)) {
     motors.setM2Speed(0);
@@ -1964,26 +2235,27 @@ void loop() {
   }
 
   if (heaterOn) {
-    updateHeaterPID();
+    float heaterTemp = readTemperature();
+    updateHeaterControl(heaterTemp);
     unsigned long now = millis();
-    if (input > K) {
+    if (heaterTemp > K) {
       timeAboveSetpointMillis += (now - lastHeaterCheckMillis);
     }
     lastHeaterCheckMillis = now;
     // After cut motor (cut mode): count time above CUT_MODE_TEMP for CUT_MODE_HEAT_TIME
     if (isFlushing && flushStep == 6 && cutBag && case6CutMotorRun) {
-      if (input >= CUT_MODE_TEMP) {
+      if (heaterTemp >= CUT_MODE_TEMP) {
         timeAboveCutModeTempMillis += (now - lastCutModeTempCheckMillis);
       }
       lastCutModeTempCheckMillis = now;
     }
     // In cut-bag flushes, allow headroom relative to the higher cut-mode target.
     // This prevents false overheat trips when K is intentionally lower than CUT_MODE_TEMP.
-    float overheatBaseTemp = setpoint;
+    float overheatBaseTemp = heaterTargetTemp;
     if (isFlushing && cutBag) {
       overheatBaseTemp = max(K, CUT_MODE_TEMP);
     }
-    if (readTemperature() >= overheatBaseTemp * 1.2 && ERROR_CODE == 0) {
+    if (heaterTemp >= overheatBaseTemp * 1.2 && ERROR_CODE == 0) {
       SerialBLE_println("Heater Too Hot - stopping");
       ERROR_CODE = 3;
       stopEverything();
@@ -2028,11 +2300,10 @@ void flushSequence() {
     Serial.printf("DEBUG: Cut mode - Total time above K: %ld seconds (H=%ld + CUT_MODE_HEAT_TIME=%.1f)\n", 
                  totalHeaterTime, H, CUT_MODE_HEAT_TIME);
   }
-  const unsigned long maxHeaterWallTimeMs = (unsigned long)(totalHeaterTime * 1000 * 3);  // 3x required time; heater off if temp never reaches K
-
   switch (flushStep) {
     case 0:
       ledLastUpdateMillis = millis();
+      maxHeaterWallTimeMs = 0;  // Reset at start of each flush cycle before recomputing once.
       Serial.println("Checking battery voltage");
       if (getBatteryChargeLevel() < batteryThreshold) { 
        stopEverything();
@@ -2041,7 +2312,9 @@ void flushSequence() {
        LEDErrorCode(ERROR_CODE);
        return;
       }
+      logMotorFaultDebug("flush case0 before fault check");
       checkAllMotorFaults();
+      logMotorFaultDebug("flush case0 after fault check");
       if (ERROR_CODE != 0) {
         return;
       }
@@ -2053,6 +2326,19 @@ void flushSequence() {
       case1FeedStarted = false;  // Reset flag for case 1
       case6CutMotorRun = false;   // Reset flag for case 6 cut motor (run after H, then heat for CUT_MODE_HEAT_TIME)
       timeAboveCutModeTempMillis = 0;
+      // Compute timeout once per flush cycle from starting temperature.
+      {
+        float timeoutCurrentTemp = readTemperature();
+        float timeoutTargetTemp = cutBag ? CUT_MODE_TEMP : K;
+        float rampSecondsF = (timeoutTargetTemp - timeoutCurrentTemp) / 1.0f;  // 1 C/s ramp assumption
+        if (rampSecondsF < 0.0f) {
+          rampSecondsF = 0.0f;
+        }
+        float holdSecondsF = (float)totalHeaterTime;
+        maxHeaterWallTimeMs = (unsigned long)((rampSecondsF + holdSecondsF) * 1.2f * 1000.0f);
+        Serial.printf("DEBUG: Heater timeout calc (cycle start): current=%.1f C, target=%.1f C, ramp=%.1f s, hold=%.1f s, maxWall=%lu ms\n",
+                      timeoutCurrentTemp, timeoutTargetTemp, rampSecondsF, holdSecondsF, maxHeaterWallTimeMs);
+      }
       flushStep++;
       SerialBLE_println("Moving to Case1:");
       SerialBLE_println(millis());
@@ -2104,11 +2390,11 @@ void flushSequence() {
       SerialBLE_println("Heater on");
       mcp_digitalWrite(ledPins[0], HIGH);
       heaterOn = true;
-      setpoint = K;  // Target K until cut motor runs (then CUT_MODE_TEMP in cut mode)
+      heaterTargetTemp = K;  // Target K until cut motor runs (then CUT_MODE_TEMP in cut mode)
       timeAboveSetpointMillis = 0;
       lastHeaterCheckMillis = currentMillis;
-      lastHeaterPidLogMillis = 0;  // Force immediate first heater temp/PWM log for this heating phase
-      updateHeaterPID();
+      lastHeaterControlLogMillis = 0;  // Force immediate first heater control log for this heating phase
+      updateHeaterControl(readTemperature());
       
       // Check if it's time to start M3 reverse (based on fanReverseStartTime percentage of typicalOpeningTime)
       if (!m3ReverseActive && !m3ReverseCompleted && m1CloseStartTime > 0) {
@@ -2157,6 +2443,8 @@ void flushSequence() {
         }
         
         case5FeedExecuted = false; // Reset flag when entering case 5
+        m1CurrentLogWindowStartMillis = currentMillis;
+        m1CurrentMaxInWindow = 0.0;
         flushStep++;
         SerialBLE_print("Moving to Case5:");
         Serial.println(millis());
@@ -2185,14 +2473,23 @@ void flushSequence() {
       
       // Primary check: microswitch closed
         float m1Current = readM1Current();
-        SerialBLE_print("M1 Current: ");
-        SerialBLE_print(m1Current);
-        SerialBLE_println(" A");
+        if (m1Current > m1CurrentMaxInWindow) {
+          m1CurrentMaxInWindow = m1Current;
+        }
+        if (m1CurrentLogWindowStartMillis == 0) {
+          m1CurrentLogWindowStartMillis = currentMillis;
+        } else if (currentMillis - m1CurrentLogWindowStartMillis >= M1_CURRENT_LOG_INTERVAL_MS) {
+          SerialBLE_print("M1 max current (");
+          SerialBLE_print(M1_CURRENT_LOG_INTERVAL_MS / 1000);
+          SerialBLE_print("s): ");
+          SerialBLE_print(m1CurrentMaxInWindow);
+          SerialBLE_println(" A");
+          m1CurrentLogWindowStartMillis = currentMillis;
+          m1CurrentMaxInWindow = 0.0;
+        }
       
       if (digitalRead(microswitchClosePin) == LOW) {
-        SerialBLE_print("Microswitch closed - M1 Current: ");
-        SerialBLE_print(m1Current);
-        SerialBLE_println(" A");
+        SerialBLE_println("Microswitch closed");
         
         // Only execute feed once per case 5
         if (!case5FeedExecuted) {
@@ -2236,8 +2533,8 @@ void flushSequence() {
         case6CutMotorRun = true;
         timeAboveCutModeTempMillis = 0;
         lastCutModeTempCheckMillis = millis();
-        setpoint = CUT_MODE_TEMP;  // PID now targets higher temp for CUT_MODE_HEAT_TIME
-        Serial.printf("DEBUG: Setpoint raised to CUT_MODE_TEMP = %.1f °C\n", CUT_MODE_TEMP);
+        heaterTargetTemp = CUT_MODE_TEMP;  // Switch heater target for CUT_MODE_HEAT_TIME
+        Serial.printf("DEBUG: Heater target raised to CUT_MODE_TEMP = %.1f °C\n", CUT_MODE_TEMP);
       }
 
       bool timeAboveKReached;
@@ -2261,6 +2558,14 @@ void flushSequence() {
           SerialBLE_println("Heater time complete - Begin cooling");
         }
 
+        if (cutBag && case6CutMotorRun) {
+          SerialBLE_println("Cut bag mode: Running pre-cooling cut pulse");
+          motors.setM1Speed(400); // Recut while bag is hottest, before cooling starts
+          delay(int(MOTOR_CUT_TIME * 1000));
+          motors.setM1Speed(0);
+          SerialBLE_println("Pre-cooling cut pulse complete");
+        }
+
         flushStep++;
         SerialBLE_print("Moving to Case7 from case 6: ");
         SerialBLE_println(millis());
@@ -2268,23 +2573,35 @@ void flushSequence() {
         SerialBLE_println("Heater off");
         heaterOn = false;
         heaterOff();
-        setpoint = K;  // Restore setpoint for next flush
+        heaterTargetTemp = K;  // Restore target for next flush
         stepStartMillis = currentMillis;
         lastCoolingTempLogMillis = 0;  // Reset cooling log timer for immediate first reading in case 7
       }
       break;
     }
 
-    case 7:
+    case 7: {
+      float coolingTemp = readTemperature();
       if (currentMillis - lastCoolingTempLogMillis >= COOLING_TEMP_LOG_INTERVAL_MS) {
-        float coolingTemp = readTemperature();
         SerialBLE_print("Cooling temp: ");
         SerialBLE_print(coolingTemp);
         SerialBLE_println(" C");
         lastCoolingTempLogMillis = currentMillis;
       }
 
-      if (currentMillis - stepStartMillis >= T * 1000) {
+      bool coolingThresholdReached = coolingTemp < COOL_OPEN_TEMP_C;
+      bool coolingTimeoutReached = (currentMillis - stepStartMillis) >= (MAX_COOL_WAIT_S * 1000UL);
+
+      if (coolingThresholdReached || coolingTimeoutReached) {
+        if (coolingThresholdReached) {
+          SerialBLE_print("Cooling threshold reached, opening sealer at ");
+          SerialBLE_print(coolingTemp);
+          SerialBLE_println(" C");
+        } else {
+          SerialBLE_print("WARNING: Cooling timeout reached at ");
+          SerialBLE_print(coolingTemp);
+          SerialBLE_println(" C - opening sealer");
+        }
         Serial.print(currentMillis);
         SerialBLE_println("  Cooling complete opening sealer");
         mechanismMotorRunning = true;
@@ -2299,6 +2616,7 @@ void flushSequence() {
         stepStartMillis = currentMillis;
       }
       break;
+    }
 
     case 8:
       if (currentMillis - stepStartMillis >= backupTime * 1000) {
@@ -2768,6 +3086,48 @@ float readTemperature() {
   return tempKelvin - 273.15;
 }
 
+float readMainThermistorResistanceOhms() {
+  int analogValue = analogRead(thermistorPin);
+  float voltage = analogValue * (3.3 / 4095.0);
+  if (voltage <= THERMISTOR_VOLTAGE_GUARD_V) {
+    return 1000000000.0;
+  }
+  if (voltage >= (3.3 - THERMISTOR_VOLTAGE_GUARD_V)) {
+    return 0.0;
+  }
+  return (voltage * knownResistor) / (3.3 - voltage);
+}
+
+bool isHardwareLikelyDisconnectedForUserAction() {
+  return readMainThermistorResistanceOhms() > HARDWARE_DISCONNECT_RESISTANCE_OHMS;
+}
+
+void playHardwareNotConnectedAlert() {
+  const int cycles = 3;
+  const int onMs = 80;
+  const int offMs = 80;
+
+  for (int cycle = 0; cycle < cycles; cycle++) {
+    for (int i = 0; i < totalLeds; i++) {
+      mcp_digitalWrite(ledPins[i], HIGH);
+    }
+    digitalWrite(buzzerPin, HIGH);
+    delay(onMs);
+
+    for (int i = 0; i < totalLeds; i++) {
+      mcp_digitalWrite(ledPins[i], LOW);
+    }
+    digitalWrite(buzzerPin, LOW);
+    delay(offMs);
+  }
+
+  // Ensure alert outputs are off after the pattern completes.
+  digitalWrite(buzzerPin, LOW);
+  for (int i = 0; i < totalLeds; i++) {
+    mcp_digitalWrite(ledPins[i], LOW);
+  }
+}
+
 float readBatteryVoltage() {
   int analogValue = analogRead(batteryVoltagePin);
   // Convert ADC reading to voltage (0-3.3V)
@@ -2815,10 +3175,14 @@ float readBatteryTemperature() {
   Serial.printf("Step 5 - Steinhart: %.6f\n", steinhart);
   Serial.printf("Step 6 - Temperature: %.1f°C\n", temperature);
   Serial.println("=============================================");
+
+  // Include motor fault health in battery temp debug so it can be monitored
+  // without running a full flush sequence.
+  String faultSnapshot = buildMotorFaultStatusSnapshot();
   
   // Debug output to Bluetooth: one string to avoid truncation/interleaving
   if (serial_streaming_enabled) {
-    sendSerialToBLE("=== BATTERY TEMP DEBUG ===\nADC: " + String(analogValue) + ", Voltage: " + String(voltage, 2) + "V, Resistance: " + String(thermistorResistance, 2) + " Ohm, Temp: " + String(temperature, 2) + " C\n");
+    sendSerialToBLE("=== BATTERY TEMP DEBUG ===\nADC: " + String(analogValue) + ", Voltage: " + String(voltage, 2) + "V, Resistance: " + String(thermistorResistance, 2) + " Ohm, Temp: " + String(temperature, 2) + " C, " + faultSnapshot + "\n");
   }
   return temperature;
 }
@@ -2956,7 +3320,7 @@ void calculateSequenceTiming() {
   // Case 4: Immediate (heater on)
   // Case 5: Variable (wait for microswitch + current)
   // Case 6: Until time above K reaches H (plus CUT_MODE_HEAT_TIME in cut mode)
-  // Case 7: T seconds (cooling time)
+  // Case 7: estimated cooling time (T seconds) for LED pacing only
   // Case 8: backupTime seconds (back up bag)
   // Case 9: Immediate
   // Case 10: Variable (wait for microswitch)
@@ -3107,35 +3471,53 @@ void checkMotorFaults() {
   }
 }
 
-void updateHeaterPID() {
+void updateHeaterControl(float currentTemp) {
   unsigned long now = millis();
-  input = readTemperature();
-  myPID.Compute();
-  analogWrite(heaterPin, (int)output);
+  float lowerTol = heaterLowerToleranceC;
+  float upperTol = heaterUpperToleranceC;
 
-  if (lastHeaterPidLogMillis == 0 || (now - lastHeaterPidLogMillis >= HEATER_PID_LOG_INTERVAL_MS)) {
-    // Read analog voltage only when we are actually logging to avoid high-frequency spam.
-    int analogValue = analogRead(thermistorPin);
-    float voltage = analogValue * (3.3 / 4095.0);
+  if ((lowerTol != lowerTol) || lowerTol <= 0.0f) {
+    lowerTol = 2.0f;
+  }
+  if (upperTol != upperTol) {
+    upperTol = 0.0f;
+  }
+  if (upperTol <= -lowerTol) {
+    upperTol = -lowerTol + 0.1f;
+  }
 
-    SerialBLE_print("temperature: ");
-    SerialBLE_println(input);
-    SerialBLE_print("PWM Output: ");
-    SerialBLE_println(output);
-    SerialBLE_print("Analog Voltage: ");
-    SerialBLE_print(voltage);
-    SerialBLE_println(" V");
-    Serial.printf("Heater Debug: GPIO%d PWM=%d, Setpoint=%.1f, Input=%.1f, Analog=%d, Voltage=%.3fV\n",
-                  heaterPin, (int)output, setpoint, input, analogValue, voltage);
-    lastHeaterPidLogMillis = now;
+  float onThreshold = heaterTargetTemp;
+  float offThreshold = heaterTargetTemp + upperTol;
+  bool nextHeaterOutput = heaterOutputOn;
+
+  if (currentTemp <= onThreshold) {
+    nextHeaterOutput = true;
+  } else if (currentTemp >= offThreshold) {
+    nextHeaterOutput = false;
+  }
+
+  if (nextHeaterOutput != heaterOutputOn) {
+    heaterOutputOn = nextHeaterOutput;
+    digitalWrite(heaterPin, heaterOutputOn ? HIGH : LOW);
+  }
+
+  if (lastHeaterControlLogMillis == 0 || (now - lastHeaterControlLogMillis >= HEATER_CONTROL_LOG_INTERVAL_MS)) {
+    SerialBLE_print("Heater temp: ");
+    SerialBLE_print(currentTemp);
+    SerialBLE_print(" C, target: ");
+    SerialBLE_print(heaterTargetTemp);
+    SerialBLE_print(" C, state: ");
+    SerialBLE_println(heaterOutputOn ? "ON" : "OFF");
+    Serial.printf("Heater Debug: GPIO%d state=%s, target=%.1f, temp=%.1f, on<=%.1f, off>=%.1f\n",
+                  heaterPin, heaterOutputOn ? "ON" : "OFF", heaterTargetTemp, currentTemp, onThreshold, offThreshold);
+    lastHeaterControlLogMillis = now;
   }
 }
 
 void heaterOff() {
-  analogWrite(heaterPin, 0);
-  Serial.print("PWM Output: ");
-  Serial.println(output);
-  Serial.printf("Heater OFF: GPIO%d PWM=0\n", heaterPin);
+  digitalWrite(heaterPin, LOW);
+  heaterOutputOn = false;
+  Serial.printf("Heater OFF: GPIO%d state=OFF\n", heaterPin);
   heaterOn = false;
 }
 
@@ -3163,21 +3545,14 @@ bool getM3Fault() {
 // Current monitoring function
 float readM1Current() {
   int analogValue = analogRead(m1CurrentPin);
-  SerialBLE_print("analog current value:"); 
-  SerialBLE_println(analogValue);
 
   // Convert ADC reading to voltage (0-3.3V)
   float voltage = analogValue * (3.3 / 4095.0);
-  SerialBLE_print("voltage:");
-  SerialBLE_println(voltage);
 
   // Based on INA169 circuit: Current = (Voltage - 0.5) / (0.1 * Rshunt)
   // Rshunt = 200mΩ, so Current = (Voltage - 0.5) / 0.02
   // Assuming 0.5V offset and 0.1V/A sensitivity
   float current = (voltage) / 2.0; //(no offset observed, 80 A at 0.02)
-  
-  SerialBLE_print("M1 current:");
-  SerialBLE_println(current);
   return current;
 }
 
@@ -3203,6 +3578,39 @@ float readHeaterCurrent() {
 }
 
 // Enhanced motor fault checking for all 3 motors
+void logMotorFaultDebug(const char* context) {
+  int m1NfaultRaw = digitalRead(M1NFAULT_PIN);
+  int m2NfaultRaw = digitalRead(M2NFAULT_PIN);
+  bool m12Fault = motors.getFault();
+
+  String message = "Motor Fault Debug [";
+  message += context;
+  message += "]: getFault=";
+  message += (m12Fault ? "1" : "0");
+  message += ", M1NFAULT=";
+  message += String(m1NfaultRaw);
+  message += ", M2NFAULT=";
+  message += String(m2NfaultRaw);
+
+  SerialBLE_println(message);
+}
+
+String buildMotorFaultStatusSnapshot() {
+  bool m12FaultNow = motors.getFault();
+  int m1NfaultRaw = digitalRead(M1NFAULT_PIN);
+  int m2NfaultRaw = digitalRead(M2NFAULT_PIN);
+
+  return "M12FaultNow:" + String(m12FaultNow ? 1 : 0) +
+         ", M1NFAULT:" + String(m1NfaultRaw) +
+         ", M2NFAULT:" + String(m2NfaultRaw) +
+         ", IgnoreM12:" + String(ignoreM12Faults ? 1 : 0) +
+         ", IgnoredM12Ever:" + String(hasIgnoredM12Fault ? 1 : 0) +
+         ", IgnoredM12Count:" + String(ignoredM12FaultCount) +
+         ", LastIgnoredMs:" + String(lastIgnoredM12FaultMillis) +
+         ", M12RecovOk:" + String(m12RecoverySuccessCount) +
+         ", M12RecovFail:" + String(m12RecoveryFailureCount);
+}
+
 void checkAllMotorFaults() {
   // Add a small delay to ensure motors are properly initialized
   static unsigned long lastCheck = 0;
@@ -3212,8 +3620,95 @@ void checkAllMotorFaults() {
   lastCheck = millis();
   
   if (motors.getFault() && ERROR_CODE == 0) {
-    Serial.println("DEBUG: Motor 1 or 2 fault detected - checking motor state");
-    SerialBLE_println("Motor 1 or 2 Fault Detected!");
+    unsigned long now = millis();
+    hasIgnoredM12Fault = true;
+    ignoredM12FaultCount++;
+    lastIgnoredM12FaultMillis = now;
+
+    bool shouldLogNow = (lastIgnoredM12FaultLogMillis == 0) ||
+                        (now - lastIgnoredM12FaultLogMillis >= M12_FAULT_LOG_THROTTLE_MS);
+    bool recoveryCooldownElapsed = (lastM12RecoveryCycleMillis == 0) ||
+                                   (now - lastM12RecoveryCycleMillis >= M12_FAULT_RECOVERY_COOLDOWN_MS);
+    if (!recoveryCooldownElapsed) {
+      suppressedM12RecoveryCycles++;
+      if (shouldLogNow) {
+        String cooldownMsg = "M1/M2 fault present, recovery cooldown active";
+        cooldownMsg += " count=" + String(ignoredM12FaultCount);
+        cooldownMsg += ", suppressedFaultLogs=" + String(suppressedIgnoredM12FaultLogs);
+        cooldownMsg += ", suppressedRecoveryCycles=" + String(suppressedM12RecoveryCycles);
+        SerialBLE_println(cooldownMsg);
+        lastIgnoredM12FaultLogMillis = now;
+        suppressedIgnoredM12FaultLogs = 0;
+        suppressedM12RecoveryCycles = 0;
+      } else {
+        suppressedIgnoredM12FaultLogs++;
+      }
+      return;
+    }
+
+    lastM12RecoveryCycleMillis = now;
+    if (shouldLogNow) {
+      logMotorFaultDebug("checkAllMotorFaults tripped");
+      Serial.println("DEBUG: Motor 1 or 2 fault detected - checking motor state");
+      String startMsg = "M1/M2 fault detected, starting auto-recovery";
+      startMsg += " count=" + String(ignoredM12FaultCount);
+      if (suppressedIgnoredM12FaultLogs > 0 || suppressedM12RecoveryCycles > 0) {
+        startMsg += ", suppressedFaultLogs=" + String(suppressedIgnoredM12FaultLogs);
+        startMsg += ", suppressedRecoveryCycles=" + String(suppressedM12RecoveryCycles);
+      }
+      SerialBLE_println(startMsg);
+      suppressedIgnoredM12FaultLogs = 0;
+      suppressedM12RecoveryCycles = 0;
+    } else {
+      suppressedIgnoredM12FaultLogs++;
+    }
+
+    // Keep mechanism safe while resetting the M1/M2 driver.
+    motors.setM1Speed(0);
+    motors.setM2Speed(0);
+
+    bool faultRecovered = false;
+    for (uint8_t attempt = 1; attempt <= M12_FAULT_RECOVERY_MAX_ATTEMPTS; ++attempt) {
+      if (shouldLogNow) {
+        String attemptMsg = "M1/M2 auto-recovery attempt " + String(attempt) + "/" + String(M12_FAULT_RECOVERY_MAX_ATTEMPTS);
+        SerialBLE_println(attemptMsg);
+      }
+      motors.disableDrivers();
+      delay(M12_FAULT_RECOVERY_DISABLE_MS);
+      motors.enableDrivers();
+      delay(M12_FAULT_RECOVERY_SETTLE_MS);
+
+      if (!motors.getFault()) {
+        faultRecovered = true;
+        if (shouldLogNow) {
+          String recoveredMsg = "M1/M2 fault recovered on attempt " + String(attempt);
+          recoveredMsg += ", totalRecovered=" + String(m12RecoverySuccessCount + 1);
+          SerialBLE_println(recoveredMsg);
+          lastIgnoredM12FaultLogMillis = millis();
+        }
+        break;
+      }
+    }
+
+    if (faultRecovered) {
+      m12RecoverySuccessCount++;
+      return;
+    }
+
+    m12RecoveryFailureCount++;
+    if (ignoreM12Faults && !latchM12FaultAfterRecoveryFailure) {
+      if (shouldLogNow) {
+        String failedMsg = "M1/M2 fault persists after recovery attempts; continuing log-only";
+        failedMsg += " failures=" + String(m12RecoveryFailureCount);
+        SerialBLE_println(failedMsg);
+        lastIgnoredM12FaultLogMillis = millis();
+      } else {
+        suppressedIgnoredM12FaultLogs++;
+      }
+      return;
+    }
+
+    SerialBLE_println("Motor 1 or 2 Fault Detected! Auto-recovery failed, latching ERROR_CODE=4");
     ERROR_CODE = 4;
     stopEverything();
     LEDErrorCode(ERROR_CODE);

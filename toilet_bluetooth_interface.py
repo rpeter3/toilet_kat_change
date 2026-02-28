@@ -43,7 +43,11 @@ class ToiletSystemInterface:
             "fanReverseTime": {"description": "Duration M3 runs in reverse after starting", "units": "sec", "default": 10.0},
             "fanReverseStartTime": {"description": "Delay before M3 reverse starts as percentage of typicalOpeningTime after M1 begins closing", "units": "%", "default": 0.0},
             "backupTimeAfterReopen": {"description": "Feed bag backup duration after mechanism motor finishes opening", "units": "sec", "default": 1.7},
-            "CUT_MODE_TEMP": {"description": "Temperature to maintain for CUT_MODE_HEAT_TIME after cut motor", "units": "°C", "default": 175.0}
+            "CUT_MODE_TEMP": {"description": "Temperature to maintain for CUT_MODE_HEAT_TIME after cut motor", "units": "°C", "default": 175.0},
+            "heaterLowerToleranceC": {"description": "Heater ON threshold below target (temp <= target - lower)", "units": "°C", "default": 2.0},
+            "heaterUpperToleranceC": {"description": "Heater OFF threshold above target (temp >= target + upper can be negative)", "units": "°C", "default": 0.0},
+            "COOL_OPEN_TEMP_C": {"description": "Open sealer when thermistor cools below this temperature", "units": "°C", "default": 80.0},
+            "MAX_COOL_WAIT_S": {"description": "Safety timeout for cooling stage before forcing open", "units": "sec", "default": 180.0}
         }
         
         # Predefined parameter sets for different materials (match material_parameters.csv)
@@ -66,7 +70,11 @@ class ToiletSystemInterface:
                 "fanReverseTime": 10.0,
                 "fanReverseStartTime": 0.0,
                 "backupTimeAfterReopen": 1.7,
-                "CUT_MODE_TEMP": 175.0
+                "CUT_MODE_TEMP": 175.0,
+                "heaterLowerToleranceC": 2.0,
+                "heaterUpperToleranceC": 0.0,
+                "COOL_OPEN_TEMP_C": 80.0,
+                "MAX_COOL_WAIT_S": 180.0
             },
             "Compostable 1.5mil": {
                 "batteryThreshold": 5.0,
@@ -86,16 +94,21 @@ class ToiletSystemInterface:
                 "fanReverseTime": 10.0,
                 "fanReverseStartTime": 0.0,
                 "backupTimeAfterReopen": 1.7,
-                "CUT_MODE_TEMP": 105.0
+                "CUT_MODE_TEMP": 105.0,
+                "heaterLowerToleranceC": 2.0,
+                "heaterUpperToleranceC": 0.0,
+                "COOL_OPEN_TEMP_C": 80.0,
+                "MAX_COOL_WAIT_S": 180.0
             }
         }
         
-        # Parameter order (18 values, as expected by ESP32 BLE)
+        # Parameter order (22 values, as expected by ESP32 BLE)
         self.param_order = [
             "batteryThreshold", "K", "F", "T", "backupTime",
             "fanDuration", "H", "continueFeeder", "maxOpeningTime", "typicalOpeningTime",
             "MOTOR_CUT_TIME", "CUT_MODE_HEAT_TIME", "postCoolingBagDuration", "preFeedFan",
-            "fanReverseTime", "fanReverseStartTime", "backupTimeAfterReopen", "CUT_MODE_TEMP"
+            "fanReverseTime", "fanReverseStartTime", "backupTimeAfterReopen", "CUT_MODE_TEMP",
+            "heaterLowerToleranceC", "heaterUpperToleranceC", "COOL_OPEN_TEMP_C", "MAX_COOL_WAIT_S"
         ]
 
     async def scan_for_device(self) -> Optional[str]:
@@ -374,6 +387,61 @@ class ToiletSystemInterface:
             print(f"Error decoding serial data: {e}")
             print(f"Raw data: {data}")
 
+    async def get_dev_mode_status(self) -> Optional[int]:
+        """Read current DEV mode from firmware (returns 0/1 or None on failure)."""
+        if not self.connected:
+            print("Not connected to device")
+            return None
+
+        try:
+            for _ in range(3):
+                await self.client.write_gatt_char(CHARACTERISTIC_UUID, b"GET_DEV_MODE")
+                await asyncio.sleep(0.15)
+                data = await self.client.read_gatt_char(CHARACTERISTIC_UUID)
+                response = data.decode("utf-8").strip()
+                if response.startswith("DEV_MODE:"):
+                    mode_str = response.split(":", 1)[1].strip()
+                    if mode_str in ("0", "1"):
+                        return int(mode_str)
+                await asyncio.sleep(0.1)
+            print("Failed to read DEV mode status from firmware")
+            return None
+        except Exception as e:
+            print(f"Failed to read DEV mode status: {e}")
+            return None
+
+    async def set_dev_mode(self, new_mode: int) -> bool:
+        """Set firmware DEV mode to 0 or 1."""
+        if not self.connected:
+            print("Not connected to device")
+            return False
+        if new_mode not in (0, 1):
+            print("Invalid DEV mode value. Use 0 or 1.")
+            return False
+
+        try:
+            command = f"SET_DEV_MODE:{new_mode}"
+            await self.client.write_gatt_char(CHARACTERISTIC_UUID, command.encode("utf-8"))
+            await asyncio.sleep(0.15)
+
+            data = await self.client.read_gatt_char(CHARACTERISTIC_UUID)
+            response = data.decode("utf-8").strip()
+
+            if response.startswith("SET_DEV_MODE_ACK:"):
+                ack_value = response.split(":", 1)[1].strip()
+                return ack_value == str(new_mode)
+
+            if response.startswith("SET_DEV_MODE_ERR:"):
+                print(f"Firmware rejected DEV mode update: {response}")
+                return False
+
+            # If response is not an ACK/ERR, verify by reading back.
+            verify_mode = await self.get_dev_mode_status()
+            return verify_mode == new_mode
+        except Exception as e:
+            print(f"Failed to set DEV mode: {e}")
+            return False
+
 async def main():
     """Main program loop"""
     interface = ToiletSystemInterface()
@@ -402,8 +470,9 @@ async def main():
             print("7. Monitor serial stream")
             print("8. Exit")
             print("9. Update single parameter")
+            print("10. Toggle DEV mode")
             
-            choice = input("\nEnter your choice (1-9): ").strip()
+            choice = input("\nEnter your choice (1-10): ").strip()
             
             if choice == "1":
                 print("\nReading current parameters...")
@@ -534,9 +603,46 @@ async def main():
                         print(f"Invalid selection. Please enter a number between 1 and {len(interface.param_order)}.")
                 except ValueError:
                     print("Invalid input. Please enter a number.")
+
+            elif choice == "10":
+                print("\nChecking firmware DEV mode...")
+                current_mode = await interface.get_dev_mode_status()
+                if current_mode is None:
+                    print("Unable to read current DEV mode from firmware.")
+                    continue
+
+                current_label = "ON (1)" if current_mode == 1 else "OFF (0)"
+                print(f"Current DEV mode: {current_label}")
+                new_mode_input = input("Enter new DEV mode value (1=ON, 0=OFF, Enter to cancel): ").strip()
+                if not new_mode_input:
+                    print("DEV mode change cancelled.")
+                    continue
+                if new_mode_input not in ("0", "1"):
+                    print("Invalid input. Enter 1 or 0.")
+                    continue
+
+                requested_mode = int(new_mode_input)
+                if requested_mode == current_mode:
+                    print("Requested value is already set. No change made.")
+                    continue
+
+                confirm = input(f"Change DEV mode to {requested_mode}? (y/N): ").strip().lower()
+                if confirm != "y":
+                    print("DEV mode change cancelled.")
+                    continue
+
+                if await interface.set_dev_mode(requested_mode):
+                    updated_mode = await interface.get_dev_mode_status()
+                    if updated_mode is None:
+                        print("DEV mode update sent, but readback failed.")
+                    else:
+                        updated_label = "ON (1)" if updated_mode == 1 else "OFF (0)"
+                        print(f"DEV mode updated successfully. Current firmware DEV mode: {updated_label}")
+                else:
+                    print("Failed to update DEV mode")
             
             else:
-                print("Invalid choice. Please enter 1-9.")
+                print("Invalid choice. Please enter 1-10.")
     
     except KeyboardInterrupt:
         print("\nProgram interrupted by user")

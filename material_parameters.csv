@@ -17,3 +17,5 @@ fanReverseTime,Duration M3 runs in reverse after starting,10,10
 fanReverseStartTime,Delay before M3 reverse starts as percentage of typicalOpeningTime after M1 begins closing,0,0
 backupTimeAfterReopen,Feed bag backup duration after mechanism motor finishes opening,1.7,1.7
 CUT_MODE_TEMP,Temperature to maintain for CUT_MODE_HEAT_TIME after cut motor,175,105
+heaterLowerToleranceC,Heater ON threshold below target (temp <= target - lower),2.0,2.0
+heaterUpperToleranceC,Heater OFF threshold above target (temp >= target + upper can be negative),0.0,0.0

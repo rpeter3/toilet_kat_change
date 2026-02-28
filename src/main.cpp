@@ -1984,8 +1984,8 @@ void loop()
         {
             lastBatteryCheckTime = currentMillis;
 
-            // Read battery level (this is the monitoring action)
-            int batteryLevel = getBatteryChargeLevel();
+            // Read and publish full battery telemetry while monitor buttons are held.
+            displayBatteryChargeLevel();
 
             // Check if we've been monitoring for 10 seconds continuously
             if (batteryMonitoringActive && (currentMillis - batteryMonitorStartTime >= BATTERY_MONITOR_DURATION))
@@ -2113,8 +2113,12 @@ void loop()
 
             if (holdDuration < BUTTON_HOLD_TIME)
             {
-                // Short press - start flush sequence
-                SerialBLE_println("Short press - starting flush sequence");
+                // Short press - also enable cutBag mode before starting flush
+                cutBag = true;
+                SerialBLE_println("Cut Bag mode enabled!");
+                SerialBLE_println("Short press - starting flush sequence with cut bag enabled");
+                Serial.printf("DEBUG: cutBag set to true, short press duration: %lu ms\n", holdDuration);
+                cutModeLEDAnimation();
 
                 // Calculate sequence timing and reset LED state
                 calculateSequenceTiming();
@@ -2917,6 +2921,15 @@ void displayBatteryChargeLevel()
     int chargeLevel = getBatteryChargeLevel();
     float batteryVoltage = readBatteryVoltage();
     float batteryTemp = readBatteryTemperature();
+    int batteryTempAnalog = analogRead(batteryTempPin);
+    float batteryTempVoltage = batteryTempAnalog * (3.3 / 4095.0);
+    String batteryTempResistanceText = "N/A";
+
+    if (batteryTempVoltage > 0.001 && batteryTempVoltage < 3.299)
+    {
+        float batteryTempResistance = 10000.0 * (3.3 - batteryTempVoltage) / batteryTempVoltage;
+        batteryTempResistanceText = String(batteryTempResistance, 0);
+    }
 
     SerialBLE_print("Battery Voltage: ");
     SerialBLE_print(batteryVoltage);
@@ -2925,6 +2938,12 @@ void displayBatteryChargeLevel()
     SerialBLE_print("%, Temperature: ");
     SerialBLE_print(batteryTemp);
     SerialBLE_println("°C");
+
+    String batteryTempTelemetry = "Battery Temp: " + String(batteryTemp, 1) +
+                                  "C, ADC: " + String(batteryTempAnalog) +
+                                  ", Resistance: " + batteryTempResistanceText + " ohm";
+    Serial.println(batteryTempTelemetry);
+    sendSerialToBLE(batteryTempTelemetry);
 
     // Additional debug info
     Serial.printf("DEBUG: Charge level = %d%%, Battery voltage = %.2fV, Temperature = %.1f°C\n",
