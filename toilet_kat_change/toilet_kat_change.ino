@@ -7,6 +7,7 @@
 #include <EEPROM.h>     // Include EEPROM library for parameter persistence
 #include <esp_ota_ops.h>  // Include OTA operations for updates
 #include <nvs_flash.h>   // Include NVS for rollback state storage
+#include <nvs.h>
 #include <esp_system.h>  // Include for reboot functionality
 #include <esp_sleep.h>    // Include for deep sleep and wake
 #include <driver/rtc_io.h> // RTC GPIO for wake pin pull-up in deep sleep
@@ -70,11 +71,78 @@ bool serial_streaming_enabled = false;
 #define FLUSH_COUNT_ADDR (FLUSH_COUNT_MAGIC_ADDR + sizeof(uint16_t))
 #define FLUSH_COUNT_MAGIC 0xF1C5
 
+// Hardware matrix persistence (NVS)
+#define HW_MATRIX_MAGIC 0x484D4154UL  // "HMAT"
+#define HW_MATRIX_SCHEMA_VERSION 1
+#define HW_COMPONENT_VERSION_LEN 24
+#define HW_COMPONENT_DESC_LEN 96
+#define HW_COMPONENT_DATE_LEN 11  // YYYY-MM-DD + '\0'
+
+// HWCFG transactional profile storage
+#define HWCFG_MAGIC 0x48434647UL  // "HCFG"
+#define HWCFG_SCHEMA_VERSION 1
+#define HWCFG_PROFILE_MAX 24
+#define HWCFG_PROFILE_ID_LEN 24
+#define HWCFG_PROFILE_PARAM_BLOB_LEN 320
+#define HWCFG_CONFIG_NAMESPACE "hwcfg"
+#define HWCFG_ACTIVE_KEY "active"
+#define HWCFG_LAST_GOOD_KEY "lkg"
+
 // Version information
 struct VersionInfo {
   uint16_t magic;
   uint16_t hardware_version;
   char hardware_description[32];
+};
+
+enum HardwareComponentId {
+  HW_CONTROL_PANEL = 0,
+  HW_HEATING_ELEMENT,
+  HW_MAIN_CIRCUIT_BOARD,
+  HW_VACUUM_FAN,
+  HW_FEED_MOTOR,
+  HW_MECHANISM_MOTOR,
+  HW_THERMISTOR,
+  HW_BATTERY,
+  HW_FACTORY_SOFTWARE_DATE,
+  HW_FACTORY_SOFTWARE_VERSION_NUMBER,
+  HW_COMPONENT_COUNT
+};
+
+struct HardwareComponentEntry {
+  char current_version[HW_COMPONENT_VERSION_LEN];
+  char current_description[HW_COMPONENT_DESC_LEN];
+  char install_date[HW_COMPONENT_DATE_LEN];
+  char previous_version[HW_COMPONENT_VERSION_LEN];
+  char previous_description[HW_COMPONENT_DESC_LEN];
+  char previous_install_date[HW_COMPONENT_DATE_LEN];
+};
+
+struct HardwareMatrix {
+  uint32_t matrix_magic;
+  uint16_t matrix_schema_version;
+  uint16_t component_count;
+  HardwareComponentEntry components[HW_COMPONENT_COUNT];
+  uint32_t crc32;
+};
+
+struct HWCFGProfileEntry {
+  uint8_t in_use;
+  char profile_id[HWCFG_PROFILE_ID_LEN];
+  char component_name[HW_COMPONENT_DESC_LEN];
+  char component_version[HW_COMPONENT_VERSION_LEN];
+  char params_blob[HWCFG_PROFILE_PARAM_BLOB_LEN];
+};
+
+struct HWCFGConfigStore {
+  uint32_t magic;
+  uint16_t schema_version;
+  uint16_t profile_count;
+  char active_profile_id[HWCFG_PROFILE_ID_LEN];
+  char last_good_profile_id[HWCFG_PROFILE_ID_LEN];
+  uint8_t active_validated;
+  HWCFGProfileEntry profiles[HWCFG_PROFILE_MAX];
+  uint32_t crc32;
 };
 
 const char* SOFTWARE_VERSION = "2.4.3"; //HOPEFULLY FIX MD5
@@ -94,7 +162,14 @@ void incrementFlushCount();
 void initializeHardwareVersion();
 VersionInfo readHardwareVersion();
 void writeHardwareVersion(uint16_t version, const char* description);
+bool initializeHardwareMatrix();
 String getVersionString();
+String getHardwareComponentsListString();
+String getHardwareComponentString(HardwareComponentId componentId);
+bool setHardwareComponentByName(const String& componentName, const String& version, const String& installDate, const String& description, String& errorCode);
+bool lookupHardwareComponentId(const String& componentName, HardwareComponentId& outId);
+bool initializeHWCFGStore();
+String handleHWCFGCommand(const String& cmd);
 void enterEEPROMInvalidErrorState(const char* reason);
 void maintainEEPROMErrorIndicator();
 void startEEPROMWakeAlert();
@@ -267,6 +342,9 @@ const unsigned long INACTIVITY_SLEEP_MS = 2 * 60 * 1000;  // 2 minutes - then li
 // Runtime DEV mode (persisted in NVS): when enabled, BLE stays on and inactivity sleep is disabled.
 const char* DEV_MODE_NAMESPACE = "system";
 const char* DEV_MODE_KEY = "dev_mode";
+const char* HW_MATRIX_NAMESPACE = "hwmeta";
+const char* HW_MATRIX_ACTIVE_KEY = "matrix";
+const char* HW_MATRIX_LAST_GOOD_KEY = "matrix_lkg";
 bool devModeEnabled = true;
 // M1/M2 fault handling controls.
 bool ignoreM12Faults = true;
@@ -399,6 +477,23 @@ bool eepromWakeAlertActive = false;
 unsigned long eepromWakeAlertStartMillis = 0;
 const unsigned long EEPROM_WAKE_ALERT_MS = 10000;
 uint32_t lifetimeFlushCount = 0;
+HardwareMatrix hardwareMatrix = {};
+bool hardwareMatrixInitialized = false;
+HWCFGConfigStore hwcfgStore = {};
+bool hwcfgStoreInitialized = false;
+bool hwcfgSafeFault = false;
+const char* HARDWARE_COMPONENT_NAMES[HW_COMPONENT_COUNT] = {
+  "CONTROL_PANEL",
+  "HEATING_ELEMENT",
+  "MAIN_CIRCUIT_BOARD",
+  "VACUUM_FAN",
+  "FEED_MOTOR",
+  "MECHANISM_MOTOR",
+  "THERMISTOR",
+  "BATTERY",
+  "FACTORY_SOFTWARE_DATE",
+  "FACTORY_SOFTWARE_VERSION_NUMBER"
+};
 
 // Motor Driver Definitions
 const uint8_t M1DIR_PIN = 1;     // GPIO1 (M1DIR)
@@ -647,6 +742,13 @@ class characteristic_callbacks: public BLECharacteristicCallbacks {
         // Allow remote clients to request OTA mode via BLE write
         String cmd = String((char*)message, (unsigned int)message_length);
         cmd.trim();
+        if (cmd.startsWith("HWCFG_")) {
+          String hwcfgResponse = handleHWCFGCommand(cmd);
+          pCharacteristic->setValue(hwcfgResponse.c_str());
+          Serial.printf("Processed HWCFG command '%s' -> '%s'\n", cmd.c_str(), hwcfgResponse.c_str());
+          sendSerialToBLE("Processed HWCFG command");
+          return;
+        }
         if (cmd == "ENABLE_OTA") {
           Serial.println("Received ENABLE_OTA command via BLE");
           sendSerialToBLE("Received ENABLE_OTA command via BLE");
@@ -666,6 +768,69 @@ class characteristic_callbacks: public BLECharacteristicCallbacks {
           pCharacteristic->setValue(flushCountMessage.c_str());
           Serial.printf("Processed GET_FLUSH_COUNT, returned %s\n", flushCountMessage.c_str());
           sendSerialToBLE("Processed GET_FLUSH_COUNT");
+          return;
+        }
+        if (cmd == "GET_HW_MATRIX") {
+          if (!hardwareMatrixInitialized && !initializeHardwareMatrix()) {
+            pCharacteristic->setValue("HW_MATRIX_ERR:INIT_FAIL");
+            sendSerialToBLE("GET_HW_MATRIX failed: init");
+            return;
+          }
+          String response = getHardwareComponentsListString();
+          pCharacteristic->setValue(response.c_str());
+          Serial.printf("Processed GET_HW_MATRIX, returned %s\n", response.c_str());
+          sendSerialToBLE("Processed GET_HW_MATRIX");
+          return;
+        }
+        if (cmd.startsWith("GET_HW_COMPONENT:")) {
+          if (!hardwareMatrixInitialized && !initializeHardwareMatrix()) {
+            pCharacteristic->setValue("HW_COMPONENT_ERR:INIT_FAIL");
+            sendSerialToBLE("GET_HW_COMPONENT failed: init");
+            return;
+          }
+          String componentName = cmd.substring(String("GET_HW_COMPONENT:").length());
+          componentName.trim();
+          HardwareComponentId componentId;
+          if (!lookupHardwareComponentId(componentName, componentId)) {
+            pCharacteristic->setValue("HW_COMPONENT_ERR:UNKNOWN_COMPONENT");
+            Serial.printf("Rejected GET_HW_COMPONENT with unknown component: %s\n", componentName.c_str());
+            sendSerialToBLE("GET_HW_COMPONENT rejected: unknown component");
+            return;
+          }
+          String response = getHardwareComponentString(componentId);
+          pCharacteristic->setValue(response.c_str());
+          sendSerialToBLE("Processed GET_HW_COMPONENT");
+          return;
+        }
+        if (cmd.startsWith("SET_HW_COMPONENT:")) {
+          String payload = cmd.substring(String("SET_HW_COMPONENT:").length());
+          int firstSep = payload.indexOf(':');
+          int secondSep = (firstSep >= 0) ? payload.indexOf(':', firstSep + 1) : -1;
+          int thirdSep = (secondSep >= 0) ? payload.indexOf(':', secondSep + 1) : -1;
+          if (firstSep < 0 || secondSep < 0 || thirdSep < 0) {
+            pCharacteristic->setValue("SET_HW_COMPONENT_ERR:BAD_FORMAT");
+            sendSerialToBLE("SET_HW_COMPONENT rejected: bad format");
+            return;
+          }
+
+          String componentName = payload.substring(0, firstSep);
+          String version = payload.substring(firstSep + 1, secondSep);
+          String installDate = payload.substring(secondSep + 1, thirdSep);
+          String description = payload.substring(thirdSep + 1);
+          componentName.trim();
+
+          String errorCode;
+          if (!setHardwareComponentByName(componentName, version, installDate, description, errorCode)) {
+            String errResponse = String("SET_HW_COMPONENT_ERR:") + errorCode;
+            pCharacteristic->setValue(errResponse.c_str());
+            Serial.printf("SET_HW_COMPONENT failed for %s: %s\n", componentName.c_str(), errorCode.c_str());
+            sendSerialToBLE("SET_HW_COMPONENT failed");
+            return;
+          }
+
+          String ack = String("SET_HW_COMPONENT_ACK:") + componentName;
+          pCharacteristic->setValue(ack.c_str());
+          sendSerialToBLE("SET_HW_COMPONENT applied");
           return;
         }
         if (cmd.startsWith("SET_DEV_MODE:")) {
@@ -1239,6 +1404,1027 @@ void incrementFlushCount() {
     // Roll back RAM value to reflect persisted value.
     lifetimeFlushCount--;
   }
+}
+
+void copyBoundedString(char* dest, size_t destSize, const char* src) {
+  if (destSize == 0) {
+    return;
+  }
+  if (src == NULL) {
+    dest[0] = '\0';
+    return;
+  }
+  strncpy(dest, src, destSize - 1);
+  dest[destSize - 1] = '\0';
+}
+
+bool isIso8601DateOrEmpty(const char* dateValue) {
+  if (dateValue == NULL || dateValue[0] == '\0') {
+    return true;
+  }
+  if (strlen(dateValue) != 10) {
+    return false;
+  }
+  for (int i = 0; i < 10; i++) {
+    char c = dateValue[i];
+    if (i == 4 || i == 7) {
+      if (c != '-') {
+        return false;
+      }
+    } else if (c < '0' || c > '9') {
+      return false;
+    }
+  }
+  int month = (dateValue[5] - '0') * 10 + (dateValue[6] - '0');
+  int day = (dateValue[8] - '0') * 10 + (dateValue[9] - '0');
+  if (month < 1 || month > 12) {
+    return false;
+  }
+  if (day < 1 || day > 31) {
+    return false;
+  }
+  return true;
+}
+
+bool isSafeFieldString(const char* text, bool allowEmpty) {
+  if (text == NULL) {
+    return allowEmpty;
+  }
+  if (!allowEmpty && text[0] == '\0') {
+    return false;
+  }
+  for (size_t i = 0; text[i] != '\0'; i++) {
+    char c = text[i];
+    if (c < 0x20 || c > 0x7E) {
+      return false;
+    }
+    // Keep BLE payload parser simple by rejecting delimiters used in protocol.
+    if (c == ':' || c == '|') {
+      return false;
+    }
+  }
+  return true;
+}
+
+uint32_t computeHardwareMatrixCRC(const HardwareMatrix& matrix) {
+  HardwareMatrix temp = matrix;
+  temp.crc32 = 0;
+  const uint8_t* bytes = reinterpret_cast<const uint8_t*>(&temp);
+  size_t len = sizeof(HardwareMatrix);
+  uint32_t crc = 0xFFFFFFFFUL;
+  for (size_t i = 0; i < len; i++) {
+    crc ^= bytes[i];
+    for (int bit = 0; bit < 8; bit++) {
+      uint32_t mask = static_cast<uint32_t>(-(int32_t)(crc & 1U));
+      crc = (crc >> 1) ^ (0xEDB88320UL & mask);
+    }
+  }
+  return ~crc;
+}
+
+void refreshHardwareMatrixCRC(HardwareMatrix& matrix) {
+  matrix.crc32 = computeHardwareMatrixCRC(matrix);
+}
+
+void setHardwareComponentDefaults(HardwareComponentEntry& entry, const char* version, const char* description, const char* installDate) {
+  copyBoundedString(entry.current_version, sizeof(entry.current_version), version);
+  copyBoundedString(entry.current_description, sizeof(entry.current_description), description);
+  copyBoundedString(entry.install_date, sizeof(entry.install_date), installDate);
+  entry.previous_version[0] = '\0';
+  entry.previous_description[0] = '\0';
+  entry.previous_install_date[0] = '\0';
+}
+
+void initializeDefaultHardwareMatrix(HardwareMatrix& matrix) {
+  memset(&matrix, 0, sizeof(matrix));
+  matrix.matrix_magic = HW_MATRIX_MAGIC;
+  matrix.matrix_schema_version = HW_MATRIX_SCHEMA_VERSION;
+  matrix.component_count = HW_COMPONENT_COUNT;
+  setHardwareComponentDefaults(matrix.components[HW_CONTROL_PANEL], "5", "CONTROL INTERFACE FOR DEVICE", "2026-02-28");
+  setHardwareComponentDefaults(matrix.components[HW_HEATING_ELEMENT], "1", "VERSION OF THE HEATING ELEMENT IN THE SEALING MECHANISM", "2026-02-28");
+  setHardwareComponentDefaults(matrix.components[HW_MAIN_CIRCUIT_BOARD], "5", "MAIN CONROL PANEL FOR LOGIC", "2026-02-28");
+  setHardwareComponentDefaults(matrix.components[HW_VACUUM_FAN], "1", "FAN IN THE SEALER HARDWARE TO ADJUST INTERNAL PRESSURE", "2026-02-28");
+  setHardwareComponentDefaults(matrix.components[HW_FEED_MOTOR], "1", "MOTOR DESIGN FOR THE BAG FEED MECHANISM", "2026-02-28");
+  setHardwareComponentDefaults(matrix.components[HW_MECHANISM_MOTOR], "1", "MOTOR DESIGN FOR THE OPEN & CLOSE CLAMPING MECANISM", "2026-02-28");
+  setHardwareComponentDefaults(matrix.components[HW_THERMISTOR], "1", "VERSION OF THE THERMISTOR IN THE HEATING ELEMENT", "2026-02-28");
+  setHardwareComponentDefaults(matrix.components[HW_BATTERY], "1", "VERSION OF THE BATTERY POWER SUPPLY", "2026-02-28");
+  setHardwareComponentDefaults(matrix.components[HW_FACTORY_SOFTWARE_DATE], "2026-02-28", "DATE OF THE FACTORY SOFTWARE", "2026-02-28");
+  setHardwareComponentDefaults(matrix.components[HW_FACTORY_SOFTWARE_VERSION_NUMBER], "1", "SOFTWARE VERSION NUMBER", "2026-02-28");
+  refreshHardwareMatrixCRC(matrix);
+}
+
+bool validateHardwareMatrix(const HardwareMatrix& matrix, String* errorCode) {
+  if (matrix.matrix_magic != HW_MATRIX_MAGIC) {
+    if (errorCode != NULL) {
+      *errorCode = "BAD_MAGIC";
+    }
+    return false;
+  }
+  if (matrix.matrix_schema_version != HW_MATRIX_SCHEMA_VERSION) {
+    if (errorCode != NULL) {
+      *errorCode = "BAD_SCHEMA";
+    }
+    return false;
+  }
+  if (matrix.component_count != HW_COMPONENT_COUNT) {
+    if (errorCode != NULL) {
+      *errorCode = "BAD_COUNT";
+    }
+    return false;
+  }
+
+  uint32_t expectedCRC = computeHardwareMatrixCRC(matrix);
+  if (expectedCRC != matrix.crc32) {
+    if (errorCode != NULL) {
+      *errorCode = "BAD_CRC";
+    }
+    return false;
+  }
+
+  for (int i = 0; i < HW_COMPONENT_COUNT; i++) {
+    const HardwareComponentEntry& entry = matrix.components[i];
+    if (!isSafeFieldString(entry.current_version, false)) {
+      if (errorCode != NULL) {
+        *errorCode = "BAD_CUR_VER";
+      }
+      return false;
+    }
+    if (!isSafeFieldString(entry.current_description, false)) {
+      if (errorCode != NULL) {
+        *errorCode = "BAD_CUR_DESC";
+      }
+      return false;
+    }
+    if (!isIso8601DateOrEmpty(entry.install_date) || entry.install_date[0] == '\0') {
+      if (errorCode != NULL) {
+        *errorCode = "BAD_CUR_DATE";
+      }
+      return false;
+    }
+    if (!isSafeFieldString(entry.previous_version, true) ||
+        !isSafeFieldString(entry.previous_description, true) ||
+        !isIso8601DateOrEmpty(entry.previous_install_date)) {
+      if (errorCode != NULL) {
+        *errorCode = "BAD_PREV";
+      }
+      return false;
+    }
+  }
+  return true;
+}
+
+bool loadHardwareMatrixBlob(const char* key, HardwareMatrix& outMatrix) {
+  nvs_handle_t nvsHandle;
+  esp_err_t err = nvs_open(HW_MATRIX_NAMESPACE, NVS_READONLY, &nvsHandle);
+  if (err != ESP_OK) {
+    return false;
+  }
+
+  size_t blobSize = 0;
+  err = nvs_get_blob(nvsHandle, key, NULL, &blobSize);
+  if (err != ESP_OK || blobSize != sizeof(HardwareMatrix)) {
+    nvs_close(nvsHandle);
+    return false;
+  }
+
+  err = nvs_get_blob(nvsHandle, key, &outMatrix, &blobSize);
+  nvs_close(nvsHandle);
+  return err == ESP_OK;
+}
+
+bool saveHardwareMatrixBlob(const HardwareMatrix& matrix, bool updateLastKnownGood) {
+  nvs_handle_t nvsHandle;
+  esp_err_t err = nvs_open(HW_MATRIX_NAMESPACE, NVS_READWRITE, &nvsHandle);
+  if (err != ESP_OK) {
+    Serial.printf("Failed to open hardware matrix NVS namespace: %s\n", esp_err_to_name(err));
+    return false;
+  }
+
+  err = nvs_set_blob(nvsHandle, HW_MATRIX_ACTIVE_KEY, &matrix, sizeof(HardwareMatrix));
+  if (err == ESP_OK && updateLastKnownGood) {
+    err = nvs_set_blob(nvsHandle, HW_MATRIX_LAST_GOOD_KEY, &matrix, sizeof(HardwareMatrix));
+  }
+  if (err == ESP_OK) {
+    err = nvs_commit(nvsHandle);
+  }
+  nvs_close(nvsHandle);
+
+  if (err != ESP_OK) {
+    Serial.printf("Failed to persist hardware matrix: %s\n", esp_err_to_name(err));
+    return false;
+  }
+  return true;
+}
+
+bool lookupHardwareComponentId(const String& componentName, HardwareComponentId& outId) {
+  for (int i = 0; i < HW_COMPONENT_COUNT; i++) {
+    if (componentName.equals(HARDWARE_COMPONENT_NAMES[i])) {
+      outId = static_cast<HardwareComponentId>(i);
+      return true;
+    }
+  }
+  return false;
+}
+
+String getHardwareComponentsListString() {
+  String response = "HW_COMPONENTS:";
+  for (int i = 0; i < HW_COMPONENT_COUNT; i++) {
+    if (i > 0) {
+      response += ",";
+    }
+    response += HARDWARE_COMPONENT_NAMES[i];
+  }
+  return response;
+}
+
+String getHardwareComponentString(HardwareComponentId componentId) {
+  if (!hardwareMatrixInitialized) {
+    return "HW_COMPONENT_ERR:NOT_INITIALIZED";
+  }
+  const HardwareComponentEntry& entry = hardwareMatrix.components[componentId];
+  String response = "HW_COMPONENT:";
+  response += HARDWARE_COMPONENT_NAMES[componentId];
+  response += "|";
+  response += entry.current_version;
+  response += "|";
+  response += entry.current_description;
+  response += "|";
+  response += entry.install_date;
+  response += "|";
+  response += entry.previous_version;
+  response += "|";
+  response += entry.previous_description;
+  response += "|";
+  response += entry.previous_install_date;
+  return response;
+}
+
+bool initializeHardwareMatrix() {
+  HardwareMatrix active = {};
+  String validationError = "";
+  if (loadHardwareMatrixBlob(HW_MATRIX_ACTIVE_KEY, active) && validateHardwareMatrix(active, &validationError)) {
+    hardwareMatrix = active;
+    hardwareMatrixInitialized = true;
+    Serial.println("Hardware matrix loaded from active NVS record");
+    return true;
+  }
+
+  if (validationError.length() > 0) {
+    Serial.printf("Active hardware matrix invalid (%s), trying last-known-good\n", validationError.c_str());
+  }
+
+  HardwareMatrix lastKnownGood = {};
+  validationError = "";
+  if (loadHardwareMatrixBlob(HW_MATRIX_LAST_GOOD_KEY, lastKnownGood) && validateHardwareMatrix(lastKnownGood, &validationError)) {
+    hardwareMatrix = lastKnownGood;
+    hardwareMatrixInitialized = true;
+    saveHardwareMatrixBlob(hardwareMatrix, false);
+    Serial.println("Recovered hardware matrix from last-known-good record");
+    return true;
+  }
+
+  initializeDefaultHardwareMatrix(hardwareMatrix);
+  hardwareMatrixInitialized = true;
+  bool saved = saveHardwareMatrixBlob(hardwareMatrix, true);
+  if (saved) {
+    Serial.println("Initialized default hardware matrix");
+  } else {
+    Serial.println("WARNING: hardware matrix defaults loaded in RAM but persistence failed");
+  }
+  return saved;
+}
+
+bool setHardwareComponentByName(const String& componentName, const String& version, const String& installDate, const String& description, String& errorCode) {
+  if (!hardwareMatrixInitialized) {
+    if (!initializeHardwareMatrix()) {
+      errorCode = "INIT_FAIL";
+      return false;
+    }
+  }
+
+  HardwareComponentId componentId;
+  if (!lookupHardwareComponentId(componentName, componentId)) {
+    errorCode = "UNKNOWN_COMPONENT";
+    return false;
+  }
+
+  String versionTrim = version;
+  String installTrim = installDate;
+  String descriptionTrim = description;
+  versionTrim.trim();
+  installTrim.trim();
+  descriptionTrim.trim();
+
+  if (versionTrim.length() == 0 || versionTrim.length() >= HW_COMPONENT_VERSION_LEN) {
+    errorCode = "BAD_VERSION";
+    return false;
+  }
+  if (descriptionTrim.length() == 0 || descriptionTrim.length() >= HW_COMPONENT_DESC_LEN) {
+    errorCode = "BAD_DESCRIPTION";
+    return false;
+  }
+  if (installTrim.length() >= HW_COMPONENT_DATE_LEN || !isIso8601DateOrEmpty(installTrim.c_str()) || installTrim.length() == 0) {
+    errorCode = "BAD_DATE";
+    return false;
+  }
+  if (!isSafeFieldString(versionTrim.c_str(), false) || !isSafeFieldString(descriptionTrim.c_str(), false)) {
+    errorCode = "BAD_CHARS";
+    return false;
+  }
+
+  HardwareMatrix candidate = hardwareMatrix;
+  HardwareComponentEntry& entry = candidate.components[componentId];
+  copyBoundedString(entry.previous_version, sizeof(entry.previous_version), entry.current_version);
+  copyBoundedString(entry.previous_description, sizeof(entry.previous_description), entry.current_description);
+  copyBoundedString(entry.previous_install_date, sizeof(entry.previous_install_date), entry.install_date);
+  copyBoundedString(entry.current_version, sizeof(entry.current_version), versionTrim.c_str());
+  copyBoundedString(entry.current_description, sizeof(entry.current_description), descriptionTrim.c_str());
+  copyBoundedString(entry.install_date, sizeof(entry.install_date), installTrim.c_str());
+  refreshHardwareMatrixCRC(candidate);
+
+  String validationError;
+  if (!validateHardwareMatrix(candidate, &validationError)) {
+    errorCode = String("INVALID_MATRIX_") + validationError;
+    return false;
+  }
+
+  if (!saveHardwareMatrixBlob(candidate, true)) {
+    errorCode = "PERSIST_FAIL";
+    return false;
+  }
+
+  hardwareMatrix = candidate;
+  errorCode = "";
+  Serial.printf("Hardware matrix component updated: %s -> version=%s date=%s\n",
+                HARDWARE_COMPONENT_NAMES[componentId],
+                hardwareMatrix.components[componentId].current_version,
+                hardwareMatrix.components[componentId].install_date);
+  return true;
+}
+
+uint32_t computeCRC32Bytes(const uint8_t* bytes, size_t len) {
+  uint32_t crc = 0xFFFFFFFFUL;
+  for (size_t i = 0; i < len; i++) {
+    crc ^= bytes[i];
+    for (int bit = 0; bit < 8; bit++) {
+      uint32_t mask = static_cast<uint32_t>(-(int32_t)(crc & 1U));
+      crc = (crc >> 1) ^ (0xEDB88320UL & mask);
+    }
+  }
+  return ~crc;
+}
+
+uint32_t computeHWCFGCRC(const HWCFGConfigStore& store) {
+  HWCFGConfigStore temp = store;
+  temp.crc32 = 0;
+  const uint8_t* bytes = reinterpret_cast<const uint8_t*>(&temp);
+  return computeCRC32Bytes(bytes, sizeof(HWCFGConfigStore));
+}
+
+void refreshHWCFGCRC(HWCFGConfigStore& store) {
+  store.crc32 = computeHWCFGCRC(store);
+}
+
+bool parseStrictFloat(const String& input, float& out) {
+  String trimmed = input;
+  trimmed.trim();
+  if (trimmed.length() == 0) {
+    return false;
+  }
+  char buffer[32];
+  if (trimmed.length() >= (int)sizeof(buffer)) {
+    return false;
+  }
+  strncpy(buffer, trimmed.c_str(), sizeof(buffer) - 1);
+  buffer[sizeof(buffer) - 1] = '\0';
+  char* endPtr = nullptr;
+  float value = strtof(buffer, &endPtr);
+  if (endPtr == buffer || *endPtr != '\0') {
+    return false;
+  }
+  out = value;
+  return true;
+}
+
+bool isKnownParameterKey(const String& key) {
+  return key == "batteryThreshold" || key == "K" || key == "F" || key == "T" ||
+         key == "backupTime" || key == "fanDuration" || key == "H" || key == "continueFeeder" ||
+         key == "maxOpeningTime" || key == "typicalOpeningTime" || key == "MOTOR_CUT_TIME" ||
+         key == "CUT_MODE_HEAT_TIME" || key == "postCoolingFanDuration" || key == "preFeedFan" ||
+         key == "fanReverseTime" || key == "fanReverseStartTime" || key == "backupTimeAfterReopen" ||
+         key == "CUT_MODE_TEMP" || key == "heaterLowerToleranceC" || key == "heaterUpperToleranceC" ||
+         key == "COOL_OPEN_TEMP_C" || key == "MAX_COOL_WAIT_S";
+}
+
+bool validateParameterBlob(const String& componentName, const String& paramsBlob, String& errorCode) {
+  if (paramsBlob.length() == 0) {
+    errorCode = "EMPTY_PARAMS";
+    return false;
+  }
+  bool hasK = false;
+  bool hasCutTemp = false;
+  bool hasLower = false;
+  bool hasUpper = false;
+
+  int start = 0;
+  while (start < paramsBlob.length()) {
+    int sep = paramsBlob.indexOf(';', start);
+    if (sep < 0) {
+      sep = paramsBlob.length();
+    }
+    String pair = paramsBlob.substring(start, sep);
+    pair.trim();
+    if (pair.length() > 0) {
+      int eq = pair.indexOf('=');
+      if (eq <= 0 || eq >= pair.length() - 1) {
+        errorCode = "BAD_FORMAT";
+        return false;
+      }
+      String key = pair.substring(0, eq);
+      String value = pair.substring(eq + 1);
+      key.trim();
+      value.trim();
+      if (!isKnownParameterKey(key)) {
+        errorCode = "UNKNOWN_PARAM";
+        return false;
+      }
+      float numericValue = 0.0f;
+      if (!parseStrictFloat(value, numericValue)) {
+        errorCode = "BAD_VALUE";
+        return false;
+      }
+      if (key == "K" || key == "CUT_MODE_TEMP") {
+        if (numericValue < 20.0f || numericValue > 250.0f) {
+          errorCode = "OUT_OF_RANGE";
+          return false;
+        }
+      }
+      if (key == "heaterLowerToleranceC" || key == "heaterUpperToleranceC") {
+        if (numericValue < -30.0f || numericValue > 30.0f) {
+          errorCode = "OUT_OF_RANGE";
+          return false;
+        }
+      }
+      if (key == "MAX_COOL_WAIT_S") {
+        if (numericValue < 1.0f || numericValue > 1800.0f) {
+          errorCode = "OUT_OF_RANGE";
+          return false;
+        }
+      }
+      if (key == "K") hasK = true;
+      if (key == "CUT_MODE_TEMP") hasCutTemp = true;
+      if (key == "heaterLowerToleranceC") hasLower = true;
+      if (key == "heaterUpperToleranceC") hasUpper = true;
+    }
+    start = sep + 1;
+  }
+
+  if (componentName == "HEATING_ELEMENT" && (!hasK || !hasCutTemp || !hasLower || !hasUpper)) {
+    errorCode = "INCOMPATIBLE";
+    return false;
+  }
+
+  errorCode = "";
+  return true;
+}
+
+bool applyParameterBlobToRuntime(const String& paramsBlob, String& errorCode) {
+  int start = 0;
+  while (start < paramsBlob.length()) {
+    int sep = paramsBlob.indexOf(';', start);
+    if (sep < 0) {
+      sep = paramsBlob.length();
+    }
+    String pair = paramsBlob.substring(start, sep);
+    pair.trim();
+    if (pair.length() > 0) {
+      int eq = pair.indexOf('=');
+      if (eq <= 0 || eq >= pair.length() - 1) {
+        errorCode = "BAD_FORMAT";
+        return false;
+      }
+      String key = pair.substring(0, eq);
+      String value = pair.substring(eq + 1);
+      key.trim();
+      value.trim();
+      float numericValue = 0.0f;
+      if (!parseStrictFloat(value, numericValue)) {
+        errorCode = "BAD_VALUE";
+        return false;
+      }
+
+      if (key == "batteryThreshold") batteryThreshold = (int)numericValue;
+      else if (key == "K") K = numericValue;
+      else if (key == "F") F = (int)numericValue;
+      else if (key == "T") T = (long)numericValue;
+      else if (key == "backupTime") backupTime = numericValue;
+      else if (key == "fanDuration") fanDuration = (int)numericValue;
+      else if (key == "H") H = (long)numericValue;
+      else if (key == "continueFeeder") continueFeeder = numericValue;
+      else if (key == "maxOpeningTime") maxOpeningTime = (int)numericValue;
+      else if (key == "typicalOpeningTime") typicalOpeningTime = (int)numericValue;
+      else if (key == "MOTOR_CUT_TIME") MOTOR_CUT_TIME = numericValue;
+      else if (key == "CUT_MODE_HEAT_TIME") CUT_MODE_HEAT_TIME = numericValue;
+      else if (key == "postCoolingFanDuration") postCoolingFanDuration = numericValue;
+      else if (key == "preFeedFan") preFeedFan = numericValue;
+      else if (key == "fanReverseTime") fanReverseTime = numericValue;
+      else if (key == "fanReverseStartTime") fanReverseStartTime = numericValue;
+      else if (key == "backupTimeAfterReopen") backupTimeAfterReopen = numericValue;
+      else if (key == "CUT_MODE_TEMP") CUT_MODE_TEMP = numericValue;
+      else if (key == "heaterLowerToleranceC") heaterLowerToleranceC = numericValue;
+      else if (key == "heaterUpperToleranceC") heaterUpperToleranceC = numericValue;
+      else if (key == "COOL_OPEN_TEMP_C") COOL_OPEN_TEMP_C = numericValue;
+      else if (key == "MAX_COOL_WAIT_S") MAX_COOL_WAIT_S = (long)numericValue;
+      else {
+        errorCode = "UNKNOWN_PARAM";
+        return false;
+      }
+    }
+    start = sep + 1;
+  }
+
+  enforceHeaterToleranceGap("hwcfg_apply", false);
+  heaterTargetTemp = K;
+  saveParametersToEEPROM();
+  if (!lastEEPROMWriteVerified) {
+    errorCode = "EEPROM_WRITE_FAIL";
+    return false;
+  }
+  errorCode = "";
+  return true;
+}
+
+int findHWCFGProfileIndex(const String& componentName, const String& componentVersion) {
+  for (int i = 0; i < HWCFG_PROFILE_MAX; i++) {
+    if (hwcfgStore.profiles[i].in_use == 1 &&
+        componentName.equals(hwcfgStore.profiles[i].component_name) &&
+        componentVersion.equals(hwcfgStore.profiles[i].component_version)) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+int allocateHWCFGProfileSlot() {
+  for (int i = 0; i < HWCFG_PROFILE_MAX; i++) {
+    if (hwcfgStore.profiles[i].in_use == 0) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+bool loadHWCFGBlob(const char* key, HWCFGConfigStore& outStore) {
+  nvs_handle_t nvsHandle;
+  esp_err_t err = nvs_open(HWCFG_CONFIG_NAMESPACE, NVS_READONLY, &nvsHandle);
+  if (err != ESP_OK) {
+    return false;
+  }
+  size_t blobSize = 0;
+  err = nvs_get_blob(nvsHandle, key, NULL, &blobSize);
+  if (err != ESP_OK || blobSize != sizeof(HWCFGConfigStore)) {
+    nvs_close(nvsHandle);
+    return false;
+  }
+  err = nvs_get_blob(nvsHandle, key, &outStore, &blobSize);
+  nvs_close(nvsHandle);
+  return err == ESP_OK;
+}
+
+bool saveHWCFGBlob(const HWCFGConfigStore& store, bool updateLastGood) {
+  nvs_handle_t nvsHandle;
+  esp_err_t err = nvs_open(HWCFG_CONFIG_NAMESPACE, NVS_READWRITE, &nvsHandle);
+  if (err != ESP_OK) {
+    Serial.printf("HWCFG nvs_open failed: %s\n", esp_err_to_name(err));
+    return false;
+  }
+  err = nvs_set_blob(nvsHandle, HWCFG_ACTIVE_KEY, &store, sizeof(HWCFGConfigStore));
+  if (err == ESP_OK && updateLastGood) {
+    err = nvs_set_blob(nvsHandle, HWCFG_LAST_GOOD_KEY, &store, sizeof(HWCFGConfigStore));
+  }
+  if (err == ESP_OK) {
+    err = nvs_commit(nvsHandle);
+  }
+  nvs_close(nvsHandle);
+  if (err != ESP_OK) {
+    Serial.printf("HWCFG persist failed: %s\n", esp_err_to_name(err));
+    return false;
+  }
+  return true;
+}
+
+bool validateHWCFGStore(const HWCFGConfigStore& store, String& errorCode) {
+  if (store.magic != HWCFG_MAGIC) {
+    errorCode = "BAD_MAGIC";
+    return false;
+  }
+  if (store.schema_version != HWCFG_SCHEMA_VERSION) {
+    errorCode = "BAD_SCHEMA";
+    return false;
+  }
+  if (store.profile_count > HWCFG_PROFILE_MAX) {
+    errorCode = "BAD_COUNT";
+    return false;
+  }
+  if (computeHWCFGCRC(store) != store.crc32) {
+    errorCode = "BAD_CRC";
+    return false;
+  }
+  for (int i = 0; i < HWCFG_PROFILE_MAX; i++) {
+    const HWCFGProfileEntry& entry = store.profiles[i];
+    if (entry.in_use == 0) {
+      continue;
+    }
+    if (!isSafeFieldString(entry.profile_id, false) ||
+        !isSafeFieldString(entry.component_name, false) ||
+        !isSafeFieldString(entry.component_version, false) ||
+        !isSafeFieldString(entry.params_blob, false)) {
+      errorCode = "BAD_FIELDS";
+      return false;
+    }
+    HardwareComponentId dummyId;
+    if (!lookupHardwareComponentId(String(entry.component_name), dummyId)) {
+      errorCode = "BAD_COMPONENT";
+      return false;
+    }
+    String blobErr;
+    if (!validateParameterBlob(String(entry.component_name), String(entry.params_blob), blobErr)) {
+      errorCode = String("BAD_PROFILE_") + blobErr;
+      return false;
+    }
+  }
+  errorCode = "";
+  return true;
+}
+
+void initializeDefaultHWCFG(HWCFGConfigStore& store) {
+  memset(&store, 0, sizeof(store));
+  store.magic = HWCFG_MAGIC;
+  store.schema_version = HWCFG_SCHEMA_VERSION;
+  store.profile_count = 0;
+  store.active_profile_id[0] = '\0';
+  store.last_good_profile_id[0] = '\0';
+  store.active_validated = 0;
+  refreshHWCFGCRC(store);
+}
+
+bool initializeHWCFGStore() {
+  HWCFGConfigStore active = {};
+  String err;
+  if (loadHWCFGBlob(HWCFG_ACTIVE_KEY, active) && validateHWCFGStore(active, err)) {
+    hwcfgStore = active;
+    hwcfgStoreInitialized = true;
+    hwcfgSafeFault = false;
+    return true;
+  }
+
+  HWCFGConfigStore lkg = {};
+  err = "";
+  if (loadHWCFGBlob(HWCFG_LAST_GOOD_KEY, lkg) && validateHWCFGStore(lkg, err)) {
+    hwcfgStore = lkg;
+    hwcfgStoreInitialized = true;
+    hwcfgSafeFault = false;
+    saveHWCFGBlob(hwcfgStore, false);
+    return true;
+  }
+
+  initializeDefaultHWCFG(hwcfgStore);
+  hwcfgStoreInitialized = true;
+  if (!saveHWCFGBlob(hwcfgStore, true)) {
+    hwcfgSafeFault = true;
+    return false;
+  }
+  hwcfgSafeFault = false;
+  return true;
+}
+
+String buildHWCFGActiveSummary(bool lastGood) {
+  String response = lastGood ? "HWCFG_LAST_GOOD:" : "HWCFG_ACTIVE:";
+  for (int i = 0; i < HW_COMPONENT_COUNT; i++) {
+    if (i > 0) {
+      response += ";";
+    }
+    response += HARDWARE_COMPONENT_NAMES[i];
+    response += "=";
+    const HardwareComponentEntry& entry = hardwareMatrix.components[i];
+    if (lastGood && entry.previous_version[0] != '\0') {
+      response += entry.previous_version;
+    } else {
+      response += entry.current_version;
+    }
+  }
+  response += "|profile_id=";
+  response += lastGood ? hwcfgStore.last_good_profile_id : hwcfgStore.active_profile_id;
+  if (!lastGood) {
+    response += "|validated=";
+    response += String(hwcfgStore.active_validated ? 1 : 0);
+  }
+  return response;
+}
+
+bool validateCandidateChange(const String& componentName, const String& newVersion, int& outProfileIndex, String& reason) {
+  HardwareComponentId componentId;
+  if (!lookupHardwareComponentId(componentName, componentId)) {
+    reason = "UNKNOWN_COMPONENT";
+    return false;
+  }
+  int profileIndex = findHWCFGProfileIndex(componentName, newVersion);
+  if (profileIndex < 0) {
+    reason = "NO_PROFILE";
+    return false;
+  }
+  String blobErr;
+  if (!validateParameterBlob(componentName, String(hwcfgStore.profiles[profileIndex].params_blob), blobErr)) {
+    reason = blobErr;
+    return false;
+  }
+  outProfileIndex = profileIndex;
+  reason = "";
+  return true;
+}
+
+String handleHWCFGCommand(const String& cmd) {
+  if (!hwcfgStoreInitialized && !initializeHWCFGStore()) {
+    return "HWCFG_APPLY_ERR:INIT_FAIL";
+  }
+  if (!hardwareMatrixInitialized && !initializeHardwareMatrix()) {
+    return "HWCFG_APPLY_ERR:MATRIX_INIT_FAIL";
+  }
+
+  if (cmd == "HWCFG_GET_CAPS") {
+    return "HWCFG_CAPS:V1|PROFILE_STORE|TXN_APPLY|ROLLBACK";
+  }
+  if (cmd == "HWCFG_GET_ACTIVE_CONFIG") {
+    return buildHWCFGActiveSummary(false);
+  }
+  if (cmd == "HWCFG_GET_LAST_GOOD_CONFIG") {
+    return buildHWCFGActiveSummary(true);
+  }
+  if (cmd == "HWCFG_PROFILE_LIST") {
+    String response = "HWCFG_PROFILE_LIST:";
+    bool first = true;
+    for (int i = 0; i < HWCFG_PROFILE_MAX; i++) {
+      if (hwcfgStore.profiles[i].in_use == 0) {
+        continue;
+      }
+      if (!first) response += ",";
+      first = false;
+      response += hwcfgStore.profiles[i].profile_id;
+      response += "@";
+      response += hwcfgStore.profiles[i].component_name;
+      response += ":";
+      response += hwcfgStore.profiles[i].component_version;
+    }
+    return response;
+  }
+
+  if (cmd.startsWith("HWCFG_PROFILE_GET:")) {
+    String payload = cmd.substring(String("HWCFG_PROFILE_GET:").length());
+    int sep = payload.indexOf('|');
+    if (sep < 0) {
+      return "HWCFG_VALIDATE_ERR:BAD_FORMAT";
+    }
+    String component = payload.substring(0, sep);
+    String versionPart = payload.substring(sep + 1);
+    component.trim();
+    versionPart.trim();
+    if (!versionPart.startsWith("version=")) {
+      return "HWCFG_VALIDATE_ERR:BAD_FORMAT";
+    }
+    String version = versionPart.substring(String("version=").length());
+    int idx = findHWCFGProfileIndex(component, version);
+    if (idx < 0) {
+      return "HWCFG_VALIDATE_ERR:NO_PROFILE";
+    }
+    const HWCFGProfileEntry& profile = hwcfgStore.profiles[idx];
+    String response = "HWCFG_PROFILE:";
+    response += profile.profile_id;
+    response += "|component=";
+    response += profile.component_name;
+    response += "|version=";
+    response += profile.component_version;
+    response += "|params=";
+    response += profile.params_blob;
+    return response;
+  }
+
+  if (cmd.startsWith("HWCFG_PROFILE_PUT:")) {
+    String payload = cmd.substring(String("HWCFG_PROFILE_PUT:").length());
+    int sep1 = payload.indexOf('|');
+    int sep2 = (sep1 >= 0) ? payload.indexOf('|', sep1 + 1) : -1;
+    int sep3 = (sep2 >= 0) ? payload.indexOf('|', sep2 + 1) : -1;
+    if (sep1 < 0 || sep2 < 0 || sep3 < 0) {
+      return "HWCFG_VALIDATE_ERR:BAD_FORMAT";
+    }
+    String profileId = payload.substring(0, sep1);
+    String componentPart = payload.substring(sep1 + 1, sep2);
+    String versionPart = payload.substring(sep2 + 1, sep3);
+    String paramsBlob = payload.substring(sep3 + 1);
+    profileId.trim();
+    componentPart.trim();
+    versionPart.trim();
+    paramsBlob.trim();
+    if (!componentPart.startsWith("component=") || !versionPart.startsWith("version=")) {
+      return "HWCFG_VALIDATE_ERR:BAD_FORMAT";
+    }
+    String component = componentPart.substring(String("component=").length());
+    String version = versionPart.substring(String("version=").length());
+    component.trim();
+    version.trim();
+    if (profileId.length() == 0 || component.length() == 0 || version.length() == 0 || paramsBlob.length() == 0) {
+      return "HWCFG_VALIDATE_ERR:BAD_FORMAT";
+    }
+    if (profileId.length() >= HWCFG_PROFILE_ID_LEN || component.length() >= HW_COMPONENT_DESC_LEN ||
+        version.length() >= HW_COMPONENT_VERSION_LEN || paramsBlob.length() >= HWCFG_PROFILE_PARAM_BLOB_LEN) {
+      return "HWCFG_VALIDATE_ERR:TOO_LONG";
+    }
+    HardwareComponentId id;
+    if (!lookupHardwareComponentId(component, id)) {
+      return "HWCFG_VALIDATE_ERR:UNKNOWN_COMPONENT";
+    }
+    String blobErr;
+    if (!validateParameterBlob(component, paramsBlob, blobErr)) {
+      return String("HWCFG_VALIDATE_ERR:") + blobErr;
+    }
+    int idx = findHWCFGProfileIndex(component, version);
+    if (idx < 0) {
+      idx = allocateHWCFGProfileSlot();
+      if (idx < 0) {
+        return "HWCFG_VALIDATE_ERR:PROFILE_FULL";
+      }
+      hwcfgStore.profiles[idx].in_use = 1;
+      hwcfgStore.profile_count++;
+    }
+    copyBoundedString(hwcfgStore.profiles[idx].profile_id, sizeof(hwcfgStore.profiles[idx].profile_id), profileId.c_str());
+    copyBoundedString(hwcfgStore.profiles[idx].component_name, sizeof(hwcfgStore.profiles[idx].component_name), component.c_str());
+    copyBoundedString(hwcfgStore.profiles[idx].component_version, sizeof(hwcfgStore.profiles[idx].component_version), version.c_str());
+    copyBoundedString(hwcfgStore.profiles[idx].params_blob, sizeof(hwcfgStore.profiles[idx].params_blob), paramsBlob.c_str());
+    refreshHWCFGCRC(hwcfgStore);
+    if (!saveHWCFGBlob(hwcfgStore, true)) {
+      return "HWCFG_VALIDATE_ERR:PERSIST_FAIL";
+    }
+    return String("HWCFG_VALIDATE_OK:") + component + "|version=" + version + "|profile_id=" + profileId;
+  }
+
+  if (cmd.startsWith("HWCFG_VALIDATE_CHANGE:")) {
+    String payload = cmd.substring(String("HWCFG_VALIDATE_CHANGE:").length());
+    int sep = payload.indexOf('|');
+    if (sep < 0) {
+      return "HWCFG_VALIDATE_ERR:BAD_FORMAT";
+    }
+    String component = payload.substring(0, sep);
+    String versionPart = payload.substring(sep + 1);
+    component.trim();
+    versionPart.trim();
+    if (!versionPart.startsWith("new_version=")) {
+      return "HWCFG_VALIDATE_ERR:BAD_FORMAT";
+    }
+    String version = versionPart.substring(String("new_version=").length());
+    int profileIndex = -1;
+    String reason;
+    if (!validateCandidateChange(component, version, profileIndex, reason)) {
+      return String("HWCFG_VALIDATE_ERR:") + reason;
+    }
+    String response = "HWCFG_VALIDATE_OK:";
+    response += component;
+    response += "|version=";
+    response += version;
+    response += "|profile_id=";
+    response += hwcfgStore.profiles[profileIndex].profile_id;
+    return response;
+  }
+
+  if (cmd.startsWith("HWCFG_APPLY_CHANGE:")) {
+    if (hwcfgSafeFault) {
+      return "HWCFG_APPLY_ERR:SAFE_FAULT";
+    }
+    String payload = cmd.substring(String("HWCFG_APPLY_CHANGE:").length());
+    int sep1 = payload.indexOf('|');
+    int sep2 = (sep1 >= 0) ? payload.indexOf('|', sep1 + 1) : -1;
+    int sep3 = (sep2 >= 0) ? payload.indexOf('|', sep2 + 1) : -1;
+    if (sep1 < 0 || sep2 < 0 || sep3 < 0) {
+      return "HWCFG_APPLY_ERR:BAD_FORMAT";
+    }
+    String component = payload.substring(0, sep1);
+    String versionPart = payload.substring(sep1 + 1, sep2);
+    String datePart = payload.substring(sep2 + 1, sep3);
+    String descPart = payload.substring(sep3 + 1);
+    component.trim();
+    versionPart.trim();
+    datePart.trim();
+    descPart.trim();
+    if (!versionPart.startsWith("new_version=") || !datePart.startsWith("install_date=") || !descPart.startsWith("desc=")) {
+      return "HWCFG_APPLY_ERR:BAD_FORMAT";
+    }
+    String version = versionPart.substring(String("new_version=").length());
+    String installDate = datePart.substring(String("install_date=").length());
+    String description = descPart.substring(String("desc=").length());
+    int profileIndex = -1;
+    String reason;
+    if (!validateCandidateChange(component, version, profileIndex, reason)) {
+      return String("HWCFG_APPLY_ERR:") + reason;
+    }
+    if (!isIso8601DateOrEmpty(installDate.c_str()) || installDate.length() == 0) {
+      return "HWCFG_APPLY_ERR:BAD_DATE";
+    }
+    if (!isSafeFieldString(description.c_str(), false)) {
+      return "HWCFG_APPLY_ERR:BAD_DESC";
+    }
+
+    // Snapshot current runtime parameters for rollback in case of apply failure.
+    int oldBatteryThreshold = batteryThreshold;
+    float oldK = K;
+    int oldF = F;
+    long oldT = T;
+    float oldBackupTime = backupTime;
+    int oldFanDuration = fanDuration;
+    long oldH = H;
+    float oldContinueFeeder = continueFeeder;
+    int oldMaxOpeningTime = maxOpeningTime;
+    int oldTypicalOpeningTime = typicalOpeningTime;
+    float oldMotorCutTime = MOTOR_CUT_TIME;
+    float oldCutModeHeatTime = CUT_MODE_HEAT_TIME;
+    float oldPostCooling = postCoolingFanDuration;
+    float oldPreFeedFan = preFeedFan;
+    float oldFanReverseTime = fanReverseTime;
+    float oldFanReverseStartTime = fanReverseStartTime;
+    float oldBackupAfterReopen = backupTimeAfterReopen;
+    float oldCutModeTemp = CUT_MODE_TEMP;
+    float oldLowerTol = heaterLowerToleranceC;
+    float oldUpperTol = heaterUpperToleranceC;
+    float oldCoolOpen = COOL_OPEN_TEMP_C;
+    long oldMaxCoolWait = MAX_COOL_WAIT_S;
+    HardwareMatrix oldMatrix = hardwareMatrix;
+    HWCFGConfigStore oldStore = hwcfgStore;
+
+    String applyError;
+    if (!applyParameterBlobToRuntime(String(hwcfgStore.profiles[profileIndex].params_blob), applyError)) {
+      return String("HWCFG_APPLY_ERR:") + applyError;
+    }
+
+    if (!setHardwareComponentByName(component, version, installDate, description, applyError)) {
+      // Roll back runtime params and matrix.
+      batteryThreshold = oldBatteryThreshold;
+      K = oldK;
+      F = oldF;
+      T = oldT;
+      backupTime = oldBackupTime;
+      fanDuration = oldFanDuration;
+      H = oldH;
+      continueFeeder = oldContinueFeeder;
+      maxOpeningTime = oldMaxOpeningTime;
+      typicalOpeningTime = oldTypicalOpeningTime;
+      MOTOR_CUT_TIME = oldMotorCutTime;
+      CUT_MODE_HEAT_TIME = oldCutModeHeatTime;
+      postCoolingFanDuration = oldPostCooling;
+      preFeedFan = oldPreFeedFan;
+      fanReverseTime = oldFanReverseTime;
+      fanReverseStartTime = oldFanReverseStartTime;
+      backupTimeAfterReopen = oldBackupAfterReopen;
+      CUT_MODE_TEMP = oldCutModeTemp;
+      heaterLowerToleranceC = oldLowerTol;
+      heaterUpperToleranceC = oldUpperTol;
+      COOL_OPEN_TEMP_C = oldCoolOpen;
+      MAX_COOL_WAIT_S = oldMaxCoolWait;
+      hardwareMatrix = oldMatrix;
+      saveParametersToEEPROM();
+      saveHardwareMatrixBlob(hardwareMatrix, false);
+      return String("HWCFG_APPLY_ERR:") + applyError;
+    }
+
+    copyBoundedString(hwcfgStore.last_good_profile_id, sizeof(hwcfgStore.last_good_profile_id), oldStore.active_profile_id);
+    copyBoundedString(hwcfgStore.active_profile_id, sizeof(hwcfgStore.active_profile_id), hwcfgStore.profiles[profileIndex].profile_id);
+    hwcfgStore.active_validated = 1;
+    refreshHWCFGCRC(hwcfgStore);
+    if (!saveHWCFGBlob(hwcfgStore, true)) {
+      hwcfgStore = oldStore;
+      hardwareMatrix = oldMatrix;
+      saveHardwareMatrixBlob(hardwareMatrix, false);
+      return "HWCFG_APPLY_ERR:PERSIST_FAIL";
+    }
+
+    String ack = "HWCFG_APPLY_ACK:";
+    ack += component;
+    ack += "|version=";
+    ack += version;
+    return ack;
+  }
+
+  if (cmd == "HWCFG_ROLLBACK_LAST_GOOD") {
+    HWCFGConfigStore lkg = {};
+    String err;
+    if (!loadHWCFGBlob(HWCFG_LAST_GOOD_KEY, lkg) || !validateHWCFGStore(lkg, err)) {
+      return "HWCFG_ROLLBACK_ERR:NO_LAST_GOOD";
+    }
+    hwcfgStore = lkg;
+    refreshHWCFGCRC(hwcfgStore);
+    if (!saveHWCFGBlob(hwcfgStore, false)) {
+      return "HWCFG_ROLLBACK_ERR:PERSIST_FAIL";
+    }
+    return "HWCFG_ROLLBACK_ACK";
+  }
+
+  return "HWCFG_VALIDATE_ERR:UNKNOWN_COMMAND";
 }
 
 // Initialize hardware version (write once when device is first programmed)
@@ -1817,6 +3003,11 @@ void setup() {
     }
     ESP_ERROR_CHECK(err);
     loadDevModeSetting();
+    initializeHardwareMatrix();
+    if (!initializeHWCFGStore()) {
+      Serial.println("WARNING: HWCFG store failed to initialize on wake path");
+      SerialBLE_println("WARNING: HWCFG store init failed");
+    }
     if (ignoreM12Faults) {
       SerialBLE_println("WARNING: M1/M2 motor faults are LOG-ONLY");
     }
@@ -1869,6 +3060,11 @@ void setup() {
   }
   ESP_ERROR_CHECK(err);
   loadDevModeSetting();
+  initializeHardwareMatrix();
+  if (!initializeHWCFGStore()) {
+    Serial.println("WARNING: HWCFG store failed to initialize on cold boot");
+    SerialBLE_println("WARNING: HWCFG store init failed");
+  }
   if (ignoreM12Faults) {
     SerialBLE_println("WARNING: M1/M2 motor faults are LOG-ONLY");
   }

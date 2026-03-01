@@ -9,7 +9,8 @@ import struct
 from bleak import BleakClient, BleakScanner
 import time
 import json
-from typing import Dict, Any, Optional
+from datetime import datetime
+from typing import Dict, Any, Optional, List
 
 # ESP32 BLE Configuration (from toilet_kat_change.ino)
 SERVICE_UUID = "5636340f-afc7-47b1-b0a8-15bc9d7d29a5"
@@ -111,6 +112,18 @@ class ToiletSystemInterface:
             "heaterLowerToleranceC", "heaterUpperToleranceC", "COOL_OPEN_TEMP_C", "MAX_COOL_WAIT_S"
         ]
         self.min_heater_tolerance_gap_c = 2.0
+        self.hardware_components: List[str] = [
+            "CONTROL_PANEL",
+            "HEATING_ELEMENT",
+            "MAIN_CIRCUIT_BOARD",
+            "VACUUM_FAN",
+            "FEED_MOTOR",
+            "MECHANISM_MOTOR",
+            "THERMISTOR",
+            "BATTERY",
+            "FACTORY_SOFTWARE_DATE",
+            "FACTORY_SOFTWARE_VERSION_NUMBER",
+        ]
 
     async def scan_for_device(self) -> Optional[str]:
         """Scan for ESP32 Toilet device"""
@@ -491,6 +504,296 @@ class ToiletSystemInterface:
             print(f"Failed to set DEV mode: {e}")
             return False
 
+    async def _send_command_and_read_response(self, command: str, retries: int = 3, response_delay_s: float = 0.15) -> Optional[str]:
+        if not self.connected:
+            print("Not connected to device")
+            return None
+        try:
+            for _ in range(retries):
+                await self.client.write_gatt_char(CHARACTERISTIC_UUID, command.encode("utf-8"))
+                await asyncio.sleep(response_delay_s)
+                data = await self.client.read_gatt_char(CHARACTERISTIC_UUID)
+                response = data.decode("utf-8").strip()
+                if response:
+                    return response
+                await asyncio.sleep(0.1)
+            return None
+        except Exception as e:
+            print(f"Command failed ({command}): {e}")
+            return None
+
+    # HWCFG command reference (exact command strings):
+    #   HWCFG_GET_CAPS
+    #   HWCFG_GET_ACTIVE_CONFIG
+    #   HWCFG_GET_LAST_GOOD_CONFIG
+    #   HWCFG_PROFILE_PUT:<profile_id>|component=<name>|version=<ver>|k1=v1;k2=v2;...
+    #   HWCFG_PROFILE_GET:<component>|version=<ver>
+    #   HWCFG_PROFILE_LIST
+    #   HWCFG_VALIDATE_CHANGE:<component>|new_version=<ver>
+    #   HWCFG_APPLY_CHANGE:<component>|new_version=<ver>|install_date=<YYYY-MM-DD>|desc=<text>
+    #   HWCFG_ROLLBACK_LAST_GOOD
+    #
+    # Response patterns:
+    #   HWCFG_CAPS:V1|PROFILE_STORE|TXN_APPLY|ROLLBACK
+    #   HWCFG_ACTIVE:<component>=<ver>;...|profile_id=<id>|validated=1
+    #   HWCFG_LAST_GOOD:<component>=<ver>;...|profile_id=<id>
+    #   HWCFG_VALIDATE_OK:<component>|version=<ver>|profile_id=<id>
+    #   HWCFG_VALIDATE_ERR:<reason_code>
+    #   HWCFG_APPLY_ACK:<component>|version=<ver>
+    #   HWCFG_APPLY_ERR:<reason_code>
+    #   HWCFG_ROLLBACK_ACK
+    #   HWCFG_ROLLBACK_ERR:<reason_code>
+    def _is_valid_iso_date(self, value: str) -> bool:
+        try:
+            datetime.strptime(value, "%Y-%m-%d")
+            return True
+        except ValueError:
+            return False
+
+    def _parse_component_versions_blob(self, value: str) -> Dict[str, str]:
+        parsed: Dict[str, str] = {}
+        for token in value.split(";"):
+            token = token.strip()
+            if not token or "=" not in token:
+                continue
+            key, version = token.split("=", 1)
+            parsed[key.strip()] = version.strip()
+        return parsed
+
+    async def hwcfg_get_caps(self) -> Optional[str]:
+        response = await self._send_command_and_read_response("HWCFG_GET_CAPS")
+        if not response or not response.startswith("HWCFG_CAPS:"):
+            print(f"Unexpected HWCFG caps response: {response}")
+            return None
+        return response
+
+    async def hwcfg_get_active_config(self) -> Optional[Dict[str, Any]]:
+        response = await self._send_command_and_read_response("HWCFG_GET_ACTIVE_CONFIG")
+        if not response or not response.startswith("HWCFG_ACTIVE:"):
+            print(f"Unexpected active config response: {response}")
+            return None
+        payload = response.split(":", 1)[1]
+        pieces = payload.split("|")
+        component_map = self._parse_component_versions_blob(pieces[0] if pieces else "")
+        profile_id = ""
+        validated = None
+        for piece in pieces[1:]:
+            if piece.startswith("profile_id="):
+                profile_id = piece.split("=", 1)[1]
+            elif piece.startswith("validated="):
+                val = piece.split("=", 1)[1].strip()
+                validated = (val == "1")
+        return {"components": component_map, "profile_id": profile_id, "validated": validated}
+
+    async def hwcfg_get_last_good_config(self) -> Optional[Dict[str, Any]]:
+        response = await self._send_command_and_read_response("HWCFG_GET_LAST_GOOD_CONFIG")
+        if not response or not response.startswith("HWCFG_LAST_GOOD:"):
+            print(f"Unexpected last-good config response: {response}")
+            return None
+        payload = response.split(":", 1)[1]
+        pieces = payload.split("|")
+        component_map = self._parse_component_versions_blob(pieces[0] if pieces else "")
+        profile_id = ""
+        for piece in pieces[1:]:
+            if piece.startswith("profile_id="):
+                profile_id = piece.split("=", 1)[1]
+        return {"components": component_map, "profile_id": profile_id}
+
+    async def hwcfg_profile_list(self) -> Optional[List[str]]:
+        response = await self._send_command_and_read_response("HWCFG_PROFILE_LIST")
+        if not response or not response.startswith("HWCFG_PROFILE_LIST:"):
+            print(f"Unexpected profile list response: {response}")
+            return None
+        payload = response.split(":", 1)[1].strip()
+        if not payload:
+            return []
+        return [item.strip() for item in payload.split(",") if item.strip()]
+
+    async def hwcfg_profile_get(self, component: str, version: str) -> Optional[str]:
+        command = f"HWCFG_PROFILE_GET:{component}|version={version}"
+        response = await self._send_command_and_read_response(command)
+        if not response:
+            print("No response from firmware for HWCFG_PROFILE_GET")
+            return None
+        if response.startswith("HWCFG_VALIDATE_ERR:"):
+            print(f"Firmware rejected profile get: {response}")
+            return None
+        if not response.startswith("HWCFG_PROFILE:"):
+            print(f"Unexpected profile get response: {response}")
+            return None
+        return response
+
+    async def hwcfg_profile_put(self, profile_id: str, component: str, version: str, param_pairs: Dict[str, float]) -> bool:
+        if component not in self.hardware_components:
+            print("Invalid component")
+            return False
+        if not profile_id.strip() or not version.strip():
+            print("profile_id and version are required")
+            return False
+        if not param_pairs:
+            print("At least one parameter pair is required")
+            return False
+        param_blob = ";".join([f"{k}={v}" for k, v in param_pairs.items()])
+        command = (
+            f"HWCFG_PROFILE_PUT:{profile_id.strip()}|component={component.strip()}|"
+            f"version={version.strip()}|{param_blob}"
+        )
+        response = await self._send_command_and_read_response(command)
+        if not response:
+            print("No response from firmware for HWCFG_PROFILE_PUT")
+            return False
+        if response.startswith("HWCFG_VALIDATE_OK:"):
+            return True
+        print(f"Profile put failed: {response}")
+        return False
+
+    async def hwcfg_validate_change(self, component: str, new_version: str) -> Optional[str]:
+        command = f"HWCFG_VALIDATE_CHANGE:{component}|new_version={new_version}"
+        response = await self._send_command_and_read_response(command)
+        if not response:
+            print("No response from firmware for HWCFG_VALIDATE_CHANGE")
+            return None
+        if response.startswith("HWCFG_VALIDATE_OK:"):
+            return response
+        print(f"Validation failed: {response}")
+        return None
+
+    async def hwcfg_apply_change(self, component: str, new_version: str, install_date: str, desc: str) -> bool:
+        if not self._is_valid_iso_date(install_date):
+            print("install_date must use YYYY-MM-DD")
+            return False
+        command = (
+            f"HWCFG_APPLY_CHANGE:{component}|new_version={new_version}|"
+            f"install_date={install_date}|desc={desc}"
+        )
+        response = await self._send_command_and_read_response(command)
+        if not response:
+            print("No response from firmware for HWCFG_APPLY_CHANGE")
+            return False
+        if response.startswith("HWCFG_APPLY_ACK:"):
+            return True
+        print(f"Apply failed: {response}")
+        return False
+
+    async def hwcfg_rollback_last_good(self) -> bool:
+        response = await self._send_command_and_read_response("HWCFG_ROLLBACK_LAST_GOOD")
+        if not response:
+            print("No response from firmware for HWCFG_ROLLBACK_LAST_GOOD")
+            return False
+        if response == "HWCFG_ROLLBACK_ACK":
+            return True
+        print(f"Rollback failed: {response}")
+        return False
+
+    async def get_hw_component(self, component: str) -> Optional[Dict[str, str]]:
+        component = component.strip().upper()
+        if component not in self.hardware_components:
+            print(f"Unsupported component: {component}")
+            return None
+
+        response = await self._send_command_and_read_response(f"GET_HW_COMPONENT:{component}")
+        if not response:
+            print("No response from firmware for GET_HW_COMPONENT")
+            return None
+        if response.startswith("HW_COMPONENT_ERR:"):
+            print(f"Firmware rejected GET_HW_COMPONENT: {response}")
+            return None
+        if not response.startswith("HW_COMPONENT:"):
+            print(f"Unexpected GET_HW_COMPONENT response: {response}")
+            return None
+
+        payload = response.split(":", 1)[1]
+        parts = payload.split("|")
+        if len(parts) != 7:
+            print(f"Malformed HW_COMPONENT payload: {response}")
+            return None
+        return {
+            "component": parts[0],
+            "current_version": parts[1],
+            "current_description": parts[2],
+            "install_date": parts[3],
+            "previous_version": parts[4],
+            "previous_description": parts[5],
+            "previous_install_date": parts[6],
+        }
+
+    async def get_hw_matrix(self) -> Optional[Dict[str, Dict[str, str]]]:
+        matrix: Dict[str, Dict[str, str]] = {}
+        for component in self.hardware_components:
+            row = await self.get_hw_component(component)
+            if row is None:
+                print(f"Failed to read component record: {component}")
+                return None
+            matrix[component] = row
+        return matrix
+
+    async def set_hw_component(self, component: str, version: str, install_date: str, description: str) -> bool:
+        component = component.strip().upper()
+        version = version.strip()
+        install_date = install_date.strip()
+        description = description.strip()
+
+        if component not in self.hardware_components:
+            print(f"Unsupported component: {component}")
+            return False
+        if not version:
+            print("Version cannot be empty")
+            return False
+        if not description:
+            print("Description cannot be empty")
+            return False
+        if ":" in version or ":" in description or "|" in version or "|" in description:
+            print("Version/description cannot contain ':' or '|'")
+            return False
+        if not self._is_valid_iso_date(install_date):
+            print("install_date must use ISO format YYYY-MM-DD")
+            return False
+
+        command = f"SET_HW_COMPONENT:{component}:{version}:{install_date}:{description}"
+        response = await self._send_command_and_read_response(command)
+        if not response:
+            print("No response from firmware for SET_HW_COMPONENT")
+            return False
+        if response.startswith("SET_HW_COMPONENT_ACK:"):
+            return response.split(":", 1)[1].strip().upper() == component
+        if response.startswith("SET_HW_COMPONENT_ERR:"):
+            print(f"Firmware rejected SET_HW_COMPONENT: {response}")
+            return False
+
+        # Fallback: verify by reading back.
+        readback = await self.get_hw_component(component)
+        if readback is None:
+            return False
+        return (
+            readback["current_version"] == version
+            and readback["install_date"] == install_date
+            and readback["current_description"] == description
+        )
+
+    def display_hw_matrix_table(self, matrix: Dict[str, Dict[str, str]]) -> None:
+        print("\nHardware Matrix")
+        print("=" * 150)
+        print(
+            f"{'Component':<32} {'CurrentVersion':<16} {'InstallDate':<12} "
+            f"{'PreviousVersion':<16} {'PreviousDate':<12}"
+        )
+        print("-" * 150)
+        for component in self.hardware_components:
+            row = matrix.get(component, {})
+            print(
+                f"{component:<32} "
+                f"{row.get('current_version', ''):<16} "
+                f"{row.get('install_date', ''):<12} "
+                f"{row.get('previous_version', ''):<16} "
+                f"{row.get('previous_install_date', ''):<12}"
+            )
+            current_desc = row.get("current_description", "")
+            prev_desc = row.get("previous_description", "")
+            print(f"  current_desc: {current_desc}")
+            if prev_desc:
+                print(f"  previous_desc: {prev_desc}")
+        print("=" * 150)
+
 async def main():
     """Main program loop"""
     interface = ToiletSystemInterface()
@@ -520,8 +823,16 @@ async def main():
             print("8. Exit")
             print("9. Update single parameter")
             print("10. Toggle DEV mode")
+            print("11. Read hardware matrix")
+            print("12. Update hardware component")
+            print("13. HWCFG capabilities")
+            print("14. HWCFG active/last-good config")
+            print("15. HWCFG profile list/get")
+            print("16. HWCFG profile put")
+            print("17. HWCFG validate + apply change")
+            print("18. HWCFG rollback last good")
             
-            choice = input("\nEnter your choice (1-10): ").strip()
+            choice = input("\nEnter your choice (1-18): ").strip()
             
             if choice == "1":
                 print("\nReading current parameters...")
@@ -689,9 +1000,163 @@ async def main():
                         print(f"DEV mode updated successfully. Current firmware DEV mode: {updated_label}")
                 else:
                     print("Failed to update DEV mode")
+
+            elif choice == "11":
+                print("\nReading hardware matrix...")
+                matrix = await interface.get_hw_matrix()
+                if matrix is None:
+                    print("Failed to read hardware matrix")
+                else:
+                    interface.display_hw_matrix_table(matrix)
+
+            elif choice == "12":
+                print("\nUpdate hardware component")
+                print("Supported components:")
+                for idx, component in enumerate(interface.hardware_components, start=1):
+                    print(f"{idx}. {component}")
+
+                selected_component = input("Enter component name (or number): ").strip()
+                component_name = selected_component.upper()
+                if selected_component.isdigit():
+                    index = int(selected_component) - 1
+                    if 0 <= index < len(interface.hardware_components):
+                        component_name = interface.hardware_components[index]
+                    else:
+                        print("Invalid component index")
+                        continue
+
+                if component_name not in interface.hardware_components:
+                    print("Invalid component name")
+                    continue
+
+                current_row = await interface.get_hw_component(component_name)
+                if current_row:
+                    print(
+                        f"Current value: version={current_row['current_version']}, "
+                        f"date={current_row['install_date']}, "
+                        f"description={current_row['current_description']}"
+                    )
+
+                version = input("New version value: ").strip()
+                install_date = input("Install date (YYYY-MM-DD): ").strip()
+                description = input("Description: ").strip()
+
+                if not version or not install_date or not description:
+                    print("All fields are required.")
+                    continue
+
+                confirm = input(
+                    f"Apply update to {component_name}? (y/N): "
+                ).strip().lower()
+                if confirm != "y":
+                    print("Hardware update cancelled.")
+                    continue
+
+                if await interface.set_hw_component(component_name, version, install_date, description):
+                    updated = await interface.get_hw_component(component_name)
+                    print(f"{component_name} updated successfully.")
+                    if updated:
+                        print(
+                            f"New current: version={updated['current_version']}, "
+                            f"date={updated['install_date']}"
+                        )
+                        if updated["previous_version"] or updated["previous_install_date"]:
+                            print(
+                                f"Previous: version={updated['previous_version']}, "
+                                f"date={updated['previous_install_date']}"
+                            )
+                else:
+                    print(f"Failed to update {component_name}")
+
+            elif choice == "13":
+                caps = await interface.hwcfg_get_caps()
+                if caps:
+                    print(f"\n{caps}")
+                else:
+                    print("Failed to read HWCFG capabilities")
+
+            elif choice == "14":
+                active = await interface.hwcfg_get_active_config()
+                last_good = await interface.hwcfg_get_last_good_config()
+                if active is None:
+                    print("Failed to read active config")
+                else:
+                    print("\nActive config:")
+                    print(active)
+                if last_good is None:
+                    print("Failed to read last-good config")
+                else:
+                    print("\nLast-good config:")
+                    print(last_good)
+
+            elif choice == "15":
+                profiles = await interface.hwcfg_profile_list()
+                if profiles is None:
+                    print("Failed to read profile list")
+                else:
+                    print("\nProfiles:")
+                    if profiles:
+                        for profile in profiles:
+                            print(f"- {profile}")
+                    else:
+                        print("(none)")
+                inspect = input("Fetch profile details? (y/N): ").strip().lower()
+                if inspect == "y":
+                    component = input("Component: ").strip().upper()
+                    version = input("Version: ").strip()
+                    profile = await interface.hwcfg_profile_get(component, version)
+                    if profile:
+                        print(profile)
+
+            elif choice == "16":
+                component = input("Component: ").strip().upper()
+                version = input("Version: ").strip()
+                profile_id = input("Profile ID: ").strip()
+                print("Enter parameter pairs as key=value;key=value")
+                params_input = input("Params: ").strip()
+                pair_dict: Dict[str, float] = {}
+                try:
+                    for token in params_input.split(";"):
+                        token = token.strip()
+                        if not token:
+                            continue
+                        if "=" not in token:
+                            raise ValueError(f"Missing '=' in token: {token}")
+                        key, value = token.split("=", 1)
+                        pair_dict[key.strip()] = float(value.strip())
+                except ValueError as parse_error:
+                    print(f"Invalid params input: {parse_error}")
+                    continue
+                ok = await interface.hwcfg_profile_put(profile_id, component, version, pair_dict)
+                print("Profile stored." if ok else "Profile store failed.")
+
+            elif choice == "17":
+                component = input("Component: ").strip().upper()
+                version = input("New version: ").strip()
+                validation_response = await interface.hwcfg_validate_change(component, version)
+                if not validation_response:
+                    print("Validation failed. Not applying.")
+                    continue
+                print(f"Validation OK: {validation_response}")
+                install_date = input("Install date (YYYY-MM-DD): ").strip()
+                description = input("Description: ").strip()
+                confirm = input("Apply hardware change now? (y/N): ").strip().lower()
+                if confirm != "y":
+                    print("Apply cancelled.")
+                    continue
+                ok = await interface.hwcfg_apply_change(component, version, install_date, description)
+                print("Apply succeeded." if ok else "Apply failed.")
+
+            elif choice == "18":
+                confirm = input("Rollback to last-good HWCFG state? (y/N): ").strip().lower()
+                if confirm != "y":
+                    print("Rollback cancelled.")
+                    continue
+                ok = await interface.hwcfg_rollback_last_good()
+                print("Rollback succeeded." if ok else "Rollback failed.")
             
             else:
-                print("Invalid choice. Please enter 1-10.")
+                print("Invalid choice. Please enter 1-18.")
     
     except KeyboardInterrupt:
         print("\nProgram interrupted by user")
