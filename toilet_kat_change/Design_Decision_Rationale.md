@@ -56,3 +56,33 @@ Rationale:
 - Protect hardware and surrounding components from runaway heating.
 - Keep overheat logic proportional to the intended process temperature, rather than using a fixed absolute threshold.
 - Maintain process continuity in cut mode by preventing premature shutdown at temperatures that are expected for `CUT_MODE_TEMP`, while preserving a clear safety boundary.
+
+## BLE timeout behavior when clients stay connected
+
+BLE auto-shutdown now uses an idle timer that respects serial streaming state:
+
+- If serial streaming is active, BLE remains enabled and the idle timer is continuously refreshed.
+- If serial streaming is not active, BLE can auto-shutdown after 10 minutes even if a client remains connected (to close accidental idle connections).
+- When streaming stops or the client disconnects, BLE timeout behavior resumes from the idle timer and is re-evaluated continuously in the main loop.
+
+Rationale:
+
+- Preserve active diagnostics sessions: live serial monitoring should not be interrupted by a background BLE timeout.
+- Avoid accidental battery drain: a forgotten/stale BLE connection without streaming should not keep radio power on indefinitely.
+- Match operator intent: starting serial stream is treated as explicit "keep BLE alive" activity.
+- Keep behavior predictable after session end: once streaming/disconnect transitions the link to idle, the same 10-minute idle shutdown policy applies.
+- Improve shutdown safety: BLE send paths are guarded by `bleEnabled`, and streaming/connection state is cleared before BLE deinit to avoid stale-notify behavior during shutdown.
+
+## Heater tolerance gap enforcement policy (2C minimum)
+
+The system now enforces a minimum 2C separation between `heaterLowerToleranceC` and `heaterUpperToleranceC` using a split policy:
+
+- Bluetooth interface (`toilet_bluetooth_interface.py`) performs strict validation and rejects updates when `heaterUpperToleranceC - heaterLowerToleranceC < 2.0`.
+- Firmware (`toilet_kat_change.ino`) acts as a safety backstop for non-compliant clients by auto-correcting invalid pairs to `heaterLowerToleranceC = heaterUpperToleranceC - 2.0` and continuing operation.
+
+Rationale:
+
+- Operator-facing tools should fail fast and clearly when a parameter set is invalid.
+- Firmware must remain resilient even if a third-party or stale client bypasses interface validation.
+- The chosen correction direction prioritizes keeping the requested upper bound while lowering the ON threshold, which preserves process continuity and biases behavior toward safer/lower heating when payloads are malformed.
+- Applying the same normalization at BLE ingest and EEPROM load prevents legacy or corrupted persisted values from violating the minimum gap rule after reboot.

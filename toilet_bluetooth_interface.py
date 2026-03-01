@@ -44,8 +44,8 @@ class ToiletSystemInterface:
             "fanReverseStartTime": {"description": "Delay before M3 reverse starts as percentage of typicalOpeningTime after M1 begins closing", "units": "%", "default": 0.0},
             "backupTimeAfterReopen": {"description": "Feed bag backup duration after mechanism motor finishes opening", "units": "sec", "default": 1.7},
             "CUT_MODE_TEMP": {"description": "Temperature to maintain for CUT_MODE_HEAT_TIME after cut motor", "units": "°C", "default": 175.0},
-            "heaterLowerToleranceC": {"description": "Heater ON threshold below target (temp <= target - lower)", "units": "°C", "default": 2.0},
-            "heaterUpperToleranceC": {"description": "Heater OFF threshold above target (temp >= target + upper can be negative)", "units": "°C", "default": 0.0},
+            "heaterLowerToleranceC": {"description": "Heater ON threshold below target (temp <= target - lower)", "units": "°C", "default": 0.0},
+            "heaterUpperToleranceC": {"description": "Heater OFF threshold above target (temp >= target + upper can be negative)", "units": "°C", "default": 2.0},
             "COOL_OPEN_TEMP_C": {"description": "Open sealer when thermistor cools below this temperature", "units": "°C", "default": 80.0},
             "MAX_COOL_WAIT_S": {"description": "Safety timeout for cooling stage before forcing open", "units": "sec", "default": 180.0}
         }
@@ -67,18 +67,18 @@ class ToiletSystemInterface:
                 "CUT_MODE_HEAT_TIME": 15.0,
                 "postCoolingBagDuration": 5.0,
                 "preFeedFan": 2.0,
-                "fanReverseTime": 10.0,
+                "fanReverseTime": 12.0,
                 "fanReverseStartTime": 0.0,
                 "backupTimeAfterReopen": 1.7,
-                "CUT_MODE_TEMP": 175.0,
-                "heaterLowerToleranceC": 2.0,
-                "heaterUpperToleranceC": 0.0,
+                "CUT_MODE_TEMP": 150.0,
+                "heaterLowerToleranceC": 0.0,
+                "heaterUpperToleranceC": 2.0,
                 "COOL_OPEN_TEMP_C": 80.0,
                 "MAX_COOL_WAIT_S": 180.0
             },
             "Compostable 1.5mil": {
                 "batteryThreshold": 5.0,
-                "K": 90.0,
+                "K": 100.0,
                 "F": 6.0,
                 "T": 40.0,
                 "backupTime": 1.0,
@@ -90,13 +90,13 @@ class ToiletSystemInterface:
                 "MOTOR_CUT_TIME": 0.5,
                 "CUT_MODE_HEAT_TIME": 10.0,
                 "postCoolingBagDuration": 5.0,
-                "preFeedFan": 2.0,
-                "fanReverseTime": 10.0,
+                "preFeedFan": 1.5,
+                "fanReverseTime": 9.0,
                 "fanReverseStartTime": 0.0,
                 "backupTimeAfterReopen": 1.7,
-                "CUT_MODE_TEMP": 105.0,
-                "heaterLowerToleranceC": 2.0,
-                "heaterUpperToleranceC": 0.0,
+                "CUT_MODE_TEMP": 100.0,
+                "heaterLowerToleranceC": 0.0,
+                "heaterUpperToleranceC": 2.0,
                 "COOL_OPEN_TEMP_C": 80.0,
                 "MAX_COOL_WAIT_S": 180.0
             }
@@ -110,6 +110,7 @@ class ToiletSystemInterface:
             "fanReverseTime", "fanReverseStartTime", "backupTimeAfterReopen", "CUT_MODE_TEMP",
             "heaterLowerToleranceC", "heaterUpperToleranceC", "COOL_OPEN_TEMP_C", "MAX_COOL_WAIT_S"
         ]
+        self.min_heater_tolerance_gap_c = 2.0
 
     async def scan_for_device(self) -> Optional[str]:
         """Scan for ESP32 Toilet device"""
@@ -183,10 +184,45 @@ class ToiletSystemInterface:
             print(f"Failed to read parameters: {e}")
             return {}
 
+    def _build_effective_params(self, new_params: Dict[str, Any]) -> Dict[str, float]:
+        """Merge updates with current/default values so cross-field validation is deterministic."""
+        effective_params: Dict[str, float] = {}
+        for param_name in self.param_order:
+            if param_name in new_params:
+                candidate_value = new_params[param_name]
+            else:
+                candidate_value = self.current_params.get(
+                    param_name,
+                    self.param_definitions[param_name]["default"],
+                )
+            effective_params[param_name] = float(candidate_value)
+        return effective_params
+
+    def _validate_heater_tolerance_gap(self, new_params: Dict[str, Any]) -> bool:
+        """Require heaterUpperToleranceC - heaterLowerToleranceC >= configured minimum gap."""
+        try:
+            effective_params = self._build_effective_params(new_params)
+            lower_tol = effective_params["heaterLowerToleranceC"]
+            upper_tol = effective_params["heaterUpperToleranceC"]
+            gap = upper_tol - lower_tol
+            if gap < self.min_heater_tolerance_gap_c:
+                print(
+                    "Parameter update rejected: heater tolerance gap must be at least "
+                    f"{self.min_heater_tolerance_gap_c}°C "
+                    f"(lower={lower_tol}, upper={upper_tol}, gap={gap})."
+                )
+                return False
+            return True
+        except (TypeError, ValueError, KeyError) as validation_error:
+            print(f"Parameter update rejected: invalid tolerance values ({validation_error}).")
+            return False
+
     async def update_params(self, new_params: Dict[str, Any]) -> bool:
         """Update parameters on ESP32"""
         if not self.connected:
             print("Not connected to device")
+            return False
+        if not self._validate_heater_tolerance_gap(new_params):
             return False
         
         try:
@@ -204,6 +240,19 @@ class ToiletSystemInterface:
             
             # Write to characteristic
             await self.client.write_gatt_char(CHARACTERISTIC_UUID, message.encode('utf-8'))
+            # Read firmware feedback after write so flush-blocked updates are reported to user.
+            await asyncio.sleep(0.1)
+            response = ""
+            try:
+                data = await self.client.read_gatt_char(CHARACTERISTIC_UUID)
+                response = data.decode('utf-8', errors='ignore').strip()
+            except Exception as read_error:
+                print(f"Warning: unable to read firmware response after update: {read_error}")
+
+            if response == "PARAM_UPDATE_BLOCKED_FLUSH":
+                print("Parameter update rejected: flush in progress (firmware blocked this write).")
+                return False
+
             print("Parameters updated successfully")
             return True
             

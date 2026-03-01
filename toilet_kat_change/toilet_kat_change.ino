@@ -108,6 +108,7 @@ void logMotorFaultDebug(const char* context);
 float readMainThermistorResistanceOhms();
 bool isHardwareLikelyDisconnectedForUserAction();
 void playHardwareNotConnectedAlert();
+bool enforceHeaterToleranceGap(const char* sourceTag, bool notifyBle = true);
 
 // Macros to automatically forward Serial output to BLE when streaming is enabled
 #define SerialBLE_print(x) do { Serial.print(x); if(serial_streaming_enabled) sendSerialToBLE(x); } while(0)
@@ -184,26 +185,26 @@ const int typicalOpeningTime = 5; //parameters_list[12] */
 int batteryThreshold = 5; //parameters_list[0]
 float K = 150.0; //parameters_list[1]
 int F = 6; //parameters_list[2]
-long T = 40; //parameters_list[3] - Estimated cooling time for LED pacing (seconds)
+long T = 60; //parameters_list[3] - Estimated cooling time for LED pacing (seconds)
 float thermistorResistance = 10000.0; // constant, not in BLE
 int r2 = 2; // constant, not in BLE
 float backupTime = 1.0; //parameters_list[4]
 int r4 = 2; // constant, not in BLE
 int fanDuration = 5; //parameters_list[5]
-long H = 20; //parameters_list[6] - Time (seconds) thermistor must be above K
+long H = 30; //parameters_list[6] - Time (seconds) thermistor must be above K
 float continueFeeder = 6.0; //parameters_list[7]
 int maxOpeningTime = 12; //parameters_list[8]
 int typicalOpeningTime = 10; //parameters_list[9]
 float MOTOR_CUT_TIME = 0.5; //parameters_list[10]
-float CUT_MODE_HEAT_TIME = 10.0; //parameters_list[11] - Additional time (seconds) above K in cut mode
+float CUT_MODE_HEAT_TIME = 15.0; //parameters_list[11] - Additional time (seconds) above K in cut mode
 float postCoolingBagDuration = 5.0; //parameters_list[12]
 float preFeedFan = 2.0; //parameters_list[13]
-float fanReverseTime = 10.0; //parameters_list[14]
+float fanReverseTime = 12.0; //parameters_list[14]
 float fanReverseStartTime = 0.0; //parameters_list[15]
-float backupTimeAfterReopen = 1.0; //parameters_list[16]
-float CUT_MODE_TEMP = 175.0;      //parameters_list[17] - Temp to maintain for CUT_MODE_HEAT_TIME after cut
-float heaterLowerToleranceC = 2.0; //parameters_list[18] - Turn heater ON at target-lower
-float heaterUpperToleranceC = 0.0; //parameters_list[19] - Turn heater OFF at target+upper (can be negative)
+float backupTimeAfterReopen = 1.7; //parameters_list[16]
+float CUT_MODE_TEMP = 150.0;      //parameters_list[17] - Temp to maintain for CUT_MODE_HEAT_TIME after cut
+float heaterLowerToleranceC = 0.0; //parameters_list[18] - Turn heater ON at target-lower
+float heaterUpperToleranceC = 2.0; //parameters_list[19] - Turn heater OFF at target+upper (can be negative)
 float COOL_OPEN_TEMP_C = 80.0f; //parameters_list[20] - Open sealer below this thermistor temp
 long MAX_COOL_WAIT_S = 180; //parameters_list[21] - Safety fallback max cooling wait (seconds)
 float heaterTargetTemp = 150.0;    // Active heater target (K or CUT_MODE_TEMP)
@@ -249,6 +250,7 @@ bool button2DisconnectAlertedForCurrentPress = false;
 
 // BLE auto-shutdown variables
 unsigned long bleStartupTime = 0;
+unsigned long bleIdleStartTime = 0;
 const unsigned long BLE_TIMEOUT = 10 * 60 * 1000; // 10 minutes in milliseconds
 const unsigned long INACTIVITY_SLEEP_MS = 2 * 60 * 1000;  // 2 minutes - then light sleep
 
@@ -339,12 +341,36 @@ bool md5_received = false;
 mbedtls_md5_context md5_ctx;
 bool md5_initialized = false;
 
-// LED timing variables
-unsigned long totalSequenceTime = 0;
-unsigned long ledUpdateInterval = 0;
+// LED timing variables (flush progress pacing)
+unsigned long totalSequenceTime = 0;   // Kept for debug telemetry
+unsigned long ledUpdateInterval = 0;   // Kept for debug telemetry
 unsigned long slowCircleLastUpdate = 0;
 int slowCircleLedIndex = 0;
 const unsigned long SLOW_CIRCLE_INTERVAL = 300; // 300ms per LED for slow circle
+const unsigned long LED_FLUSH_VISUAL_INTERVAL_MS = 90;
+
+enum LedPhaseSection {
+  LED_PHASE_INITIAL = 0,
+  LED_PHASE_HEAT_UP = 1,
+  LED_PHASE_HEAT_HOLD = 2,
+  LED_PHASE_COOLING = 3,
+  LED_PHASE_FINAL = 4,
+  LED_PHASE_COUNT = 5
+};
+
+int ledSectionSteps[LED_PHASE_COUNT] = {0};
+int ledSectionStartIndex[LED_PHASE_COUNT] = {0};
+int ledSectionEndIndex[LED_PHASE_COUNT] = {0};
+unsigned long ledSectionEstimateMs[LED_PHASE_COUNT] = {0};
+int ledLastSectionSeen = -1;
+int ledLastFlushStepSeen = -1;
+unsigned long ledHeatStartMillis = 0;
+unsigned long ledCoolingStartMillis = 0;
+unsigned long ledFinalStartMillis = 0;
+float ledHeatStartTempC = 0.0f;
+float ledHeatTargetTempC = 0.0f;
+float ledCoolStartTempC = 0.0f;
+float ledCoolStartRefTempC = 0.0f;
 
 const unsigned int TIMEOUT = 15000;
 
@@ -384,6 +410,34 @@ const int FAN_PWM_RESOLUTION = 8;
 
 // Motor shield instance - M1&M2 only
 DualMAX14870MotorShield motors(M1DIR_PIN, M1PWM_PIN, M2DIR_PIN, M2PWM_PIN, M2NEN_PIN, M2NFAULT_PIN);
+
+bool enforceHeaterToleranceGap(const char* sourceTag, bool notifyBle) {
+  if ((heaterLowerToleranceC != heaterLowerToleranceC) || (heaterUpperToleranceC != heaterUpperToleranceC)) {
+    return false;
+  }
+
+  float toleranceGap = heaterUpperToleranceC - heaterLowerToleranceC;
+  if (toleranceGap >= 2.0f) {
+    return false;
+  }
+
+  float originalLower = heaterLowerToleranceC;
+  float originalUpper = heaterUpperToleranceC;
+  heaterLowerToleranceC = heaterUpperToleranceC - 2.0f;
+
+  Serial.printf(
+      "Adjusted heater tolerances (%s): lower %.3f -> %.3f, upper %.3f (enforced >= 2.0C gap)\n",
+      sourceTag,
+      originalLower,
+      heaterLowerToleranceC,
+      originalUpper);
+  if (notifyBle) {
+    sendSerialToBLE(
+        "Adjusted heater tolerances (" + String(sourceTag) +
+        "): lower set to upper-2.0C to enforce minimum 2.0C gap");
+  }
+  return true;
+}
 
 // Setup BLE callbacks called onConnect and onDisconnect
 class server_callbacks: public BLEServerCallbacks {
@@ -479,6 +533,7 @@ class server_callbacks: public BLEServerCallbacks {
       if (k >= 20) {
         heaterLowerToleranceC = parameters_list[18];
         heaterUpperToleranceC = parameters_list[19];
+        enforceHeaterToleranceGap("server_disconnect_write");
       }
       if (!(isFlushing && cutBag && case6CutMotorRun)) {
         heaterTargetTemp = K;
@@ -654,6 +709,7 @@ class characteristic_callbacks: public BLECharacteristicCallbacks {
           if (k >= 20) {
             heaterLowerToleranceC = parameters_list[18];
             heaterUpperToleranceC = parameters_list[19];
+            enforceHeaterToleranceGap("characteristic_write");
           }
           if (k >= 22) {
             COOL_OPEN_TEMP_C = parameters_list[20];
@@ -1008,15 +1064,16 @@ void loadParametersFromEEPROM() {
     EEPROM.get(addr, MAX_COOL_WAIT_S); addr += sizeof(MAX_COOL_WAIT_S);
 
     // Guard invalid values and preserve a valid hysteresis band.
-    if ((heaterLowerToleranceC != heaterLowerToleranceC) || heaterLowerToleranceC <= 0.0f) {
-      heaterLowerToleranceC = 2.0f;
+    if ((heaterLowerToleranceC != heaterLowerToleranceC) || heaterLowerToleranceC < 0.0f) {
+      heaterLowerToleranceC = 0.0f;
     }
     if (heaterUpperToleranceC != heaterUpperToleranceC) {
+      heaterUpperToleranceC = 2.0f;
+    }
+    if (heaterUpperToleranceC < 0.0f) {
       heaterUpperToleranceC = 0.0f;
     }
-    if (heaterUpperToleranceC <= -heaterLowerToleranceC) {
-      heaterUpperToleranceC = 0.0f;
-    }
+    enforceHeaterToleranceGap("eeprom_load", false);
     if ((COOL_OPEN_TEMP_C != COOL_OPEN_TEMP_C) || COOL_OPEN_TEMP_C < 20.0f || COOL_OPEN_TEMP_C > 150.0f) {
       COOL_OPEN_TEMP_C = 80.0f;
     }
@@ -1305,6 +1362,7 @@ bool setDevModeEnabled(bool enabled) {
   devModeEnabled = enabled;
   // Restart power-saving timers so mode transitions are predictable.
   bleStartupTime = millis();
+  bleIdleStartTime = millis();
   lastActivityMillis = millis();
   Serial.printf("DEV mode updated: %d\n", devModeEnabled ? 1 : 0);
   return true;
@@ -1714,6 +1772,7 @@ void setup() {
   Serial.println("LED startup test complete");
 
   bleStartupTime = millis();
+  bleIdleStartTime = millis();
   Serial.println("=== MEMORY BEFORE BLE SERVER SETUP ===");
   Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
   Serial.printf("Largest free block: %d bytes\n", ESP.getMaxAllocHeap());
@@ -1812,13 +1871,22 @@ void loop() {
     }
   }
   
-  // Check for BLE timeout (10 minutes from startup) - never shut down during OTA transfer
-  if (!devModeEnabled && bleEnabled && !otaTransferInProgress() && (millis() - bleStartupTime > BLE_TIMEOUT)) {
+  // Keep BLE alive while serial streaming is active. When idle (not streaming),
+  // allow timeout after BLE_TIMEOUT even if a client remains connected.
+  if (serial_streaming_enabled) {
+    bleIdleStartTime = millis();
+  }
+
+  // Check for BLE timeout during idle (no serial streaming) - never shut down during OTA transfer.
+  if (!devModeEnabled && bleEnabled && !otaTransferInProgress() && !serial_streaming_enabled &&
+      (millis() - bleIdleStartTime > BLE_TIMEOUT)) {
     Serial.println("BLE shutting down after 10 minutes to save power");
     SerialBLE_println("BLE shutting down after 10 minutes to save power");
     
     // Disconnect all clients and stop advertising
     if (blue_server) {
+      is_device_connected = false;
+      serial_streaming_enabled = false;
       blue_server->getAdvertising()->stop();
       BLEDevice::deinit();
     }
@@ -2272,20 +2340,23 @@ void loop() {
     streamSerialToBLE();
   }
   
-  // Check buttons for direction change
-  if (digitalRead(controlPanelWake) == LOW) { // Button 1 / wake switch (GPIO2)
-    lastActivityMillis = millis();
-    Serial.println("Button 1 pressed: Clockwise");
-    clockwise = true;
-    ledIndex = 0;
-    ledLastUpdateMillis = millis();
-  }
-  if (mcp_digitalRead(button2Pin) == LOW) { // Button 2 pressed
-    lastActivityMillis = millis();
-    Serial.println("Button 2 pressed: Anticlockwise");
-    clockwise = false;
-    ledIndex = 0;
-    ledLastUpdateMillis = millis();
+  // Check buttons for direction change only while idle.
+  // During flush, LED progress is phase-driven and monotonic.
+  if (!isFlushing) {
+    if (digitalRead(controlPanelWake) == LOW) { // Button 1 / wake switch (GPIO2)
+      lastActivityMillis = millis();
+      Serial.println("Button 1 pressed: Clockwise");
+      clockwise = true;
+      ledIndex = 0;
+      ledLastUpdateMillis = millis();
+    }
+    if (mcp_digitalRead(button2Pin) == LOW) { // Button 2 pressed
+      lastActivityMillis = millis();
+      Serial.println("Button 2 pressed: Anticlockwise");
+      clockwise = false;
+      ledIndex = 0;
+      ledLastUpdateMillis = millis();
+    }
   }
   maintainEEPROMErrorIndicator();
 }
@@ -2305,7 +2376,12 @@ void flushSequence() {
       ledLastUpdateMillis = millis();
       maxHeaterWallTimeMs = 0;  // Reset at start of each flush cycle before recomputing once.
       Serial.println("Checking battery voltage");
-      if (getBatteryChargeLevel() < batteryThreshold) { 
+      int batteryLevel = getBatteryChargeLevel();
+      if (batteryLevel < batteryThreshold) {
+       String lowBatteryMsg = "LOW BATTERY STOP: level=" + String(batteryLevel) +
+                              "% < threshold=" + String(batteryThreshold) + "%";
+       Serial.println(lowBatteryMsg);
+       SerialBLE_println(lowBatteryMsg);
        stopEverything();
        flushStep = 12;
        ERROR_CODE = 2;
@@ -3064,6 +3140,7 @@ void restartBLEServer() {
   
   bleEnabled = true;
   bleStartupTime = millis();
+  bleIdleStartTime = millis();
   is_device_connected = false;
   serial_streaming_enabled = false;
   
@@ -3090,10 +3167,10 @@ float readMainThermistorResistanceOhms() {
   int analogValue = analogRead(thermistorPin);
   float voltage = analogValue * (3.3 / 4095.0);
   if (voltage <= THERMISTOR_VOLTAGE_GUARD_V) {
-    return 1000000000.0;
+    return 0.0;
   }
   if (voltage >= (3.3 - THERMISTOR_VOLTAGE_GUARD_V)) {
-    return 0.0;
+    return 1000000000.0;
   }
   return (voltage * knownResistor) / (3.3 - voltage);
 }
@@ -3312,64 +3389,335 @@ void stopEverything() {
   isFlushing = false;
 }
 
-void calculateSequenceTiming() {
-  // Calculate total sequence time from parameters
-  // Case 1: F seconds (feed down)
-  // Case 2: Immediate (stop feed)
-  // Case 3: Immediate (start close motor)
-  // Case 4: Immediate (heater on)
-  // Case 5: Variable (wait for microswitch + current)
-  // Case 6: Until time above K reaches H (plus CUT_MODE_HEAT_TIME in cut mode)
-  // Case 7: estimated cooling time (T seconds) for LED pacing only
-  // Case 8: backupTime seconds (back up bag)
-  // Case 9: Immediate
-  // Case 10: Variable (wait for microswitch)
-  // Case 11: F seconds (feed down)
-  // Case 12: fanDuration seconds (fan time)
-  // Case 13: Immediate (end)
-  
-  // Required time above K in seconds (H + CUT_MODE_HEAT_TIME if in cut mode)
-  long totalHeaterTime = H;
-  if (cutBag) {
-    totalHeaterTime += (long)CUT_MODE_HEAT_TIME;
+float clampLedProgress(float value) {
+  if (value < 0.0f) return 0.0f;
+  if (value > 1.0f) return 1.0f;
+  return value;
+}
+
+int clampLedIndex(int index) {
+  if (index < 0) return 0;
+  if (index >= totalLeds) return totalLeds - 1;
+  return index;
+}
+
+void applyLedFillToIndex(int targetIndex, bool forceImmediate = false) {
+  targetIndex = clampLedIndex(targetIndex);
+  if (targetIndex <= ledIndex) {
+    return;
   }
-  
-  // Estimate ramp time: heat from current temp to target (K or CUT_MODE_TEMP) at 1 C/s
+
+  for (int i = ledIndex + 1; i <= targetIndex; i++) {
+    mcp_digitalWrite(ledPins[i], HIGH);
+  }
+  ledIndex = targetIndex;
+  ledLastUpdateMillis = millis();
+}
+
+void allocateLedStepsFromDurations(const unsigned long durationsMs[LED_PHASE_COUNT], int totalSteps) {
+  bool isActive[LED_PHASE_COUNT] = {false};
+  double fractions[LED_PHASE_COUNT] = {0.0};
+  int activeCount = 0;
+  unsigned long totalDurationMs = 0;
+
+  for (int i = 0; i < LED_PHASE_COUNT; i++) {
+    ledSectionSteps[i] = 0;
+    if (durationsMs[i] > 0) {
+      isActive[i] = true;
+      activeCount++;
+      totalDurationMs += durationsMs[i];
+    }
+  }
+
+  if (totalSteps <= 0 || activeCount == 0) {
+    return;
+  }
+
+  if (totalSteps <= activeCount) {
+    for (int i = 0; i < LED_PHASE_COUNT && totalSteps > 0; i++) {
+      if (!isActive[i]) continue;
+      ledSectionSteps[i] = 1;
+      totalSteps--;
+    }
+    return;
+  }
+
+  int remainingSteps = totalSteps;
+  for (int i = 0; i < LED_PHASE_COUNT; i++) {
+    if (isActive[i]) {
+      ledSectionSteps[i] = 1;  // Ensure each active section has at least one LED transition.
+      remainingSteps--;
+    }
+  }
+
+  int assignedExtra = 0;
+  for (int i = 0; i < LED_PHASE_COUNT; i++) {
+    if (!isActive[i]) continue;
+    double rawShare = 0.0;
+    if (totalDurationMs > 0) {
+      rawShare = ((double)durationsMs[i] / (double)totalDurationMs) * (double)remainingSteps;
+    }
+    int whole = (int)rawShare;
+    ledSectionSteps[i] += whole;
+    assignedExtra += whole;
+    fractions[i] = rawShare - (double)whole;
+  }
+
+  int leftovers = remainingSteps - assignedExtra;
+  while (leftovers > 0) {
+    int bestIndex = -1;
+    double bestFraction = -1.0;
+    for (int i = 0; i < LED_PHASE_COUNT; i++) {
+      if (!isActive[i]) continue;
+      if (fractions[i] > bestFraction) {
+        bestFraction = fractions[i];
+        bestIndex = i;
+      }
+    }
+    if (bestIndex < 0) {
+      break;
+    }
+    ledSectionSteps[bestIndex]++;
+    fractions[bestIndex] = -1.0;
+    leftovers--;
+  }
+}
+
+void rebuildLedSectionBoundaries() {
+  int runningIndex = 0;
+  for (int i = 0; i < LED_PHASE_COUNT; i++) {
+    ledSectionStartIndex[i] = runningIndex;
+    runningIndex += ledSectionSteps[i];
+    ledSectionEndIndex[i] = runningIndex;
+  }
+  ledSectionEndIndex[LED_PHASE_FINAL] = totalLeds - 1;
+}
+
+int computeSectionTargetLedIndex(int section, float progress) {
+  progress = clampLedProgress(progress);
+  int steps = ledSectionSteps[section];
+  int start = ledSectionStartIndex[section];
+  int end = ledSectionEndIndex[section];
+  if (steps <= 0) {
+    return start;
+  }
+
+  int offset = (int)(progress * (float)steps);
+  int target = start + offset;
+  if (progress >= 1.0f) {
+    target = end;
+  }
+  if (target > end) {
+    target = end;
+  }
+  return clampLedIndex(target);
+}
+
+void determineLedSectionAndProgress(unsigned long currentMillis, float currentTemp, int &section, float &progress) {
+  // Final completion guard.
+  if (flushStep >= 13) {
+    section = LED_PHASE_FINAL;
+    progress = 1.0f;
+    return;
+  }
+
+  // Phase A: initial fixed segment (pre-fan/feed/close/setup)
+  if (flushStep <= 5) {
+    section = LED_PHASE_INITIAL;
+    if (flushStep >= 6) {
+      progress = 1.0f;
+    } else {
+      unsigned long elapsedMs = currentMillis - flushStartMillis;
+      unsigned long estimateMs = ledSectionEstimateMs[LED_PHASE_INITIAL];
+      if (estimateMs == 0) {
+        progress = 1.0f;
+      } else {
+        progress = clampLedProgress((float)elapsedMs / (float)estimateMs);
+      }
+    }
+    return;
+  }
+
+  // Phase B/C: heating while in case 6.
+  if (flushStep == 6) {
+    bool reachedPrimaryTarget = (timeAboveSetpointMillis > 0) || (currentTemp >= (K - 0.25f));
+    if (!reachedPrimaryTarget) {
+      section = LED_PHASE_HEAT_UP;
+      float denominator = K - ledHeatStartTempC;
+      if (denominator > 0.5f) {
+        progress = clampLedProgress((currentTemp - ledHeatStartTempC) / denominator);
+      } else {
+        unsigned long elapsedMs = currentMillis - ledHeatStartMillis;
+        unsigned long estimateMs = ledSectionEstimateMs[LED_PHASE_HEAT_UP];
+        progress = (estimateMs == 0) ? 1.0f : clampLedProgress((float)elapsedMs / (float)estimateMs);
+      }
+    } else {
+      section = LED_PHASE_HEAT_HOLD;
+      unsigned long requiredMsAboveK = (unsigned long)(H * 1000UL);
+      unsigned long requiredMsCut = cutBag ? (unsigned long)(CUT_MODE_HEAT_TIME * 1000.0f) : 0UL;
+      unsigned long requiredTotalMs = requiredMsAboveK + requiredMsCut;
+      if (requiredTotalMs == 0) {
+        progress = 1.0f;
+      } else {
+        unsigned long doneAboveK = timeAboveSetpointMillis;
+        if (doneAboveK > requiredMsAboveK) {
+          doneAboveK = requiredMsAboveK;
+        }
+        unsigned long doneCut = 0;
+        if (cutBag && case6CutMotorRun) {
+          doneCut = timeAboveCutModeTempMillis;
+          if (doneCut > requiredMsCut) {
+            doneCut = requiredMsCut;
+          }
+        }
+        unsigned long doneTotalMs = doneAboveK + doneCut;
+        progress = clampLedProgress((float)doneTotalMs / (float)requiredTotalMs);
+      }
+    }
+    return;
+  }
+
+  // Phase D: cooling with real temperature progress.
+  if (flushStep == 7) {
+    section = LED_PHASE_COOLING;
+    if (currentTemp <= COOL_OPEN_TEMP_C) {
+      progress = 1.0f;
+      return;
+    }
+    float denominator = ledCoolStartRefTempC - COOL_OPEN_TEMP_C;
+    if (denominator > 0.5f) {
+      progress = clampLedProgress((ledCoolStartRefTempC - currentTemp) / denominator);
+    } else {
+      unsigned long elapsedMs = currentMillis - ledCoolingStartMillis;
+      unsigned long estimateMs = MAX_COOL_WAIT_S * 1000UL;
+      progress = (estimateMs == 0) ? 1.0f : clampLedProgress((float)elapsedMs / (float)estimateMs);
+    }
+
+    bool coolingTimeoutReached = (currentMillis - stepStartMillis) >= (MAX_COOL_WAIT_S * 1000UL);
+    if (coolingTimeoutReached) {
+      progress = 1.0f;
+    }
+    return;
+  }
+
+  // Phase E: final fixed tail.
+  section = LED_PHASE_FINAL;
+  if (flushStep >= 8 && flushStep <= 12) {
+    unsigned long elapsedMs = currentMillis - ledFinalStartMillis;
+    unsigned long estimateMs = ledSectionEstimateMs[LED_PHASE_FINAL];
+    progress = (estimateMs == 0) ? 1.0f : clampLedProgress((float)elapsedMs / (float)estimateMs);
+  } else {
+    progress = 1.0f;
+  }
+}
+
+void calculateSequenceTiming() {
+  // Build LED section estimates once at flush start.
   float currentTemp = readTemperature();
-  float targetTemp = cutBag ? CUT_MODE_TEMP : K;
-  float rampSecondsF = (targetTemp - currentTemp) / 1.0f;
-  if (rampSecondsF < 0.0f) rampSecondsF = 0.0f;
-  unsigned long heatRampSeconds = (unsigned long)(rampSecondsF + 0.5f);
-  
-  totalSequenceTime = F + totalHeaterTime + heatRampSeconds + (unsigned long)T + (unsigned long)(backupTime + 0.5f) + F + fanDuration;
-  
-  // Calculate LED update interval to evenly distribute across sequence
-  // Use totalLeds - 1 to ensure last LED turns on near the end
-  ledUpdateInterval = (totalSequenceTime * 1000) / (totalLeds - 1);
-  
-  Serial.printf("LED timing: currentTemp=%.1f C, target=%.1f C, heatRamp=%.1f s -> +%lu s\n", currentTemp, targetTemp, rampSecondsF, heatRampSeconds);
-  Serial.printf("Total sequence time: %lu seconds\n", totalSequenceTime);
-  Serial.printf("LED update interval: %lu ms\n", ledUpdateInterval);
+  long totalHeaterTime = H + (cutBag ? (long)CUT_MODE_HEAT_TIME : 0L);
+
+  float heatRampToKSeconds = (K - currentTemp) / 1.0f;  // 1 C/s approximation
+  if (heatRampToKSeconds < 0.0f) {
+    heatRampToKSeconds = 0.0f;
+  }
+
+  ledSectionEstimateMs[LED_PHASE_INITIAL] =
+      (unsigned long)((preFeedFan + F + typicalOpeningTime) * 1000.0f) + 300UL;
+  ledSectionEstimateMs[LED_PHASE_HEAT_UP] = (unsigned long)(heatRampToKSeconds * 1000.0f);
+  ledSectionEstimateMs[LED_PHASE_HEAT_HOLD] = (unsigned long)(totalHeaterTime * 1000UL);
+  ledSectionEstimateMs[LED_PHASE_COOLING] = (unsigned long)(T * 1000UL);
+  ledSectionEstimateMs[LED_PHASE_FINAL] =
+      (unsigned long)((backupTime + maxOpeningTime + backupTimeAfterReopen +
+                       postCoolingBagDuration + continueFeeder + fanDuration) * 1000.0f);
+
+  // Kept for serial debug continuity.
+  totalSequenceTime = (ledSectionEstimateMs[LED_PHASE_INITIAL] +
+                       ledSectionEstimateMs[LED_PHASE_HEAT_UP] +
+                       ledSectionEstimateMs[LED_PHASE_HEAT_HOLD] +
+                       ledSectionEstimateMs[LED_PHASE_COOLING] +
+                       ledSectionEstimateMs[LED_PHASE_FINAL]) / 1000UL;
+  ledUpdateInterval = LED_FLUSH_VISUAL_INTERVAL_MS;
+
+  int totalLedTransitions = totalLeds - 1;
+  allocateLedStepsFromDurations(ledSectionEstimateMs, totalLedTransitions);
+  rebuildLedSectionBoundaries();
+
+  // Reset per-cycle LED tracking baselines.
+  ledLastSectionSeen = -1;
+  ledLastFlushStepSeen = -1;
+  ledHeatStartMillis = 0;
+  ledCoolingStartMillis = 0;
+  ledFinalStartMillis = 0;
+  ledHeatStartTempC = currentTemp;
+  ledHeatTargetTempC = K;
+  ledCoolStartTempC = currentTemp;
+  ledCoolStartRefTempC = currentTemp;
+
+  Serial.printf("LED section estimates ms: initial=%lu heatUp=%lu hold=%lu cool=%lu final=%lu\n",
+                ledSectionEstimateMs[LED_PHASE_INITIAL],
+                ledSectionEstimateMs[LED_PHASE_HEAT_UP],
+                ledSectionEstimateMs[LED_PHASE_HEAT_HOLD],
+                ledSectionEstimateMs[LED_PHASE_COOLING],
+                ledSectionEstimateMs[LED_PHASE_FINAL]);
+  Serial.printf("LED section steps: initial=%d heatUp=%d hold=%d cool=%d final=%d (total=%d)\n",
+                ledSectionSteps[LED_PHASE_INITIAL], ledSectionSteps[LED_PHASE_HEAT_UP],
+                ledSectionSteps[LED_PHASE_HEAT_HOLD], ledSectionSteps[LED_PHASE_COOLING],
+                ledSectionSteps[LED_PHASE_FINAL], totalLedTransitions);
 }
 
 void updateLEDs() {
   unsigned long currentMillis = millis();
-  if (currentMillis - ledLastUpdateMillis >= ledUpdateInterval) {
-    ledLastUpdateMillis = currentMillis;
-    Serial.print("Turning on LED index: ");
-    Serial.println(ledIndex);
-    Serial.print("millis: ");
-    Serial.println(currentMillis);
-    
-    // Update the ledIndex based on direction
-    if (clockwise) {
-      ledIndex = (ledIndex + 1) % totalLeds;
-    } else {
-      ledIndex = (ledIndex - 1 + totalLeds) % totalLeds; // Corrected for underflow
+  float currentTemp = readTemperature();
+
+  // Capture baseline data when key flush transitions are first entered.
+  if (flushStep != ledLastFlushStepSeen) {
+    if (flushStep >= 3 && ledLastFlushStepSeen < 3) {
+      ledHeatStartMillis = currentMillis;
+      ledHeatStartTempC = currentTemp;
+      ledHeatTargetTempC = K;
     }
-    // Turn on the current LED (keep all previous LEDs on)
-    mcp_digitalWrite(ledPins[ledIndex], HIGH);
+    if (flushStep >= 7 && ledLastFlushStepSeen < 7) {
+      ledCoolingStartMillis = currentMillis;
+      ledCoolStartTempC = currentTemp;
+      float coolTargetStart = cutBag ? CUT_MODE_TEMP : K;
+      ledCoolStartRefTempC = (ledCoolStartTempC > coolTargetStart) ? ledCoolStartTempC : coolTargetStart;
+    }
+    if (flushStep >= 8 && ledLastFlushStepSeen < 8) {
+      ledFinalStartMillis = currentMillis;
+    }
+    ledLastFlushStepSeen = flushStep;
   }
+
+  int section = LED_PHASE_INITIAL;
+  float progress = 0.0f;
+  determineLedSectionAndProgress(currentMillis, currentTemp, section, progress);
+
+  bool forceImmediate = false;
+  if (section != ledLastSectionSeen) {
+    if (ledLastSectionSeen >= 0 && section > ledLastSectionSeen) {
+      // Snap to section boundary so late progress from previous section doesn't carry forward.
+      int sectionStart = ledSectionStartIndex[section];
+      if (ledIndex < sectionStart) {
+        applyLedFillToIndex(sectionStart, true);
+      }
+    }
+    ledLastSectionSeen = section;
+    forceImmediate = true;
+  }
+
+  if (!forceImmediate && currentMillis - ledLastUpdateMillis < LED_FLUSH_VISUAL_INTERVAL_MS) {
+    return;
+  }
+
+  int targetIndex = computeSectionTargetLedIndex(section, progress);
+
+  // Hard completion guarantee: final LED is on at true cycle end.
+  if (flushStep >= 13) {
+    targetIndex = totalLeds - 1;
+    forceImmediate = true;
+  }
+
+  applyLedFillToIndex(targetIndex, forceImmediate);
 }
 
 void locateMotorPos() {
@@ -3476,11 +3824,11 @@ void updateHeaterControl(float currentTemp) {
   float lowerTol = heaterLowerToleranceC;
   float upperTol = heaterUpperToleranceC;
 
-  if ((lowerTol != lowerTol) || lowerTol <= 0.0f) {
-    lowerTol = 2.0f;
+  if ((lowerTol != lowerTol) || lowerTol < 0.0f) {
+    lowerTol = 0.0f;
   }
   if (upperTol != upperTol) {
-    upperTol = 0.0f;
+    upperTol = 2.0f;
   }
   if (upperTol <= -lowerTol) {
     upperTol = -lowerTol + 0.1f;
@@ -3729,7 +4077,7 @@ unsigned long lastSerialFlush = 0;
 
 // Function to send serial data to BLE
 void sendSerialToBLE(const String& message) {
-  if (is_device_connected && serial_characteristic) {
+  if (bleEnabled && is_device_connected && serial_characteristic) {
     serial_characteristic->setValue(message.c_str());
     serial_characteristic->notify();
   }
