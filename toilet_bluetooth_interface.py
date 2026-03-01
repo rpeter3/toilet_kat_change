@@ -16,11 +16,21 @@ SERVICE_UUID = "5636340f-afc7-47b1-b0a8-15bc9d7d29a5"
 CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea0"
 SERIAL_CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea1"
 DEVICE_NAME = "ESP32 Toilet"
+TRUST_START_COMMAND = "TRUST_START"
+TRUST_STATUS_COMMAND = "TRUST_STATUS"
+TRUST_CANCEL_COMMAND = "TRUST_CANCEL"
+TRUST_WAITING_RESPONSE = "TRUST_WAITING"
+TRUST_CONFIRMED_RESPONSE = "TRUST_CONFIRMED"
+TRUST_TIMEOUT_RESPONSE = "TRUST_TIMEOUT"
+TRUST_CANCEL_ACK_RESPONSE = "TRUST_CANCEL_ACK"
+AUTH_REQUIRED_RESPONSE = "AUTH_REQUIRED"
+TRUST_CONFIRM_TIMEOUT_S = 60.0
 
 class ToiletSystemInterface:
     def __init__(self):
         self.client: Optional[BleakClient] = None
         self.connected = False
+        self.trusted_connection = False
         self.current_params = {}
         self.serial_streaming = False
         
@@ -131,11 +141,17 @@ class ToiletSystemInterface:
             self.client = BleakClient(address)
             await self.client.connect()
             self.connected = True
+            self.trusted_connection = False
             print(f"Connected to {DEVICE_NAME} at {address}")
             
             # Wait a moment for ESP32 to fully initialize
             await asyncio.sleep(1.0)
-            print("Connection stabilized, ready to read parameters")
+            print("Connection stabilized. Starting trust handshake...")
+            if not await self.ensure_trusted_connection():
+                print("Connection was not trusted. Disconnecting.")
+                await self.disconnect()
+                return False
+            print("Connection trusted and ready to read parameters")
             return True
         except Exception as e:
             print(f"Failed to connect: {e}")
@@ -149,7 +165,86 @@ class ToiletSystemInterface:
                 await self.stop_serial_streaming()
             await self.client.disconnect()
             self.connected = False
+            self.trusted_connection = False
             print("Disconnected from ESP32")
+
+    async def _send_command_and_read_response(
+        self,
+        command: str,
+        retries: int = 3,
+        response_delay_s: float = 0.15,
+    ) -> Optional[str]:
+        if not self.connected:
+            print("Not connected to device")
+            return None
+        try:
+            for _ in range(retries):
+                await self.client.write_gatt_char(CHARACTERISTIC_UUID, command.encode("utf-8"))
+                await asyncio.sleep(response_delay_s)
+                data = await self.client.read_gatt_char(CHARACTERISTIC_UUID)
+                response = data.decode("utf-8", errors="ignore").strip()
+                if response:
+                    return response
+                await asyncio.sleep(0.1)
+            return None
+        except Exception as e:
+            print(f"Command failed ({command}): {e}")
+            return None
+
+    async def start_trust_handshake(self) -> bool:
+        """Start physical trust flow on firmware (LED circle + wait for flush button)."""
+        response = await self._send_command_and_read_response(TRUST_START_COMMAND, retries=1)
+        if not response:
+            print("No response from firmware for TRUST_START")
+            return False
+        if response in (TRUST_WAITING_RESPONSE, TRUST_CONFIRMED_RESPONSE):
+            return True
+        print(f"Trust start failed: {response}")
+        return False
+
+    async def wait_for_trust_confirmation(self, timeout_s: float = TRUST_CONFIRM_TIMEOUT_S) -> bool:
+        """Poll trust status until confirmed or timeout."""
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            response = await self._send_command_and_read_response(TRUST_STATUS_COMMAND, retries=1)
+            if not response:
+                await asyncio.sleep(0.3)
+                continue
+            if response == TRUST_CONFIRMED_RESPONSE:
+                return True
+            if response == TRUST_TIMEOUT_RESPONSE:
+                print("Trust handshake timed out waiting for flush button.")
+                return False
+            if response != TRUST_WAITING_RESPONSE:
+                print(f"Unexpected trust status response: {response}")
+            await asyncio.sleep(0.3)
+        print("Trust handshake timed out.")
+        return False
+
+    async def cancel_trust_handshake(self) -> bool:
+        """Cancel active trust waiting state."""
+        response = await self._send_command_and_read_response(TRUST_CANCEL_COMMAND, retries=1)
+        if response == TRUST_CANCEL_ACK_RESPONSE:
+            self.trusted_connection = False
+            return True
+        print(f"Trust cancel failed: {response}")
+        return False
+
+    async def ensure_trusted_connection(self, timeout_s: float = TRUST_CONFIRM_TIMEOUT_S) -> bool:
+        """Require a trusted connection before privileged commands are allowed."""
+        if not self.connected:
+            print("Not connected to device")
+            return False
+        if self.trusted_connection:
+            return True
+        if not await self.start_trust_handshake():
+            return False
+        print("Press flush button on toilet to confirm this connection...")
+        if not await self.wait_for_trust_confirmation(timeout_s=timeout_s):
+            return False
+        self.trusted_connection = True
+        print("Connection trust confirmed.")
+        return True
 
     async def read_current_params(self) -> Dict[str, Any]:
         """Read current parameter values from ESP32"""
@@ -222,6 +317,8 @@ class ToiletSystemInterface:
         if not self.connected:
             print("Not connected to device")
             return False
+        if not await self.ensure_trusted_connection():
+            return False
         if not self._validate_heater_tolerance_gap(new_params):
             return False
         
@@ -251,6 +348,10 @@ class ToiletSystemInterface:
 
             if response == "PARAM_UPDATE_BLOCKED_FLUSH":
                 print("Parameter update rejected: flush in progress (firmware blocked this write).")
+                return False
+            if response == AUTH_REQUIRED_RESPONSE:
+                self.trusted_connection = False
+                print("Parameter update rejected: connection is not trusted yet.")
                 return False
 
             print("Parameters updated successfully")

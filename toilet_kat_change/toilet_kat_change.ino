@@ -59,6 +59,23 @@ BLEServer * blue_server;
 BLEService * update_service;
 bool is_device_connected, old_device_connect = false;
 bool serial_streaming_enabled = false;
+bool g_hasPendingBleResponse = false;
+String g_pendingBleResponse = "";
+
+enum TrustState {
+  TRUST_STATE_UNTRUSTED = 0,
+  TRUST_STATE_WAITING = 1,
+  TRUST_STATE_TRUSTED = 2,
+  TRUST_STATE_TIMEOUT = 3
+};
+
+TrustState g_trustState = TRUST_STATE_UNTRUSTED;
+unsigned long g_trustStartMs = 0;
+const unsigned long TRUST_TIMEOUT_MS = 60000;
+bool trustLedCircleActive = false;
+int trustLedCircleIndex = 0;
+unsigned long trustLedCircleLastUpdate = 0;
+const unsigned long TRUST_LED_CIRCLE_INTERVAL_MS = 120;
 
 // EEPROM configuration
 #define EEPROM_SIZE 512
@@ -119,6 +136,13 @@ float readMainThermistorResistanceOhms();
 bool isHardwareLikelyDisconnectedForUserAction();
 void playHardwareNotConnectedAlert();
 bool enforceHeaterToleranceGap(const char* sourceTag, bool notifyBle = true);
+bool requiresTrustedConnection(const String& cmd);
+String handleTrustCommand(const String& cmd);
+void updateTrustTimeout();
+void updateTrustLedCircle();
+void onTrustConfirmedByFlushButton();
+void resetTrustState();
+void setBlePendingResponse(const String& response);
 
 // Macros to automatically forward Serial output to BLE when streaming is enabled
 #define SerialBLE_print(x) do { Serial.print(x); if(serial_streaming_enabled) sendSerialToBLE(x); } while(0)
@@ -449,9 +473,143 @@ bool enforceHeaterToleranceGap(const char* sourceTag, bool notifyBle) {
   return true;
 }
 
+void setBlePendingResponse(const String& response) {
+  g_pendingBleResponse = response;
+  g_hasPendingBleResponse = true;
+  if (blue_characteristic != NULL) {
+    blue_characteristic->setValue(response.c_str());
+  }
+}
+
+void startTrustLedCircle() {
+  trustLedCircleActive = true;
+  trustLedCircleIndex = 0;
+  trustLedCircleLastUpdate = millis();
+  for (int i = 0; i < totalLeds; i++) {
+    mcp_digitalWrite(ledPins[i], LOW);
+  }
+}
+
+void stopTrustLedCircle() {
+  trustLedCircleActive = false;
+  for (int i = 0; i < totalLeds; i++) {
+    mcp_digitalWrite(ledPins[i], LOW);
+  }
+}
+
+void updateTrustLedCircle() {
+  if (!trustLedCircleActive) {
+    return;
+  }
+  unsigned long now = millis();
+  if (now - trustLedCircleLastUpdate < TRUST_LED_CIRCLE_INTERVAL_MS) {
+    return;
+  }
+  trustLedCircleLastUpdate = now;
+  mcp_digitalWrite(ledPins[trustLedCircleIndex], LOW);
+  trustLedCircleIndex = (trustLedCircleIndex + 1) % totalLeds;
+  mcp_digitalWrite(ledPins[trustLedCircleIndex], HIGH);
+}
+
+void trustDoubleBeep() {
+  const int onMs = 70;
+  const int offMs = 70;
+  digitalWrite(buzzerPin, HIGH);
+  delay(onMs);
+  digitalWrite(buzzerPin, LOW);
+  delay(offMs);
+  digitalWrite(buzzerPin, HIGH);
+  delay(onMs);
+  digitalWrite(buzzerPin, LOW);
+}
+
+void resetTrustState() {
+  g_trustState = TRUST_STATE_UNTRUSTED;
+  g_trustStartMs = 0;
+  stopTrustLedCircle();
+}
+
+void beginTrustWaiting() {
+  g_trustState = TRUST_STATE_WAITING;
+  g_trustStartMs = millis();
+  startTrustLedCircle();
+}
+
+void updateTrustTimeout() {
+  if (g_trustState != TRUST_STATE_WAITING) {
+    return;
+  }
+  if (millis() - g_trustStartMs >= TRUST_TIMEOUT_MS) {
+    g_trustState = TRUST_STATE_TIMEOUT;
+    stopTrustLedCircle();
+  }
+}
+
+bool isTrustedConnection() {
+  return g_trustState == TRUST_STATE_TRUSTED;
+}
+
+void onTrustConfirmedByFlushButton() {
+  if (g_trustState != TRUST_STATE_WAITING) {
+    return;
+  }
+  g_trustState = TRUST_STATE_TRUSTED;
+  stopTrustLedCircle();
+  trustDoubleBeep();
+}
+
+String handleTrustCommand(const String& cmd) {
+  updateTrustTimeout();
+
+  if (cmd == "TRUST_START") {
+    if (g_trustState == TRUST_STATE_TRUSTED) {
+      return "TRUST_CONFIRMED";
+    }
+    beginTrustWaiting();
+    return "TRUST_WAITING";
+  }
+
+  if (cmd == "TRUST_STATUS") {
+    if (g_trustState == TRUST_STATE_TRUSTED) {
+      return "TRUST_CONFIRMED";
+    }
+    if (g_trustState == TRUST_STATE_WAITING) {
+      return "TRUST_WAITING";
+    }
+    return "TRUST_TIMEOUT";
+  }
+
+  if (cmd == "TRUST_CANCEL") {
+    resetTrustState();
+    return "TRUST_CANCEL_ACK";
+  }
+
+  return "";
+}
+
+bool requiresTrustedConnection(const String& cmd) {
+  if (cmd.startsWith("SET_HW_COMPONENT:")) {
+    return true;
+  }
+  if (cmd.startsWith("HWCFG_APPLY_CHANGE:")) {
+    return true;
+  }
+  if (cmd == "HWCFG_ROLLBACK_LAST_GOOD") {
+    return true;
+  }
+
+  bool hasComma = cmd.indexOf(',') >= 0;
+  bool startsWithNumeric = cmd.length() > 0 && (isDigit(cmd[0]) || cmd[0] == '-' || cmd[0] == '.');
+  if (hasComma && startsWithNumeric) {
+    return true;
+  }
+  return false;
+}
+
 // Setup BLE callbacks called onConnect and onDisconnect
 class server_callbacks: public BLEServerCallbacks {
   void onConnect(BLEServer * blue_server) {
+    resetTrustState();
     is_device_connected = true;
     Serial.println("Device connected!");
     sendSerialToBLE("BLE Device Connected!");
@@ -485,6 +643,7 @@ class server_callbacks: public BLEServerCallbacks {
   }
 
   void onDisconnect(BLEServer * blue_server) {
+    resetTrustState();
     is_device_connected = false;
     serial_streaming_enabled = false;
     Serial.println("Device disconnected!");
@@ -601,6 +760,11 @@ class update_characteristic_callbacks: public BLECharacteristicCallbacks {
 class characteristic_callbacks: public BLECharacteristicCallbacks {
   void onRead(BLECharacteristic *pCharacteristic) {
     if (pCharacteristic->getUUID().toString() == CHARACTERISTIC_UUID) {
+      if (g_hasPendingBleResponse) {
+        pCharacteristic->setValue(g_pendingBleResponse.c_str());
+        g_hasPendingBleResponse = false;
+        return;
+      }
       // Return current parameters as comma-separated string (22 values)
       String paramString = String(batteryThreshold) + "," +
                           String(K) + "," +
@@ -638,7 +802,7 @@ class characteristic_callbacks: public BLECharacteristicCallbacks {
       int message_length = pCharacteristic->getLength();
       if (message_length > 0) {
         if (isFlushing) {
-          pCharacteristic->setValue("PARAM_UPDATE_BLOCKED_FLUSH");
+          setBlePendingResponse("PARAM_UPDATE_BLOCKED_FLUSH");
           Serial.println("Immediate parameter update blocked - flush in progress");
           SerialBLE_println("Parameter update blocked - flush in progress");
           return;
@@ -647,23 +811,32 @@ class characteristic_callbacks: public BLECharacteristicCallbacks {
         // Allow remote clients to request OTA mode via BLE write
         String cmd = String((char*)message, (unsigned int)message_length);
         cmd.trim();
+        String trustResponse = handleTrustCommand(cmd);
+        if (trustResponse.length() > 0) {
+          setBlePendingResponse(trustResponse);
+          return;
+        }
+        if (requiresTrustedConnection(cmd) && !isTrustedConnection()) {
+          setBlePendingResponse("AUTH_REQUIRED");
+          return;
+        }
         if (cmd == "ENABLE_OTA") {
           Serial.println("Received ENABLE_OTA command via BLE");
           sendSerialToBLE("Received ENABLE_OTA command via BLE");
           enableOTA();
-          pCharacteristic->setValue("ENABLE_OTA_ACK");
+          setBlePendingResponse("ENABLE_OTA_ACK");
           return;
         }
         if (cmd == "GET_DEV_MODE") {
           String statusMessage = buildDevModeStatusMessage();
-          pCharacteristic->setValue(statusMessage.c_str());
+          setBlePendingResponse(statusMessage);
           Serial.printf("Processed GET_DEV_MODE, returned %s\n", statusMessage.c_str());
           sendSerialToBLE("Processed GET_DEV_MODE");
           return;
         }
         if (cmd == "GET_FLUSH_COUNT") {
           String flushCountMessage = String("FLUSH_COUNT:") + String((unsigned long)lifetimeFlushCount);
-          pCharacteristic->setValue(flushCountMessage.c_str());
+          setBlePendingResponse(flushCountMessage);
           Serial.printf("Processed GET_FLUSH_COUNT, returned %s\n", flushCountMessage.c_str());
           sendSerialToBLE("Processed GET_FLUSH_COUNT");
           return;
@@ -673,7 +846,7 @@ class characteristic_callbacks: public BLECharacteristicCallbacks {
           valueString.trim();
 
           if (valueString != "0" && valueString != "1") {
-            pCharacteristic->setValue("SET_DEV_MODE_ERR:INVALID_VALUE");
+            setBlePendingResponse("SET_DEV_MODE_ERR:INVALID_VALUE");
             Serial.printf("Rejected SET_DEV_MODE with invalid value: '%s'\n", valueString.c_str());
             sendSerialToBLE("SET_DEV_MODE rejected: invalid value");
             return;
@@ -681,13 +854,13 @@ class characteristic_callbacks: public BLECharacteristicCallbacks {
 
           bool requestedValue = (valueString == "1");
           if (!setDevModeEnabled(requestedValue)) {
-            pCharacteristic->setValue("SET_DEV_MODE_ERR:PERSIST_FAIL");
+            setBlePendingResponse("SET_DEV_MODE_ERR:PERSIST_FAIL");
             sendSerialToBLE("SET_DEV_MODE failed: persist error");
             return;
           }
 
           String ack = String("SET_DEV_MODE_ACK:") + String(devModeEnabled ? 1 : 0);
-          pCharacteristic->setValue(ack.c_str());
+          setBlePendingResponse(ack);
           sendSerialToBLE("SET_DEV_MODE applied");
           return;
         }
@@ -777,7 +950,7 @@ class characteristic_callbacks: public BLECharacteristicCallbacks {
                             String(heaterUpperToleranceC) + "," +
                             String(COOL_OPEN_TEMP_C) + "," +
                             String(MAX_COOL_WAIT_S);
-        pCharacteristic->setValue(paramString.c_str());
+        setBlePendingResponse(paramString);
         
         Serial.printf("Parameters updated immediately! H=%ld, K=%.1f\n", H, K);
         Serial.printf("Characteristic value updated to: %s\n", paramString.c_str());
@@ -1951,6 +2124,10 @@ void loop() {
     lastActivityMillis = millis();
   }
   maintainEEPROMErrorIndicator();
+  updateTrustTimeout();
+  if (g_trustState == TRUST_STATE_WAITING && !otaEnabled) {
+    updateTrustLedCircle();
+  }
 
   // OTA mode handling
   if (otaEnabled) {
@@ -1996,6 +2173,7 @@ void loop() {
     
     // Disconnect all clients and stop advertising
     if (blue_server) {
+      resetTrustState();
       is_device_connected = false;
       serial_streaming_enabled = false;
       blue_server->getAdvertising()->stop();
@@ -2197,6 +2375,7 @@ void loop() {
   if (!batteryDisplayMode) {
     // Handle button 1 (Flush) - check for hold to enable cutBag
     if (button1Pressed && !button1WasPressed) {
+      onTrustConfirmedByFlushButton();
       SerialBLE_println("Button 1 just pressed - start delay timer");
       // Button 1 just pressed - start delay timer
       button1PressStartTime = millis();
@@ -3250,6 +3429,9 @@ void restartBLEServer() {
   Serial.println("Restarting BLE server (without OTA)");
   
   disableOTA();
+  resetTrustState();
+  g_hasPendingBleResponse = false;
+  g_pendingBleResponse = "";
   
   // Stop current advertising
   if (blue_server) {
