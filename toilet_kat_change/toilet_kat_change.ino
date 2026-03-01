@@ -12,6 +12,7 @@
 #include <driver/rtc_io.h> // RTC GPIO for wake pin pull-up in deep sleep
 #include <driver/gpio.h>   // GPIO hold during deep sleep (fan PWM pin)
 #include <mbedtls/md5.h> // Include for MD5 validation
+#define LED_PHASE_COUNT 5
 //########################################################################
 ///THIS IS IN THE BLE UPDATED FOLDER FROM FIVERR
 //########################################################################
@@ -62,6 +63,9 @@ bool serial_streaming_enabled = false;
 #define PARAM_MAGIC_NUMBER 0x1234
 #define HW_VERSION_ADDR 200
 #define HW_VERSION_MAGIC 0xFADE
+#define FLUSH_COUNT_MAGIC_ADDR 300
+#define FLUSH_COUNT_ADDR (FLUSH_COUNT_MAGIC_ADDR + sizeof(uint16_t))
+#define FLUSH_COUNT_MAGIC 0xF1C5
 
 // Version information
 struct VersionInfo {
@@ -81,6 +85,9 @@ void sendSerialToBLE(unsigned long value);
 String buildMotorFaultStatusSnapshot();
 void saveParametersToEEPROM();
 void loadParametersFromEEPROM();
+void loadFlushCountFromEEPROM();
+bool saveFlushCountToEEPROM();
+void incrementFlushCount();
 void initializeHardwareVersion();
 VersionInfo readHardwareVersion();
 void writeHardwareVersion(uint16_t version, const char* description);
@@ -197,7 +204,7 @@ int maxOpeningTime = 12; //parameters_list[8]
 int typicalOpeningTime = 10; //parameters_list[9]
 float MOTOR_CUT_TIME = 0.5; //parameters_list[10]
 float CUT_MODE_HEAT_TIME = 15.0; //parameters_list[11] - Additional time (seconds) above K in cut mode
-float postCoolingBagDuration = 5.0; //parameters_list[12]
+float postCoolingFanDuration = 5.0; //parameters_list[12]
 float preFeedFan = 2.0; //parameters_list[13]
 float fanReverseTime = 12.0; //parameters_list[14]
 float fanReverseStartTime = 0.0; //parameters_list[15]
@@ -354,8 +361,7 @@ enum LedPhaseSection {
   LED_PHASE_HEAT_UP = 1,
   LED_PHASE_HEAT_HOLD = 2,
   LED_PHASE_COOLING = 3,
-  LED_PHASE_FINAL = 4,
-  LED_PHASE_COUNT = 5
+  LED_PHASE_FINAL = 4
 };
 
 int ledSectionSteps[LED_PHASE_COUNT] = {0};
@@ -389,6 +395,7 @@ bool lastEEPROMWriteVerified = false;
 bool eepromWakeAlertActive = false;
 unsigned long eepromWakeAlertStartMillis = 0;
 const unsigned long EEPROM_WAKE_ALERT_MS = 10000;
+uint32_t lifetimeFlushCount = 0;
 
 // Motor Driver Definitions
 const uint8_t M1DIR_PIN = 1;     // GPIO1 (M1DIR)
@@ -459,7 +466,7 @@ class server_callbacks: public BLEServerCallbacks {
                         String(typicalOpeningTime) + "," +
                         String(MOTOR_CUT_TIME) + "," +
                         String(CUT_MODE_HEAT_TIME) + "," +
-                        String(postCoolingBagDuration) + "," +
+                        String(postCoolingFanDuration) + "," +
                         String(preFeedFan) + "," +
                         String(fanReverseTime) + "," +
                         String(fanReverseStartTime) + "," +
@@ -520,7 +527,7 @@ class server_callbacks: public BLEServerCallbacks {
       typicalOpeningTime = (int)parameters_list[9];
       MOTOR_CUT_TIME = parameters_list[10];
       CUT_MODE_HEAT_TIME = parameters_list[11];
-      postCoolingBagDuration = parameters_list[12];
+      postCoolingFanDuration = parameters_list[12];
       preFeedFan = parameters_list[13];
       fanReverseTime = parameters_list[14];
       fanReverseStartTime = parameters_list[15];
@@ -604,7 +611,7 @@ class characteristic_callbacks: public BLECharacteristicCallbacks {
                           String(typicalOpeningTime) + "," +
                           String(MOTOR_CUT_TIME) + "," +
                           String(CUT_MODE_HEAT_TIME) + "," +
-                          String(postCoolingBagDuration) + "," +
+                          String(postCoolingFanDuration) + "," +
                           String(preFeedFan) + "," +
                           String(fanReverseTime) + "," +
                           String(fanReverseStartTime) + "," +
@@ -649,6 +656,13 @@ class characteristic_callbacks: public BLECharacteristicCallbacks {
           pCharacteristic->setValue(statusMessage.c_str());
           Serial.printf("Processed GET_DEV_MODE, returned %s\n", statusMessage.c_str());
           sendSerialToBLE("Processed GET_DEV_MODE");
+          return;
+        }
+        if (cmd == "GET_FLUSH_COUNT") {
+          String flushCountMessage = String("FLUSH_COUNT:") + String((unsigned long)lifetimeFlushCount);
+          pCharacteristic->setValue(flushCountMessage.c_str());
+          Serial.printf("Processed GET_FLUSH_COUNT, returned %s\n", flushCountMessage.c_str());
+          sendSerialToBLE("Processed GET_FLUSH_COUNT");
           return;
         }
         if (cmd.startsWith("SET_DEV_MODE:")) {
@@ -700,7 +714,7 @@ class characteristic_callbacks: public BLECharacteristicCallbacks {
           typicalOpeningTime = (int)parameters_list[9];
           MOTOR_CUT_TIME = parameters_list[10];
           CUT_MODE_HEAT_TIME = parameters_list[11];
-          postCoolingBagDuration = parameters_list[12];
+          postCoolingFanDuration = parameters_list[12];
           preFeedFan = parameters_list[13];
           fanReverseTime = parameters_list[14];
           fanReverseStartTime = parameters_list[15];
@@ -750,7 +764,7 @@ class characteristic_callbacks: public BLECharacteristicCallbacks {
                             String(typicalOpeningTime) + "," +
                             String(MOTOR_CUT_TIME) + "," +
                             String(CUT_MODE_HEAT_TIME) + "," +
-                            String(postCoolingBagDuration) + "," +
+                            String(postCoolingFanDuration) + "," +
                             String(preFeedFan) + "," +
                             String(fanReverseTime) + "," +
                             String(fanReverseStartTime) + "," +
@@ -849,7 +863,7 @@ void server_setup(bool includeOTA = false) {
                         String(typicalOpeningTime) + "," +
                         String(MOTOR_CUT_TIME) + "," +
                         String(CUT_MODE_HEAT_TIME) + "," +
-                        String(postCoolingBagDuration) + "," +
+                        String(postCoolingFanDuration) + "," +
                         String(preFeedFan) + "," +
                         String(fanReverseTime) + "," +
                         String(fanReverseStartTime) + "," +
@@ -943,7 +957,7 @@ void saveParametersToEEPROM() {
   EEPROM.put(addr, typicalOpeningTime); addr += sizeof(typicalOpeningTime);
   EEPROM.put(addr, MOTOR_CUT_TIME); addr += sizeof(MOTOR_CUT_TIME);
   EEPROM.put(addr, CUT_MODE_HEAT_TIME); addr += sizeof(CUT_MODE_HEAT_TIME);
-  EEPROM.put(addr, postCoolingBagDuration); addr += sizeof(postCoolingBagDuration);
+  EEPROM.put(addr, postCoolingFanDuration); addr += sizeof(postCoolingFanDuration);
   EEPROM.put(addr, preFeedFan); addr += sizeof(preFeedFan);
   EEPROM.put(addr, fanReverseTime); addr += sizeof(fanReverseTime);
   EEPROM.put(addr, fanReverseStartTime); addr += sizeof(fanReverseStartTime);
@@ -1050,7 +1064,7 @@ void loadParametersFromEEPROM() {
     EEPROM.get(addr, typicalOpeningTime); addr += sizeof(typicalOpeningTime);
     EEPROM.get(addr, MOTOR_CUT_TIME); addr += sizeof(MOTOR_CUT_TIME);
     EEPROM.get(addr, CUT_MODE_HEAT_TIME); addr += sizeof(CUT_MODE_HEAT_TIME);
-    EEPROM.get(addr, postCoolingBagDuration); addr += sizeof(postCoolingBagDuration);
+    EEPROM.get(addr, postCoolingFanDuration); addr += sizeof(postCoolingFanDuration);
     EEPROM.get(addr, preFeedFan); addr += sizeof(preFeedFan);
     EEPROM.get(addr, fanReverseTime); addr += sizeof(fanReverseTime);
     EEPROM.get(addr, fanReverseStartTime); addr += sizeof(fanReverseStartTime);
@@ -1129,6 +1143,76 @@ void loadParametersFromEEPROM() {
     }
     enterEEPROMInvalidErrorState("magic mismatch");
     return;
+  }
+}
+
+void loadFlushCountFromEEPROM() {
+  EEPROM.begin(EEPROM_SIZE);
+
+  uint16_t magic = 0;
+  EEPROM.get(FLUSH_COUNT_MAGIC_ADDR, magic);
+
+  if (magic == FLUSH_COUNT_MAGIC) {
+    EEPROM.get(FLUSH_COUNT_ADDR, lifetimeFlushCount);
+    if (lifetimeFlushCount == 0xFFFFFFFFUL) {
+      lifetimeFlushCount = 0;
+    }
+    Serial.printf("Lifetime flush count loaded: %lu\n", lifetimeFlushCount);
+    SerialBLE_print("Lifetime flush count loaded: ");
+    SerialBLE_println((unsigned long)lifetimeFlushCount);
+    EEPROM.end();
+    return;
+  }
+
+  EEPROM.end();
+
+  // First-time initialization (or invalid data): start from 0 and create record.
+  lifetimeFlushCount = 0;
+  if (saveFlushCountToEEPROM()) {
+    Serial.println("Initialized lifetime flush counter in EEPROM.");
+    SerialBLE_println("Initialized lifetime flush counter in EEPROM.");
+  } else {
+    Serial.println("WARNING: Failed to initialize lifetime flush counter in EEPROM.");
+    SerialBLE_println("WARNING: Failed to initialize lifetime flush counter in EEPROM.");
+  }
+}
+
+bool saveFlushCountToEEPROM() {
+  EEPROM.begin(EEPROM_SIZE);
+  EEPROM.put(FLUSH_COUNT_MAGIC_ADDR, (uint16_t)FLUSH_COUNT_MAGIC);
+  EEPROM.put(FLUSH_COUNT_ADDR, lifetimeFlushCount);
+  bool commitOk = EEPROM.commit();
+
+  uint16_t verifyMagic = 0;
+  uint32_t verifyCount = 0;
+  EEPROM.get(FLUSH_COUNT_MAGIC_ADDR, verifyMagic);
+  EEPROM.get(FLUSH_COUNT_ADDR, verifyCount);
+  EEPROM.end();
+
+  bool verified = commitOk && (verifyMagic == FLUSH_COUNT_MAGIC) && (verifyCount == lifetimeFlushCount);
+  if (!verified) {
+    Serial.printf("ERROR: Failed to persist lifetime flush counter. commit=%s magic=0x%04X count=%lu expected=%lu\n",
+                  commitOk ? "true" : "false", verifyMagic, (unsigned long)verifyCount, (unsigned long)lifetimeFlushCount);
+    SerialBLE_println("ERROR: Failed to persist lifetime flush counter.");
+  }
+  return verified;
+}
+
+void incrementFlushCount() {
+  if (lifetimeFlushCount == 0xFFFFFFFFUL) {
+    Serial.println("WARNING: Lifetime flush counter reached max value. Not incrementing.");
+    SerialBLE_println("WARNING: Lifetime flush counter reached max value.");
+    return;
+  }
+
+  lifetimeFlushCount++;
+  if (saveFlushCountToEEPROM()) {
+    Serial.printf("Lifetime flush count: %lu\n", lifetimeFlushCount);
+    SerialBLE_print("Lifetime flush count: ");
+    SerialBLE_println((unsigned long)lifetimeFlushCount);
+  } else {
+    // Roll back RAM value to reflect persisted value.
+    lifetimeFlushCount--;
   }
 }
 
@@ -1717,6 +1801,7 @@ void setup() {
     circleLeds();
 
     loadParametersFromEEPROM();
+    loadFlushCountFromEEPROM();
     knownResistor = thermistorResistance;
     heaterTargetTemp = K;
     startEEPROMWakeAlert();
@@ -1800,6 +1885,7 @@ void setup() {
 
   Serial.println("DEBUG: About to load parameters from EEPROM");
   loadParametersFromEEPROM();
+  loadFlushCountFromEEPROM();
   knownResistor = thermistorResistance;
   Serial.printf("DEBUG: After EEPROM load - H=%ld, K=%.1f\n", H, K);
   SerialBLE_println("DEBUG: About to load parameters from EEPROM");
@@ -2372,7 +2458,7 @@ void flushSequence() {
                  totalHeaterTime, H, CUT_MODE_HEAT_TIME);
   }
   switch (flushStep) {
-    case 0:
+    case 0: {
       ledLastUpdateMillis = millis();
       maxHeaterWallTimeMs = 0;  // Reset at start of each flush cycle before recomputing once.
       Serial.println("Checking battery voltage");
@@ -2422,6 +2508,7 @@ void flushSequence() {
       stepStartMillis = currentMillis;
       setFanSpeed(400);  // Start M3 fan immediately
       break;
+    }
 
     case 1:
       currentMillis = millis();
@@ -2737,8 +2824,8 @@ void flushSequence() {
           }
         }
         
-        // Wait for postCoolingBagDuration before starting feed motors (only after backup and fan started)
-        if (case10BackupStarted && case10FanStarted && (currentMillis - stepStartMillis >= postCoolingBagDuration * 1000)) {
+        // Wait for postCoolingFanDuration before starting feed motors (only after backup and fan started)
+        if (case10BackupStarted && case10FanStarted && (currentMillis - stepStartMillis >= postCoolingFanDuration * 1000)) {
           SerialBLE_println("Fan delay complete, starting feed motors");
           motors.setM2Speed(-400);
           stepStartMillis = currentMillis;
@@ -2767,6 +2854,8 @@ void flushSequence() {
       if (currentMillis - stepStartMillis >= fanDuration * 1000) {
         SerialBLE_println("STOP fan after fanDuration");
         setFanSpeed(0);// Stop M3 motor/fan
+        // Start end-hold timer: keep all LEDs on for 3 seconds in case 13.
+        stepStartMillis = currentMillis;
         flushStep++;
         SerialBLE_print("Moving to Case13:");
         SerialBLE_println(millis());
@@ -2774,16 +2863,24 @@ void flushSequence() {
       break;
 
     case 13:
-      Serial.println("All LEDs off");
-      for (int i = 0; i < totalLeds; i++) {
-        mcp_digitalWrite(ledPins[i], LOW);
+      // Hold full LED bar for 3 seconds before turning everything off.
+      if (currentMillis - stepStartMillis < 3000) {
+        for (int i = 0; i < totalLeds; i++) {
+          mcp_digitalWrite(ledPins[i], HIGH);
+        }
+      } else {
+        Serial.println("All LEDs off");
+        for (int i = 0; i < totalLeds; i++) {
+          mcp_digitalWrite(ledPins[i], LOW);
+        }
+        incrementFlushCount();
+        isFlushing = false;
+        flushStep = 0;
+        cutBag = false;  // Reset cutBag for next cycle
+        lastActivityMillis = millis();  // Restart inactivity/sleep timer at end of flush
+        SerialBLE_println("Moving to Case0 from 13 - end of sequence:");
+        Serial.println(millis());
       }
-      isFlushing = false;
-      flushStep = 0;
-      cutBag = false;  // Reset cutBag for next cycle
-      lastActivityMillis = millis();  // Restart inactivity/sleep timer at end of flush
-      SerialBLE_println("Moving to Case0 from 13 - end of sequence:");
-      Serial.println(millis());
       break;
   }
 }
@@ -3628,7 +3725,7 @@ void calculateSequenceTiming() {
   ledSectionEstimateMs[LED_PHASE_COOLING] = (unsigned long)(T * 1000UL);
   ledSectionEstimateMs[LED_PHASE_FINAL] =
       (unsigned long)((backupTime + maxOpeningTime + backupTimeAfterReopen +
-                       postCoolingBagDuration + continueFeeder + fanDuration) * 1000.0f);
+                       postCoolingFanDuration + continueFeeder + fanDuration) * 1000.0f);
 
   // Kept for serial debug continuity.
   totalSequenceTime = (ledSectionEstimateMs[LED_PHASE_INITIAL] +

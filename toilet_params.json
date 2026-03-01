@@ -14,7 +14,7 @@
   "typicalOpeningTime": 10,
   "MOTOR_CUT_TIME": 0,
   "CUT_MODE_HEAT_TIME": 14,
-  "postCoolingBagDuration": 0,
+  "postCoolingFanDuration": 0,
   "preFeedFan": 3,
   "fanReverseTime": 2,
   "fanReverseStartTime": 0,

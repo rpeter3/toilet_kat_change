@@ -6,12 +6,12 @@ T,Cooling Time,60,40
 backupTime,How long to back up the bag when re-opening,1,1
 fanDuration,How long to run the fan after feeding at the end of a flush,5,5
 H,Heater On time,30,20
-continueFeeder,Feeder continue time,6,6
+continueFeeder,How long to feed the bag at the END of a flush,6,6
 maxOpeningTime,Max opening time,12,12
 typicalOpeningTime,Typical opening time,10,10
 MOTOR_CUT_TIME,Motor cut duration,0.5,0.5
 CUT_MODE_HEAT_TIME,Additional heater time in cut mode,15,10
-postCoolingBagDuration,Fan duration before feed motors start in case 10,5,5
+postCoolingFanDuration,Fan duration before feed motors start in case 10,5,1
 preFeedFan,Fan duration before feed motor starts in case 1 and button 2,2,1.5
 fanReverseTime,Duration M3 runs in reverse after starting,12,9
 fanReverseStartTime,Delay before M3 reverse starts as percentage of typicalOpeningTime after M1 begins closing,0,0
@@ -19,5 +19,5 @@ backupTimeAfterReopen,Feed bag backup duration after mechanism motor finishes op
 CUT_MODE_TEMP,Temperature to maintain for CUT_MODE_HEAT_TIME after cut motor,150,100
 heaterLowerToleranceC,Heater ON threshold below target (temp <= target - lower),0,0
 heaterUpperToleranceC,Heater OFF threshold above target (temp >= target + upper can be negative),2,2
-COOL_OPEN_TEMP_C,Open sealer when thermistor cools below this temperature,80,80
-MAX_COOL_WAIT_S,Safety timeout for cooling stage before forcing open,180,180
+COOL_OPEN_TEMP_C,Open sealer when thermistor cools below this temperature °C,80,80
+MAX_COOL_WAIT_S,Safety timeout for cooling stage before forcing open sec,180,180

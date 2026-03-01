@@ -64,7 +64,7 @@ The system supports 20 configurable parameters. Default values are set for 1mil 
 | typicalOpeningTime | Typical opening time | seconds | 10 |
 | MOTOR_CUT_TIME | Motor cut duration | seconds | 0.5 |
 | CUT_MODE_HEAT_TIME | Additional heater time in cut mode | seconds | 25.0 |
-| postCoolingBagDuration | Post cooling bag duration | seconds | 5.0 |
+| postCoolingFanDuration | Post cooling fan duration | seconds | 5.0 |
 | preFeedFan | Pre-feed fan delay | seconds | 3.0 |
 | fanReverseTime | Fan reverse time | seconds | 3.0 |
 | fanReverseStartTime | Fan reverse start time (percentage) | % | 0.0 |
@@ -125,7 +125,7 @@ Parameters are saved in JSON format with all 20 parameters:
   "typicalOpeningTime": 10,
   "MOTOR_CUT_TIME": 0.5,
   "CUT_MODE_HEAT_TIME": 25.0,
-  "postCoolingBagDuration": 5.0,
+  "postCoolingFanDuration": 5.0,
   "preFeedFan": 3.0,
   "fanReverseTime": 3.0,
   "fanReverseStartTime": 0.0,

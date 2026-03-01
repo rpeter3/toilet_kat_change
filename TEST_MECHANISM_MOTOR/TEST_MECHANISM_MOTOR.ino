@@ -166,7 +166,7 @@ int maxOpeningTime = 12; //parameters_list[11]
 int typicalOpeningTime = 10; //parameters_list[12]
 float MOTOR_CUT_TIME = 0.5; //parameters_list[13]
 float CUT_MODE_HEAT_TIME = 25.0; //parameters_list[14] - Updated to match 1mil High Barrier Plastic
-float postCoolingBagDuration = 5.0; //parameters_list[15]
+float postCoolingFanDuration = 5.0; //parameters_list[15]
 float preFeedFan = 3.0; //parameters_list[16]
 float fanReverseTime = 3.0; //parameters_list[17]
 float fanReverseStartTime = 0.0; //parameters_list[18]
@@ -328,7 +328,7 @@ class server_callbacks: public BLEServerCallbacks {
                         String(typicalOpeningTime) + "," +
                         String(MOTOR_CUT_TIME) + "," +
                         String(CUT_MODE_HEAT_TIME) + "," +
-                        String(postCoolingBagDuration) + "," +
+                        String(postCoolingFanDuration) + "," +
                         String(preFeedFan) + "," +
                         String(fanReverseTime) + "," +
                         String(fanReverseStartTime) + "," +
@@ -403,7 +403,7 @@ class server_callbacks: public BLEServerCallbacks {
     typicalOpeningTime = parameters_list[12];
     MOTOR_CUT_TIME = parameters_list[13];
     CUT_MODE_HEAT_TIME = parameters_list[14];
-    postCoolingBagDuration = parameters_list[15];
+    postCoolingFanDuration = parameters_list[15];
     preFeedFan = parameters_list[16];
     fanReverseTime = parameters_list[17];
     fanReverseStartTime = parameters_list[18];
@@ -576,7 +576,7 @@ class characteristic_callbacks: public BLECharacteristicCallbacks {
                           String(typicalOpeningTime) + "," +
                           String(MOTOR_CUT_TIME) + "," +
                           String(CUT_MODE_HEAT_TIME) + "," +
-                          String(postCoolingBagDuration) + "," +
+                          String(postCoolingFanDuration) + "," +
                           String(preFeedFan) + "," +
                           String(fanReverseTime) + "," +
                           String(fanReverseStartTime) + "," +
@@ -636,7 +636,7 @@ class characteristic_callbacks: public BLECharacteristicCallbacks {
         typicalOpeningTime = (int)parameters_list[12];
         MOTOR_CUT_TIME = parameters_list[13];
         CUT_MODE_HEAT_TIME = parameters_list[14];
-        postCoolingBagDuration = parameters_list[15];
+        postCoolingFanDuration = parameters_list[15];
         preFeedFan = parameters_list[16];
         fanReverseTime = parameters_list[17];
         fanReverseStartTime = parameters_list[18];
@@ -664,7 +664,7 @@ class characteristic_callbacks: public BLECharacteristicCallbacks {
                             String(typicalOpeningTime) + "," +
                             String(MOTOR_CUT_TIME) + "," +
                             String(CUT_MODE_HEAT_TIME) + "," +
-                            String(postCoolingBagDuration) + "," +
+                            String(postCoolingFanDuration) + "," +
                             String(preFeedFan) + "," +
                             String(fanReverseTime) + "," +
                             String(fanReverseStartTime) + "," +
@@ -761,7 +761,7 @@ void server_setup(bool includeOTA = false) {
                         String(typicalOpeningTime) + "," +
                         String(MOTOR_CUT_TIME) + "," +
                         String(CUT_MODE_HEAT_TIME) + "," +
-                        String(postCoolingBagDuration) + "," +
+                        String(postCoolingFanDuration) + "," +
                         String(preFeedFan) + "," +
                         String(fanReverseTime) + "," +
                         String(fanReverseStartTime) + "," +
@@ -843,7 +843,7 @@ void saveParametersToEEPROM() {
   EEPROM.put(addr, typicalOpeningTime); addr += sizeof(typicalOpeningTime);
   EEPROM.put(addr, MOTOR_CUT_TIME); addr += sizeof(MOTOR_CUT_TIME);
   EEPROM.put(addr, CUT_MODE_HEAT_TIME); addr += sizeof(CUT_MODE_HEAT_TIME);
-  EEPROM.put(addr, postCoolingBagDuration); addr += sizeof(postCoolingBagDuration);
+  EEPROM.put(addr, postCoolingFanDuration); addr += sizeof(postCoolingFanDuration);
   EEPROM.put(addr, preFeedFan); addr += sizeof(preFeedFan);
   EEPROM.put(addr, fanReverseTime); addr += sizeof(fanReverseTime);
   EEPROM.put(addr, fanReverseStartTime); addr += sizeof(fanReverseStartTime);
@@ -904,7 +904,7 @@ void loadParametersFromEEPROM() {
     EEPROM.get(addr, typicalOpeningTime); addr += sizeof(typicalOpeningTime);
     EEPROM.get(addr, MOTOR_CUT_TIME); addr += sizeof(MOTOR_CUT_TIME);
     EEPROM.get(addr, CUT_MODE_HEAT_TIME); addr += sizeof(CUT_MODE_HEAT_TIME);
-    EEPROM.get(addr, postCoolingBagDuration); addr += sizeof(postCoolingBagDuration);
+    EEPROM.get(addr, postCoolingFanDuration); addr += sizeof(postCoolingFanDuration);
     EEPROM.get(addr, preFeedFan); addr += sizeof(preFeedFan);
     EEPROM.get(addr, fanReverseTime); addr += sizeof(fanReverseTime);
     EEPROM.get(addr, fanReverseStartTime); addr += sizeof(fanReverseStartTime);
