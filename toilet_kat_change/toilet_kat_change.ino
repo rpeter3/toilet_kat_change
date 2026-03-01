@@ -39,6 +39,9 @@ TwoWire myI2C = TwoWire(0);
 
 // MCP23017 setup
 Adafruit_MCP23X17 mcp;
+bool mcpInitialized = false;
+unsigned long lastMcpUnavailableLogMillis = 0;
+const unsigned long MCP_UNAVAILABLE_LOG_INTERVAL_MS = 5000;
 
 #define SERVICE_UUID "5636340f-afc7-47b1-b0a8-15bc9d7d29a5"
 #define CHARACTERISTIC_UUID "c327b077-560f-46a1-8f35-b4ab0332fea0"
@@ -801,12 +804,23 @@ void mcp_setup() {
   // ✅ Use GPIO6 for SDA and GPIO7 for SCL
   myI2C.begin(6, 7, 100000);
 
-  // Init MCP23017 with custom I2C bus
-  if (!mcp.begin_I2C(0x20, &myI2C)) {
-    Serial.println("Error initializing MCP23017!");
-    while (1);
-  } else {
-    Serial.println("MCP23017 Initialized Successfully.");
+  // Retry MCP startup to survive first-boot rail/I2C bring-up timing.
+  const int maxAttempts = 20;
+  const unsigned long retryDelayMs = 100;
+  mcpInitialized = false;
+  for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (mcp.begin_I2C(0x20, &myI2C)) {
+      mcpInitialized = true;
+      Serial.printf("MCP23017 Initialized Successfully on attempt %d/%d.\n", attempt, maxAttempts);
+      break;
+    }
+    Serial.printf("WARNING: MCP23017 init attempt %d/%d failed.\n", attempt, maxAttempts);
+    delay(retryDelayMs);
+  }
+
+  if (!mcpInitialized) {
+    Serial.println("ERROR: MCP23017 unavailable after retries - continuing without expander.");
+    return;
   }
 
   // Setup button pins on expander
@@ -820,11 +834,22 @@ void mcp_setup() {
 
 // Function to write a value to a specific MCP23017 pin
 void mcp_digitalWrite(int pin, int value) {
+  if (!mcpInitialized) {
+    return;
+  }
   mcp.digitalWrite(pin, value);
 }
 
 // Function to read from a specific MCP23017 pin
 int mcp_digitalRead(int pin) {
+  if (!mcpInitialized) {
+    unsigned long now = millis();
+    if (lastMcpUnavailableLogMillis == 0 || (now - lastMcpUnavailableLogMillis >= MCP_UNAVAILABLE_LOG_INTERVAL_MS)) {
+      Serial.println("WARNING: MCP23017 read while unavailable; returning HIGH.");
+      lastMcpUnavailableLogMillis = now;
+    }
+    return HIGH;
+  }
   return mcp.digitalRead(pin);
 }
 
