@@ -5,7 +5,6 @@ Connects to ESP32 via BLE to read and update system parameters
 """
 
 import asyncio
-import struct
 from bleak import BleakClient, BleakScanner
 import time
 import json
@@ -15,6 +14,9 @@ from typing import Dict, Any, Optional
 SERVICE_UUID = "5636340f-afc7-47b1-b0a8-15bc9d7d29a5"
 CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea0"
 SERIAL_CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea1"
+RESPONSE_CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea4"
+PARAM_READ_CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea5"
+PARAM_WRITE_CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea6"
 DEVICE_NAME = "ESP32 Toilet"
 TRUST_START_COMMAND = "TRUST_START"
 TRUST_STATUS_COMMAND = "TRUST_STATUS"
@@ -25,6 +27,9 @@ TRUST_TIMEOUT_RESPONSE = "TRUST_TIMEOUT"
 TRUST_CANCEL_ACK_RESPONSE = "TRUST_CANCEL_ACK"
 AUTH_REQUIRED_RESPONSE = "AUTH_REQUIRED"
 TRUST_CONFIRM_TIMEOUT_S = 60.0
+PARAM_WRITE_ACK_RESPONSE = "PARAM_WRITE_ACK"
+PARAM_UPDATE_BLOCKED_FLUSH_RESPONSE = "PARAM_UPDATE_BLOCKED_FLUSH"
+PARAM_WRITE_BAD_FORMAT_PREFIX = "PARAM_WRITE_ERR:BAD_FORMAT"
 
 class ToiletSystemInterface:
     def __init__(self):
@@ -151,7 +156,12 @@ class ToiletSystemInterface:
                 print("Connection was not trusted. Disconnecting.")
                 await self.disconnect()
                 return False
-            print("Connection trusted and ready to read parameters")
+            params = await self.read_current_params()
+            if not params:
+                print("Failed to read parameters after trust confirmation. Disconnecting.")
+                await self.disconnect()
+                return False
+            print("Connection trusted and ready")
             return True
         except Exception as e:
             print(f"Failed to connect: {e}")
@@ -181,15 +191,34 @@ class ToiletSystemInterface:
             for _ in range(retries):
                 await self.client.write_gatt_char(CHARACTERISTIC_UUID, command.encode("utf-8"))
                 await asyncio.sleep(response_delay_s)
-                data = await self.client.read_gatt_char(CHARACTERISTIC_UUID)
+                data = await self.client.read_gatt_char(RESPONSE_CHARACTERISTIC_UUID)
                 response = data.decode("utf-8", errors="ignore").strip()
                 if response:
+                    if response == AUTH_REQUIRED_RESPONSE:
+                        self.trusted_connection = False
                     return response
                 await asyncio.sleep(0.1)
             return None
         except Exception as e:
             print(f"Command failed ({command}): {e}")
             return None
+
+    def _parse_param_csv_payload(self, payload: str) -> Optional[Dict[str, float]]:
+        """Parse and strictly validate a 22-float parameter CSV payload."""
+        values = [item.strip() for item in payload.split(",")]
+        if len(values) != len(self.param_order):
+            return None
+
+        parsed: Dict[str, float] = {}
+        for i, param_name in enumerate(self.param_order):
+            raw_value = values[i]
+            if raw_value == "":
+                return None
+            try:
+                parsed[param_name] = float(raw_value)
+            except ValueError:
+                return None
+        return parsed
 
     async def start_trust_handshake(self) -> bool:
         """Start physical trust flow on firmware (LED circle + wait for flush button)."""
@@ -253,25 +282,13 @@ class ToiletSystemInterface:
             return {}
         
         try:
-            # Read the characteristic value
-            data = await self.client.read_gatt_char(CHARACTERISTIC_UUID)
-            message = data.decode('utf-8')
+            data = await self.client.read_gatt_char(PARAM_READ_CHARACTERISTIC_UUID)
+            message = data.decode("utf-8", errors="ignore").strip()
             print(f"Received message: {message}")
-            
-            # Parse comma-separated values
-            values = message.split(',')
-            params = {}
-            
-            for i, param_name in enumerate(self.param_order):
-                if i < len(values):
-                    try:
-                        params[param_name] = float(values[i])
-                    except ValueError:
-                        print(f"Invalid value for {param_name}: {values[i]}")
-                        params[param_name] = float(self.param_definitions[param_name]["default"])
-                else:
-                    params[param_name] = float(self.param_definitions[param_name]["default"])
-            
+            params = self._parse_param_csv_payload(message)
+            if not params:
+                print(f"Failed to read parameter CSV (received: {message})")
+                return {}
             self.current_params = params
             return params
             
@@ -335,27 +352,35 @@ class ToiletSystemInterface:
             message = ",".join(message_parts)
             print(f"Sending message: {message}")
             
-            # Write to characteristic
-            await self.client.write_gatt_char(CHARACTERISTIC_UUID, message.encode('utf-8'))
-            # Read firmware feedback after write so flush-blocked updates are reported to user.
+            # Write to parameter-write characteristic.
+            await self.client.write_gatt_char(PARAM_WRITE_CHARACTERISTIC_UUID, message.encode('utf-8'))
+            # Read firmware feedback from response channel.
             await asyncio.sleep(0.1)
             response = ""
             try:
-                data = await self.client.read_gatt_char(CHARACTERISTIC_UUID)
+                data = await self.client.read_gatt_char(RESPONSE_CHARACTERISTIC_UUID)
                 response = data.decode('utf-8', errors='ignore').strip()
             except Exception as read_error:
                 print(f"Warning: unable to read firmware response after update: {read_error}")
 
-            if response == "PARAM_UPDATE_BLOCKED_FLUSH":
+            if response == PARAM_WRITE_ACK_RESPONSE:
+                print("Parameters updated successfully")
+                return True
+            if not response:
+                print("Parameter update failed: empty response from firmware.")
+                return False
+            if response == PARAM_UPDATE_BLOCKED_FLUSH_RESPONSE:
                 print("Parameter update rejected: flush in progress (firmware blocked this write).")
                 return False
             if response == AUTH_REQUIRED_RESPONSE:
                 self.trusted_connection = False
                 print("Parameter update rejected: connection is not trusted yet.")
                 return False
-
-            print("Parameters updated successfully")
-            return True
+            if response.startswith(PARAM_WRITE_BAD_FORMAT_PREFIX):
+                print(f"Parameter update rejected by firmware: {response}")
+                return False
+            print(f"Parameter update failed with firmware response: {response}")
+            return False
             
         except Exception as e:
             print(f"Failed to update parameters: {e}")
@@ -542,18 +567,19 @@ class ToiletSystemInterface:
         if not self.connected:
             print("Not connected to device")
             return None
+        if not await self.ensure_trusted_connection():
+            return None
 
         try:
-            for _ in range(3):
-                await self.client.write_gatt_char(CHARACTERISTIC_UUID, b"GET_DEV_MODE")
-                await asyncio.sleep(0.15)
-                data = await self.client.read_gatt_char(CHARACTERISTIC_UUID)
-                response = data.decode("utf-8").strip()
-                if response.startswith("DEV_MODE:"):
-                    mode_str = response.split(":", 1)[1].strip()
-                    if mode_str in ("0", "1"):
-                        return int(mode_str)
-                await asyncio.sleep(0.1)
+            response = await self._send_command_and_read_response("GET_DEV_MODE", retries=3)
+            if response == AUTH_REQUIRED_RESPONSE:
+                self.trusted_connection = False
+                print("Failed to read DEV mode status: trust required.")
+                return None
+            if response and response.startswith("DEV_MODE:"):
+                mode_str = response.split(":", 1)[1].strip()
+                if mode_str in ("0", "1"):
+                    return int(mode_str)
             print("Failed to read DEV mode status from firmware")
             return None
         except Exception as e:
@@ -568,14 +594,19 @@ class ToiletSystemInterface:
         if new_mode not in (0, 1):
             print("Invalid DEV mode value. Use 0 or 1.")
             return False
+        if not await self.ensure_trusted_connection():
+            return False
 
         try:
             command = f"SET_DEV_MODE:{new_mode}"
-            await self.client.write_gatt_char(CHARACTERISTIC_UUID, command.encode("utf-8"))
-            await asyncio.sleep(0.15)
-
-            data = await self.client.read_gatt_char(CHARACTERISTIC_UUID)
-            response = data.decode("utf-8").strip()
+            response = await self._send_command_and_read_response(command, retries=3)
+            if not response:
+                print("No response from firmware for SET_DEV_MODE")
+                return False
+            if response == AUTH_REQUIRED_RESPONSE:
+                self.trusted_connection = False
+                print("Firmware rejected DEV mode update: trust required.")
+                return False
 
             if response.startswith("SET_DEV_MODE_ACK:"):
                 ack_value = response.split(":", 1)[1].strip()
