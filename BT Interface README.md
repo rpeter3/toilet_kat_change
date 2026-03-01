@@ -164,6 +164,41 @@ Parameters are saved in JSON format with all 20 parameters:
 - **BLE Timeout**: BLE automatically shuts down after 10 minutes to save power (can be re-enabled by restarting device)
 - **OTA Support**: Over-the-air firmware updates available via BLE (requires special activation sequence)
 
+## BLE Framing (Android-safe streaming)
+
+Serial stream transport now supports a framed mode that is safe across BLE packet fragmentation and callback timing differences:
+
+- Frame format: `[0x7E][len_lo][len_hi][payload...]`
+- `len` is a little-endian `uint16` payload size (0..65535)
+- Payload can be UTF-8 text or binary bytes
+
+Receiver behavior:
+
+- Incoming notification bytes are appended to a persistent buffer
+- Parser resynchronizes by scanning for `0x7E`
+- A frame is emitted only when all `3 + len` bytes are present
+- Partial trailing data is preserved for the next callback
+
+Sender behavior:
+
+- Outgoing framed messages are chunked at `max(1, mtu - 3)` bytes per write
+- Optional pacing delay can be enabled to stress-test callback and flow-control timing
+
+### Compatibility / migration
+
+- Default mode is `BLE_SERIAL_TRANSPORT_MODE=auto`:
+  - Tries framed serial commands first
+  - Falls back to legacy unframed text if framed write path fails
+- Legacy-only mode is available with `BLE_SERIAL_TRANSPORT_MODE=legacy`
+- Force framed mode with `BLE_SERIAL_TRANSPORT_MODE=framed`
+
+### Environment flags
+
+- `BLE_SERIAL_TRANSPORT_MODE=auto|framed|legacy`
+- `BLE_PREFERRED_MTU=185` (best-effort MTU request when backend/platform supports it)
+- `BLE_CHUNK_PACING_S=0.0` (seconds delay between chunks)
+- `BLE_FRAME_DEBUG=1` (prints frame length, chunk count/sizes, parser counters)
+
 ## License
 
 This software is provided as-is for interfacing with the ESP32 toilet system.

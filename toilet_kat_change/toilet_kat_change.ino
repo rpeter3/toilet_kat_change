@@ -482,6 +482,13 @@ bool hardwareMatrixInitialized = false;
 HWCFGConfigStore hwcfgStore = {};
 bool hwcfgStoreInitialized = false;
 bool hwcfgSafeFault = false;
+HardwareMatrix hardwareMatrixScratchActive = {};
+HardwareMatrix hardwareMatrixScratchLastGood = {};
+// HWCFG scratch/snapshot buffers kept at file scope to avoid large loopTask stack frames.
+HWCFGConfigStore hwcfgScratchActive = {};
+HWCFGConfigStore hwcfgScratchLastGood = {};
+HWCFGConfigStore hwcfgSnapshotStore = {};
+HardwareMatrix hwcfgSnapshotMatrix = {};
 const char* HARDWARE_COMPONENT_NAMES[HW_COMPONENT_COUNT] = {
   "CONTROL_PANEL",
   "HEATING_ELEMENT",
@@ -1467,10 +1474,8 @@ bool isSafeFieldString(const char* text, bool allowEmpty) {
 }
 
 uint32_t computeHardwareMatrixCRC(const HardwareMatrix& matrix) {
-  HardwareMatrix temp = matrix;
-  temp.crc32 = 0;
-  const uint8_t* bytes = reinterpret_cast<const uint8_t*>(&temp);
-  size_t len = sizeof(HardwareMatrix);
+  const uint8_t* bytes = reinterpret_cast<const uint8_t*>(&matrix);
+  size_t len = offsetof(HardwareMatrix, crc32);
   uint32_t crc = 0xFFFFFFFFUL;
   for (size_t i = 0; i < len; i++) {
     crc ^= bytes[i];
@@ -1660,10 +1665,11 @@ String getHardwareComponentString(HardwareComponentId componentId) {
 }
 
 bool initializeHardwareMatrix() {
-  HardwareMatrix active = {};
   String validationError = "";
-  if (loadHardwareMatrixBlob(HW_MATRIX_ACTIVE_KEY, active) && validateHardwareMatrix(active, &validationError)) {
-    hardwareMatrix = active;
+  memset(&hardwareMatrixScratchActive, 0, sizeof(hardwareMatrixScratchActive));
+  if (loadHardwareMatrixBlob(HW_MATRIX_ACTIVE_KEY, hardwareMatrixScratchActive) &&
+      validateHardwareMatrix(hardwareMatrixScratchActive, &validationError)) {
+    hardwareMatrix = hardwareMatrixScratchActive;
     hardwareMatrixInitialized = true;
     Serial.println("Hardware matrix loaded from active NVS record");
     return true;
@@ -1673,10 +1679,11 @@ bool initializeHardwareMatrix() {
     Serial.printf("Active hardware matrix invalid (%s), trying last-known-good\n", validationError.c_str());
   }
 
-  HardwareMatrix lastKnownGood = {};
   validationError = "";
-  if (loadHardwareMatrixBlob(HW_MATRIX_LAST_GOOD_KEY, lastKnownGood) && validateHardwareMatrix(lastKnownGood, &validationError)) {
-    hardwareMatrix = lastKnownGood;
+  memset(&hardwareMatrixScratchLastGood, 0, sizeof(hardwareMatrixScratchLastGood));
+  if (loadHardwareMatrixBlob(HW_MATRIX_LAST_GOOD_KEY, hardwareMatrixScratchLastGood) &&
+      validateHardwareMatrix(hardwareMatrixScratchLastGood, &validationError)) {
+    hardwareMatrix = hardwareMatrixScratchLastGood;
     hardwareMatrixInitialized = true;
     saveHardwareMatrixBlob(hardwareMatrix, false);
     Serial.println("Recovered hardware matrix from last-known-good record");
@@ -1775,10 +1782,8 @@ uint32_t computeCRC32Bytes(const uint8_t* bytes, size_t len) {
 }
 
 uint32_t computeHWCFGCRC(const HWCFGConfigStore& store) {
-  HWCFGConfigStore temp = store;
-  temp.crc32 = 0;
-  const uint8_t* bytes = reinterpret_cast<const uint8_t*>(&temp);
-  return computeCRC32Bytes(bytes, sizeof(HWCFGConfigStore));
+  const uint8_t* bytes = reinterpret_cast<const uint8_t*>(&store);
+  return computeCRC32Bytes(bytes, offsetof(HWCFGConfigStore, crc32));
 }
 
 void refreshHWCFGCRC(HWCFGConfigStore& store) {
@@ -2069,19 +2074,19 @@ void initializeDefaultHWCFG(HWCFGConfigStore& store) {
 }
 
 bool initializeHWCFGStore() {
-  HWCFGConfigStore active = {};
   String err;
-  if (loadHWCFGBlob(HWCFG_ACTIVE_KEY, active) && validateHWCFGStore(active, err)) {
-    hwcfgStore = active;
+  memset(&hwcfgScratchActive, 0, sizeof(hwcfgScratchActive));
+  if (loadHWCFGBlob(HWCFG_ACTIVE_KEY, hwcfgScratchActive) && validateHWCFGStore(hwcfgScratchActive, err)) {
+    hwcfgStore = hwcfgScratchActive;
     hwcfgStoreInitialized = true;
     hwcfgSafeFault = false;
     return true;
   }
 
-  HWCFGConfigStore lkg = {};
+  memset(&hwcfgScratchLastGood, 0, sizeof(hwcfgScratchLastGood));
   err = "";
-  if (loadHWCFGBlob(HWCFG_LAST_GOOD_KEY, lkg) && validateHWCFGStore(lkg, err)) {
-    hwcfgStore = lkg;
+  if (loadHWCFGBlob(HWCFG_LAST_GOOD_KEY, hwcfgScratchLastGood) && validateHWCFGStore(hwcfgScratchLastGood, err)) {
+    hwcfgStore = hwcfgScratchLastGood;
     hwcfgStoreInitialized = true;
     hwcfgSafeFault = false;
     saveHWCFGBlob(hwcfgStore, false);
@@ -2354,8 +2359,8 @@ String handleHWCFGCommand(const String& cmd) {
     float oldUpperTol = heaterUpperToleranceC;
     float oldCoolOpen = COOL_OPEN_TEMP_C;
     long oldMaxCoolWait = MAX_COOL_WAIT_S;
-    HardwareMatrix oldMatrix = hardwareMatrix;
-    HWCFGConfigStore oldStore = hwcfgStore;
+    hwcfgSnapshotMatrix = hardwareMatrix;
+    hwcfgSnapshotStore = hwcfgStore;
 
     String applyError;
     if (!applyParameterBlobToRuntime(String(hwcfgStore.profiles[profileIndex].params_blob), applyError)) {
@@ -2386,19 +2391,19 @@ String handleHWCFGCommand(const String& cmd) {
       heaterUpperToleranceC = oldUpperTol;
       COOL_OPEN_TEMP_C = oldCoolOpen;
       MAX_COOL_WAIT_S = oldMaxCoolWait;
-      hardwareMatrix = oldMatrix;
+      hardwareMatrix = hwcfgSnapshotMatrix;
       saveParametersToEEPROM();
       saveHardwareMatrixBlob(hardwareMatrix, false);
       return String("HWCFG_APPLY_ERR:") + applyError;
     }
 
-    copyBoundedString(hwcfgStore.last_good_profile_id, sizeof(hwcfgStore.last_good_profile_id), oldStore.active_profile_id);
+    copyBoundedString(hwcfgStore.last_good_profile_id, sizeof(hwcfgStore.last_good_profile_id), hwcfgSnapshotStore.active_profile_id);
     copyBoundedString(hwcfgStore.active_profile_id, sizeof(hwcfgStore.active_profile_id), hwcfgStore.profiles[profileIndex].profile_id);
     hwcfgStore.active_validated = 1;
     refreshHWCFGCRC(hwcfgStore);
     if (!saveHWCFGBlob(hwcfgStore, true)) {
-      hwcfgStore = oldStore;
-      hardwareMatrix = oldMatrix;
+      hwcfgStore = hwcfgSnapshotStore;
+      hardwareMatrix = hwcfgSnapshotMatrix;
       saveHardwareMatrixBlob(hardwareMatrix, false);
       return "HWCFG_APPLY_ERR:PERSIST_FAIL";
     }
@@ -2411,12 +2416,12 @@ String handleHWCFGCommand(const String& cmd) {
   }
 
   if (cmd == "HWCFG_ROLLBACK_LAST_GOOD") {
-    HWCFGConfigStore lkg = {};
+    memset(&hwcfgScratchLastGood, 0, sizeof(hwcfgScratchLastGood));
     String err;
-    if (!loadHWCFGBlob(HWCFG_LAST_GOOD_KEY, lkg) || !validateHWCFGStore(lkg, err)) {
+    if (!loadHWCFGBlob(HWCFG_LAST_GOOD_KEY, hwcfgScratchLastGood) || !validateHWCFGStore(hwcfgScratchLastGood, err)) {
       return "HWCFG_ROLLBACK_ERR:NO_LAST_GOOD";
     }
-    hwcfgStore = lkg;
+    hwcfgStore = hwcfgScratchLastGood;
     refreshHWCFGCRC(hwcfgStore);
     if (!saveHWCFGBlob(hwcfgStore, false)) {
       return "HWCFG_ROLLBACK_ERR:PERSIST_FAIL";

@@ -6,17 +6,89 @@ Connects to ESP32 via BLE to read and update system parameters
 
 import asyncio
 import struct
-from bleak import BleakClient, BleakScanner
 import time
 import json
+import platform
+import os
 from datetime import datetime
 from typing import Dict, Any, Optional, List
+
+try:
+    from bleak import BleakClient, BleakScanner
+except ImportError:
+    BleakClient = Any  # type: ignore[assignment]
+    BleakScanner = None  # type: ignore[assignment]
 
 # ESP32 BLE Configuration (from toilet_kat_change.ino)
 SERVICE_UUID = "5636340f-afc7-47b1-b0a8-15bc9d7d29a5"
 CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea0"
 SERIAL_CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea1"
 DEVICE_NAME = "ESP32 Toilet"
+FRAME_START_BYTE = 0x7E
+FRAME_HEADER_SIZE = 3
+MAX_FRAME_PAYLOAD = 0xFFFF
+
+
+def make_frame(payload: bytes) -> bytes:
+    """Encode payload into [start][len_lo][len_hi][payload]."""
+    if len(payload) > MAX_FRAME_PAYLOAD:
+        raise ValueError(f"Payload too large for BLE frame: {len(payload)} bytes")
+    return bytes([FRAME_START_BYTE]) + struct.pack("<H", len(payload)) + payload
+
+
+class BleFrameParser:
+    """Incremental parser for framed BLE stream payloads."""
+
+    def __init__(self, start_byte: int = FRAME_START_BYTE, max_payload: int = MAX_FRAME_PAYLOAD):
+        self.start_byte = start_byte
+        self.max_payload = max_payload
+        self.buffer = bytearray()
+        self.frames_parsed = 0
+        self.bytes_dropped_resync = 0
+        self.malformed_frame_count = 0
+
+    def reset(self):
+        self.buffer.clear()
+        self.frames_parsed = 0
+        self.bytes_dropped_resync = 0
+        self.malformed_frame_count = 0
+
+    def append(self, chunk: bytes) -> List[bytes]:
+        self.buffer.extend(chunk)
+        frames: List[bytes] = []
+
+        while True:
+            if len(self.buffer) < FRAME_HEADER_SIZE:
+                break
+
+            if self.buffer[0] != self.start_byte:
+                start_index = self.buffer.find(bytes([self.start_byte]))
+                if start_index == -1:
+                    self.bytes_dropped_resync += len(self.buffer)
+                    self.buffer.clear()
+                    break
+                self.bytes_dropped_resync += start_index
+                del self.buffer[:start_index]
+                if len(self.buffer) < FRAME_HEADER_SIZE:
+                    break
+
+            payload_len = self.buffer[1] | (self.buffer[2] << 8)
+            if payload_len > self.max_payload:
+                self.malformed_frame_count += 1
+                self.bytes_dropped_resync += 1
+                del self.buffer[0]
+                continue
+
+            frame_len = FRAME_HEADER_SIZE + payload_len
+            if len(self.buffer) < frame_len:
+                break
+
+            payload = bytes(self.buffer[FRAME_HEADER_SIZE:frame_len])
+            del self.buffer[:frame_len]
+            self.frames_parsed += 1
+            frames.append(payload)
+
+        return frames
 
 class ToiletSystemInterface:
     def __init__(self):
@@ -24,6 +96,16 @@ class ToiletSystemInterface:
         self.connected = False
         self.current_params = {}
         self.serial_streaming = False
+        self.preferred_mtu = int(os.getenv("BLE_PREFERRED_MTU", "185"))
+        self.chunk_pacing_s = float(os.getenv("BLE_CHUNK_PACING_S", "0"))
+        self.frame_debug = os.getenv("BLE_FRAME_DEBUG", "0") == "1"
+        # Modes: "auto" (try framed then fallback), "framed", "legacy"
+        self.serial_transport_mode = os.getenv("BLE_SERIAL_TRANSPORT_MODE", "auto").strip().lower()
+        if self.serial_transport_mode not in ("auto", "framed", "legacy"):
+            self.serial_transport_mode = "auto"
+        self.serial_framed_active = False
+        self.serial_parser = BleFrameParser()
+        self.serial_frames_received = 0
         
         # Parameter definitions with descriptions and units (defaults = 1.5mil High Barrier Plastic from material_parameters.csv)
         self.param_definitions = {
@@ -125,8 +207,86 @@ class ToiletSystemInterface:
             "FACTORY_SOFTWARE_VERSION_NUMBER",
         ]
 
+    async def _request_preferred_mtu(self):
+        """Best-effort MTU request. Safe no-op when backend doesn't support it."""
+        if not self.client:
+            return
+
+        if platform.system().lower() != "android":
+            return
+
+        request_candidates = [
+            getattr(self.client, "request_mtu", None),
+            getattr(getattr(self.client, "_backend", None), "request_mtu", None),
+            getattr(getattr(self.client, "_backend", None), "set_mtu", None),
+        ]
+
+        for request_mtu in request_candidates:
+            if callable(request_mtu):
+                try:
+                    negotiated = await request_mtu(self.preferred_mtu)
+                    if negotiated:
+                        print(f"MTU negotiated: requested {self.preferred_mtu}, got {negotiated}")
+                    else:
+                        print(f"MTU request issued for {self.preferred_mtu}")
+                    return
+                except Exception as mtu_error:
+                    print(f"MTU request failed, continuing with default MTU: {mtu_error}")
+                    return
+
+        print("MTU request API not available on this backend; using negotiated default")
+
+    def _resolve_chunk_size(self) -> int:
+        mtu = 23
+        if self.client:
+            mtu = getattr(self.client, "mtu_size", 23) or 23
+        return max(1, mtu - 3)
+
+    async def _write_ble_payload_chunked(self, characteristic_uuid: str, payload: bytes, response: bool = False):
+        if not self.client:
+            raise RuntimeError("Cannot write BLE payload while disconnected")
+
+        chunk_size = self._resolve_chunk_size()
+        chunks = [payload[i:i + chunk_size] for i in range(0, len(payload), chunk_size)] or [b""]
+
+        if self.frame_debug:
+            chunk_sizes = [len(chunk) for chunk in chunks]
+            print(
+                "BLE chunked write: "
+                f"payload={len(payload)} bytes, chunks={len(chunks)}, chunk_sizes={chunk_sizes}"
+            )
+
+        for chunk in chunks:
+            await self.client.write_gatt_char(characteristic_uuid, chunk, response=response)
+            if self.chunk_pacing_s > 0:
+                await asyncio.sleep(self.chunk_pacing_s)
+
+    async def send_framed_payload(self, characteristic_uuid: str, payload: bytes, response: bool = False):
+        frame = make_frame(payload)
+        if self.frame_debug:
+            print(f"Sending BLE frame: payload={len(payload)} bytes frame={len(frame)} bytes")
+        await self._write_ble_payload_chunked(characteristic_uuid, frame, response=response)
+
+    async def _send_serial_command(self, command: str, prefer_framed: bool, allow_legacy_fallback: bool = True):
+        command_bytes = command.encode("utf-8")
+        if prefer_framed:
+            try:
+                await self.send_framed_payload(SERIAL_CHARACTERISTIC_UUID, command_bytes)
+                self.serial_framed_active = True
+                return
+            except Exception as framed_error:
+                if not allow_legacy_fallback:
+                    raise
+                print(f"Framed serial command failed, falling back to legacy write: {framed_error}")
+
+        await self.client.write_gatt_char(SERIAL_CHARACTERISTIC_UUID, command_bytes)
+        self.serial_framed_active = False
+
     async def scan_for_device(self) -> Optional[str]:
         """Scan for ESP32 Toilet device"""
+        if BleakScanner is None:
+            print("Bleak is not installed; BLE scanning unavailable.")
+            return None
         print("Scanning for ESP32 Toilet device...")
         devices = await BleakScanner.discover(timeout=10.0)
         
@@ -143,8 +303,14 @@ class ToiletSystemInterface:
         try:
             self.client = BleakClient(address)
             await self.client.connect()
+            await self._request_preferred_mtu()
             self.connected = True
             print(f"Connected to {DEVICE_NAME} at {address}")
+            print(
+                "BLE transport config: "
+                f"mode={self.serial_transport_mode}, preferred_mtu={self.preferred_mtu}, "
+                f"chunk_pacing_s={self.chunk_pacing_s}, frame_debug={self.frame_debug}"
+            )
             
             # Wait a moment for ESP32 to fully initialize
             await asyncio.sleep(1.0)
@@ -370,10 +536,19 @@ class ToiletSystemInterface:
         
         try:
             print("DEBUG: Sending START_SERIAL command to ESP32")
-            # Send start command to ESP32
-            await self.client.write_gatt_char(SERIAL_CHARACTERISTIC_UUID, b"START_SERIAL")
+            self.serial_parser.reset()
+            self.serial_frames_received = 0
+
+            prefer_framed = self.serial_transport_mode in ("auto", "framed")
+            allow_fallback = self.serial_transport_mode == "auto"
+            await self._send_serial_command(
+                "START_SERIAL",
+                prefer_framed=prefer_framed,
+                allow_legacy_fallback=allow_fallback,
+            )
             self.serial_streaming = True
-            print("Serial streaming started")
+            transport = "framed" if self.serial_framed_active else "legacy"
+            print(f"Serial streaming started ({transport} transport)")
             return True
         except Exception as e:
             print(f"Failed to start serial streaming: {e}")
@@ -385,8 +560,11 @@ class ToiletSystemInterface:
             return False
         
         try:
-            # Send stop command to ESP32
-            await self.client.write_gatt_char(SERIAL_CHARACTERISTIC_UUID, b"STOP_SERIAL")
+            await self._send_serial_command(
+                "STOP_SERIAL",
+                prefer_framed=self.serial_framed_active,
+                allow_legacy_fallback=True,
+            )
             self.serial_streaming = False
             print("Serial streaming stopped")
             return True
@@ -443,8 +621,35 @@ class ToiletSystemInterface:
     def serial_notification_handler(self, sender, data):
         """Handle serial data notifications from ESP32"""
         try:
-            message = data.decode('utf-8')
-            print(f"{message}", end='', flush=True)  # Use end='' to handle newlines from ESP32
+            if not data:
+                return
+
+            payloads: List[bytes] = []
+            should_attempt_framed_parse = self.serial_transport_mode != "legacy"
+            if should_attempt_framed_parse:
+                payloads = self.serial_parser.append(bytes(data))
+
+            if payloads:
+                self.serial_framed_active = True
+                self.serial_frames_received += len(payloads)
+                for payload in payloads:
+                    message = payload.decode("utf-8", errors="replace")
+                    print(f"{message}", end="", flush=True)
+                if self.frame_debug:
+                    print(
+                        "\n[FRAME_DEBUG] "
+                        f"frames_received={self.serial_frames_received} "
+                        f"frames_parsed={self.serial_parser.frames_parsed} "
+                        f"resync_bytes_dropped={self.serial_parser.bytes_dropped_resync} "
+                        f"malformed_frames={self.serial_parser.malformed_frame_count} "
+                        f"buffered_partial={len(self.serial_parser.buffer)}"
+                    )
+                return
+
+            # Legacy path (for older firmware that does not frame serial notifications).
+            if not self.serial_framed_active:
+                message = data.decode("utf-8", errors="replace")
+                print(f"{message}", end="", flush=True)
         except Exception as e:
             print(f"Error decoding serial data: {e}")
             print(f"Raw data: {data}")
@@ -471,6 +676,28 @@ class ToiletSystemInterface:
         except Exception as e:
             print(f"Failed to read DEV mode status: {e}")
             return None
+
+    async def get_flush_count(self) -> Optional[int]:
+        """Read lifetime flush count from firmware (returns int or None on failure)."""
+        response = await self._send_command_and_read_response("GET_FLUSH_COUNT")
+        if not response:
+            print("No response from firmware for GET_FLUSH_COUNT")
+            return None
+        if not response.startswith("FLUSH_COUNT:"):
+            print(f"Unexpected GET_FLUSH_COUNT response: {response}")
+            return None
+
+        count_str = response.split(":", 1)[1].strip()
+        try:
+            flush_count = int(count_str)
+        except ValueError:
+            print(f"Malformed flush count payload: {response}")
+            return None
+
+        if flush_count < 0:
+            print(f"Invalid negative flush count payload: {response}")
+            return None
+        return flush_count
 
     async def set_dev_mode(self, new_mode: int) -> bool:
         """Set firmware DEV mode to 0 or 1."""
@@ -831,8 +1058,9 @@ async def main():
             print("16. HWCFG profile put")
             print("17. HWCFG validate + apply change")
             print("18. HWCFG rollback last good")
+            print("19. Read flush count")
             
-            choice = input("\nEnter your choice (1-18): ").strip()
+            choice = input("\nEnter your choice (1-19): ").strip()
             
             if choice == "1":
                 print("\nReading current parameters...")
@@ -1154,9 +1382,17 @@ async def main():
                     continue
                 ok = await interface.hwcfg_rollback_last_good()
                 print("Rollback succeeded." if ok else "Rollback failed.")
+
+            elif choice == "19":
+                print("\nReading flush count...")
+                flush_count = await interface.get_flush_count()
+                if flush_count is None:
+                    print("Failed to read flush count")
+                else:
+                    print(f"Lifetime flush count: {flush_count}")
             
             else:
-                print("Invalid choice. Please enter 1-18.")
+                print("Invalid choice. Please enter 1-19.")
     
     except KeyboardInterrupt:
         print("\nProgram interrupted by user")
