@@ -86,3 +86,37 @@ Rationale:
 - Firmware must remain resilient even if a third-party or stale client bypasses interface validation.
 - The chosen correction direction prioritizes keeping the requested upper bound while lowering the ON threshold, which preserves process continuity and biases behavior toward safer/lower heating when payloads are malformed.
 - Applying the same normalization at BLE ingest and EEPROM load prevents legacy or corrupted persisted values from violating the minimum gap rule after reboot.
+
+## Hardware matrix history and rollback metadata (on-device, offline)
+
+The hardware matrix stores both current and previous values per component directly on-device (no cloud dependency) so service users can inspect what was installed before an upgrade and support rollback workflows.
+
+Per component, the persisted record should include:
+
+- `current_version`
+- `current_description`
+- `install_date` (ISO 8601 date, `YYYY-MM-DD`)
+- `previous_version`
+- `previous_description`
+- `previous_install_date` (ISO 8601 date, `YYYY-MM-DD`)
+
+Update logic (single component update over BLE):
+
+1. Validate component name and payload bounds.
+2. Read existing component record.
+3. Copy current fields to previous fields:
+   - `previous_version = current_version`
+   - `previous_description = current_description`
+   - `previous_install_date = install_date`
+4. Write new current fields from request:
+   - `current_version = new_version`
+   - `current_description = new_description`
+   - `install_date = new_install_date` (ISO 8601)
+5. Persist and verify write success before ACK.
+
+Rationale:
+
+- Enables offline serviceability: technicians can see pre-upgrade component metadata without network access.
+- Supports practical rollback decisions by preserving immediate historical context on-device.
+- Keeps storage bounded and deterministic by retaining one previous snapshot per component (instead of unbounded history).
+- Provides consistent parsing/sorting across firmware and Python tools by standardizing date format to ISO 8601.
