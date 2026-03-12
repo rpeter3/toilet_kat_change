@@ -8,6 +8,7 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <DualMAX14870MotorShield.h>
+#include <esp_sleep.h>
 
 // Pin definitions (from toilet_kat_change.ino)
 const int heaterPin = 17;
@@ -16,6 +17,7 @@ const int microswitchOpenPin = 15;
 const int m1CurrentPin = 8;
 const int heaterCurrentPin = 12;
 const int thermistorPin = 14;
+const int batteryVoltagePin = 10;  // GPIO10 (VMON) - Battery voltage monitoring
 
 // Motor shield pins
 const uint8_t M1DIR_PIN = 1;
@@ -63,11 +65,13 @@ const float M1_STALL_CURRENT_A = 0.5f;
 const float QC_HEAT_TARGET_C = 80.0f;
 const float QC_COOL_TARGET_C = 60.0f;
 const int HEATER_ADC_THRESHOLD = 200;
+const int BATTERY_SLEEP_THRESHOLD = 10;
 
 // QC state machine
 enum QCStep {
   QC_IDLE,        // Waiting for START_TEST over BLE
   QC_LOCATE,
+  QC_LOCATE_CONFIRM,  // Operator visual inspection after locate
   QC_THERMISTOR,
   QC_HEATER,
   QC_MOTOR,
@@ -86,7 +90,15 @@ QCStep qcStep = QC_IDLE;
 bool qcHalted = false;
 String qcHaltReason = "";
 unsigned long stepStartMs = 0;
+unsigned long lastBatteryCheckMs = 0;
+const unsigned long BATTERY_CHECK_INTERVAL_MS = 1000;
 bool heaterOutputOn = false;
+
+// FLUSH_OPEN sub-phases: 10 cycles of (open→1s→close→0.5s) then final open
+enum FlushOpenPhase { FOP_OPEN, FOP_OPEN_EXTRA_1S, FOP_CLOSE, FOP_CLOSE_EXTRA_500MS, FOP_FINAL };
+FlushOpenPhase flushOpenPhase = FOP_OPEN;
+int flushOpenCycleCount = 0;
+const int FLUSH_OPEN_CYCLES = 10;
 
 void sendSerialToBLE(const String& msg) {
   if (bleConnected && serial_characteristic) {
@@ -130,6 +142,31 @@ float readM1Current() {
   int analogValue = analogRead(m1CurrentPin);
   float voltage = analogValue * (3.3f / 4095.0f);
   return voltage / 2.0f;
+}
+
+float readBatteryVoltage() {
+  int analogValue = analogRead(batteryVoltagePin);
+  float voltage = analogValue * (3.3f / 4095.0f);
+  return voltage * 7.317f;
+}
+
+int getBatteryChargeLevel() {
+  float batteryVoltage = readBatteryVoltage();
+  if (batteryVoltage >= 12.6f) return 100;
+  if (batteryVoltage <= 11.0f) return 0;
+  return (int)((batteryVoltage - 11.0f) / 1.6f * 100.0f);
+}
+
+void enterLowBatterySleep() {
+  motors.setM1Speed(0);
+  motors.setM2Speed(0);
+  setFanSpeed(0);
+  heaterOff();
+  Serial.println("LOW BATTERY: Entering deep sleep until power cycle");
+  SerialBLE_println("LOW BATTERY: Entering deep sleep until power cycle");
+  delay(500);
+  esp_sleep_enable_timer_wakeup(86400ULL * 1000000);
+  esp_deep_sleep_start();
 }
 
 void setFanSpeed(int speed) {
@@ -247,6 +284,7 @@ const char* qcStepName(QCStep s) {
   switch (s) {
     case QC_IDLE: return "IDLE";
     case QC_LOCATE: return "LOCATE";
+    case QC_LOCATE_CONFIRM: return "LOCATE_CONFIRM";
     case QC_THERMISTOR: return "THERMISTOR";
     case QC_HEATER: return "HEATER";
     case QC_MOTOR: return "MOTOR";
@@ -281,9 +319,20 @@ class CharacteristicCallbacks : public BLECharacteristicCallbacks {
       setBleResponse("QC_STATUS:LOCATE");
       locateMotorPos();
       if (qcHalted) return;
-      qcStep = QC_THERMISTOR;
+      qcStep = QC_LOCATE_CONFIRM;
       stepStartMs = millis();
-      SerialBLE_println("QC: Thermistor check...");
+      SerialBLE_println("QC: Locate complete - confirm visual inspection via QC_CONFIRM_LOCATE");
+      return;
+    }
+    if (cmd == "QC_CONFIRM_LOCATE") {
+      if (qcStep == QC_LOCATE_CONFIRM) {
+        qcStep = QC_THERMISTOR;
+        stepStartMs = millis();
+        setBleResponse("QC_CONFIRM_LOCATE_ACK");
+        SerialBLE_println("QC: Locate confirmed, thermistor check...");
+      } else {
+        setBleResponse("QC_ERR:NOT_IN_LOCATE_STEP");
+      }
       return;
     }
     if (cmd == "QC_CONFIRM_FEED") {
@@ -291,9 +340,9 @@ class CharacteristicCallbacks : public BLECharacteristicCallbacks {
         motors.setM2Speed(0);
         qcStep = QC_FAN_WAIT;
         stepStartMs = millis();
-        setFanSpeed(-400);
+        setFanSpeed(400);
         setBleResponse("QC_CONFIRM_FEED_ACK");
-        SerialBLE_println("QC: Feed confirmed, starting fan reverse");
+        SerialBLE_println("QC: Feed confirmed, starting fan forward");
       } else {
         setBleResponse("QC_ERR:NOT_IN_FEED_STEP");
       }
@@ -314,7 +363,14 @@ class CharacteristicCallbacks : public BLECharacteristicCallbacks {
     }
     if (cmd == "QC_STATUS") {
       String rsp = String("QC_STATUS:") + qcStepName(qcStep);
+      if (qcStep == QC_FLUSH_HEAT || qcStep == QC_FLUSH_COOL) {
+        float temp = readTemperature();
+        rsp += ",TEMP:";
+        rsp += (int)temp;
+      }
       if (qcHalted) rsp += ",HALTED:" + qcHaltReason;
+      rsp += ",BAT:";
+      rsp += getBatteryChargeLevel();
       setBleResponse(rsp);
       return;
     }
@@ -326,6 +382,37 @@ class CharacteristicCallbacks : public BLECharacteristicCallbacks {
     if (cmd == "STOP_SERIAL") {
       serialStreamingEnabled = false;
       setBleResponse("SERIAL_OFF");
+      return;
+    }
+    if (cmd == "RESET") {
+      motors.setM1Speed(0);
+      motors.setM2Speed(0);
+      setFanSpeed(0);
+      heaterOff();
+      qcStep = QC_IDLE;
+      qcHalted = false;
+      qcHaltReason = "";
+      flushOpenPhase = FOP_OPEN;
+      flushOpenCycleCount = 0;
+      setBleResponse("QC_READY,BAT:" + String(getBatteryChargeLevel()));
+      SerialBLE_println("QC: Reset to IDLE");
+      return;
+    }
+    if (cmd == "M1_CLOSE_1S") {
+      if (qcStep != QC_IDLE) {
+        setBleResponse("QC_ERR:TEST_IN_PROGRESS");
+        return;
+      }
+      if (digitalRead(microswitchClosePin) == LOW) {
+        setBleResponse("QC_ERR:ALREADY_CLOSED");
+        return;
+      }
+      motors.enableDrivers();
+      delay(100);
+      motors.setM1Speed(400);
+      delay(1000);
+      motors.setM1Speed(0);
+      SerialBLE_println("QC: M1 close 1s done");
       return;
     }
     setBleResponse("CMD_ERR:UNKNOWN");
@@ -385,6 +472,14 @@ void setup() {
   delay(500);
   Serial.println("QC_TEST starting");
 
+  pinMode(batteryVoltagePin, INPUT);
+  if (getBatteryChargeLevel() < BATTERY_SLEEP_THRESHOLD) {
+    Serial.println("LOW BATTERY: Entering deep sleep until power cycle");
+    delay(500);
+    esp_sleep_enable_timer_wakeup(86400ULL * 1000000);
+    esp_deep_sleep_start();
+  }
+
   pinMode(heaterPin, OUTPUT);
   pinMode(microswitchClosePin, INPUT_PULLUP);
   pinMode(microswitchOpenPin, INPUT_PULLUP);
@@ -405,11 +500,20 @@ void setup() {
   setupBLE();
 
   qcStep = QC_IDLE;
-  setBleResponse("QC_READY");
+  lastBatteryCheckMs = millis();
+  setBleResponse("QC_READY,BAT:" + String(getBatteryChargeLevel()));
   Serial.println("QC_TEST: Waiting for START_TEST over BLE");
 }
 
 void loop() {
+  unsigned long now = millis();
+  if (now - lastBatteryCheckMs >= BATTERY_CHECK_INTERVAL_MS) {
+    lastBatteryCheckMs = now;
+    if (getBatteryChargeLevel() < BATTERY_SLEEP_THRESHOLD) {
+      enterLowBatterySleep();
+    }
+  }
+
   if (qcHalted) {
     delay(100);
     return;
@@ -419,9 +523,14 @@ void loop() {
     return;
   }
 
-  unsigned long now = millis();
-
   switch (qcStep) {
+    case QC_LOCATE_CONFIRM: {
+      if (now - stepStartMs > TIMEOUT_MS) {
+        haltQC("LOCATE_CONFIRM_TIMEOUT");
+      }
+      break;
+    }
+
     case QC_THERMISTOR: {
       float r = readMainThermistorResistanceOhms();
       if (r > HARDWARE_DISCONNECT_RESISTANCE_OHMS) {
@@ -515,21 +624,82 @@ void loop() {
       if (temp <= QC_COOL_TARGET_C) {
         qcStep = QC_FLUSH_OPEN;
         stepStartMs = now;
+        flushOpenPhase = FOP_OPEN;
+        flushOpenCycleCount = 0;
         motors.setM1Speed(-400);
-        SerialBLE_println("QC: Opening");
+        SerialBLE_println("QC: FLUSH_OPEN - 10 cycles then final open");
       }
       break;
     }
 
     case QC_FLUSH_OPEN: {
-      if (digitalRead(microswitchOpenPin) == LOW) {
-        motors.setM1Speed(0);
-        qcStep = QC_DONE;
-        SerialBLE_println("QC: DONE - all tests passed");
-        setBleResponse("QC_DONE");
-      } else if (now - stepStartMs > TIMEOUT_MS) {
-        motors.setM1Speed(0);
-        haltQC("FLUSH_OPEN_TIMEOUT");
+      switch (flushOpenPhase) {
+        case FOP_OPEN: {
+          // Open until close switch releases (we've left closed position)
+          if (digitalRead(microswitchClosePin) == HIGH) {
+            motors.setM1Speed(0);
+            flushOpenPhase = FOP_OPEN_EXTRA_1S;
+            stepStartMs = now;
+            motors.setM1Speed(-400);
+          } else if (now - stepStartMs > TIMEOUT_MS) {
+            motors.setM1Speed(0);
+            haltQC("FLUSH_OPEN_TIMEOUT");
+          }
+          break;
+        }
+        case FOP_OPEN_EXTRA_1S: {
+          motors.setM1Speed(-400);
+          if (now - stepStartMs >= 1000) {
+            motors.setM1Speed(0);
+            flushOpenPhase = FOP_CLOSE;
+            stepStartMs = now;
+            motors.setM1Speed(400);
+            SerialBLE_println("QC: Cycle open done, closing");
+          }
+          break;
+        }
+        case FOP_CLOSE: {
+          if (digitalRead(microswitchClosePin) == LOW && readM1Current() > M1_STALL_CURRENT_A) {
+            motors.setM1Speed(0);
+            flushOpenPhase = FOP_CLOSE_EXTRA_500MS;
+            stepStartMs = now;
+            motors.setM1Speed(400);
+          } else if (now - stepStartMs > TIMEOUT_MS) {
+            motors.setM1Speed(0);
+            haltQC("FLUSH_OPEN_TIMEOUT");
+          }
+          break;
+        }
+        case FOP_CLOSE_EXTRA_500MS: {
+          motors.setM1Speed(400);
+          if (now - stepStartMs >= 500) {
+            motors.setM1Speed(0);
+            flushOpenCycleCount++;
+            if (flushOpenCycleCount >= FLUSH_OPEN_CYCLES) {
+              flushOpenPhase = FOP_FINAL;
+              stepStartMs = now;
+              motors.setM1Speed(-400);
+              SerialBLE_println("QC: 10 cycles done, final open");
+            } else {
+              flushOpenPhase = FOP_OPEN;
+              stepStartMs = now;
+              motors.setM1Speed(-400);
+            }
+          }
+          break;
+        }
+        case FOP_FINAL: {
+          if (digitalRead(microswitchOpenPin) == LOW) {
+            motors.setM1Speed(0);
+            qcStep = QC_DONE;
+            SerialBLE_println("QC: DONE - all tests passed");
+            setBleResponse("QC_DONE");
+          } else if (now - stepStartMs > TIMEOUT_MS) {
+            motors.setM1Speed(0);
+            haltQC("FLUSH_OPEN_TIMEOUT");
+          }
+          break;
+        }
       }
       break;
     }
