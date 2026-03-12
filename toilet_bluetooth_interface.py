@@ -22,6 +22,7 @@ except ImportError:
 # ESP32 BLE Configuration (from toilet_kat_change.ino)
 SERVICE_UUID = "5636340f-afc7-47b1-b0a8-15bc9d7d29a5"
 CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea0"
+RESPONSE_CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea4"
 SERIAL_CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea1"
 DEVICE_NAME = "ESP32 Toilet"
 FRAME_START_BYTE = 0x7E
@@ -677,6 +678,45 @@ class ToiletSystemInterface:
             print(f"Failed to read DEV mode status: {e}")
             return None
 
+    async def get_error_logs(self) -> Optional[str]:
+        """Retrieve persistent error logs from firmware via chunked GET_LOGS.
+        Returns full log text or None on failure. No trust handshake required."""
+        if not self.connected:
+            print("Not connected to device")
+            return None
+        try:
+            chunks: List[str] = []
+            offset = 0
+            for _ in range(256):  # Safety limit
+                command = f"GET_LOGS:{offset}" if offset > 0 else "GET_LOGS"
+                await self.client.write_gatt_char(CHARACTERISTIC_UUID, command.encode("utf-8"))
+                await asyncio.sleep(0.15)
+                data = await self.client.read_gatt_char(RESPONSE_CHARACTERISTIC_UUID)
+                response = data.decode("utf-8", errors="replace").strip()
+                if response == "LOGS_END":
+                    break
+                if response.startswith("LOGS:"):
+                    parts = response.split(":", 3)  # max 4 parts: LOGS, offset, length, chunk_data
+                    if len(parts) >= 4:
+                        try:
+                            chunk_offset = int(parts[1])
+                            chunk_len = int(parts[2])
+                            chunk_data = parts[3]
+                            chunks.append(chunk_data)
+                            offset = chunk_offset + chunk_len
+                            if chunk_len < 450:
+                                break
+                        except (ValueError, IndexError):
+                            print(f"Malformed LOGS response: {response[:80]}...")
+                            break
+                else:
+                    print(f"Unexpected GET_LOGS response: {response[:80]}...")
+                    break
+            return "".join(chunks) if chunks else ""
+        except Exception as e:
+            print(f"Failed to get error logs: {e}")
+            return None
+
     async def get_flush_count(self) -> Optional[int]:
         """Read lifetime flush count from firmware (returns int or None on failure)."""
         response = await self._send_command_and_read_response("GET_FLUSH_COUNT")
@@ -1059,8 +1099,9 @@ async def main():
             print("17. HWCFG validate + apply change")
             print("18. HWCFG rollback last good")
             print("19. Read flush count")
+            print("20. Get error logs")
             
-            choice = input("\nEnter your choice (1-19): ").strip()
+            choice = input("\nEnter your choice (1-20): ").strip()
             
             if choice == "1":
                 print("\nReading current parameters...")
@@ -1390,9 +1431,30 @@ async def main():
                     print("Failed to read flush count")
                 else:
                     print(f"Lifetime flush count: {flush_count}")
+
+            elif choice == "20":
+                print("\nRetrieving error logs...")
+                logs = await interface.get_error_logs()
+                if logs is None:
+                    print("Failed to get error logs")
+                elif logs:
+                    print("\n--- Error Logs ---")
+                    print(logs)
+                    print("--- End ---")
+                    save = input("Save logs to file? (y/N): ").strip().lower()
+                    if save == "y":
+                        filename = input("Filename (default: error_logs.txt): ").strip() or "error_logs.txt"
+                        try:
+                            with open(filename, "w") as f:
+                                f.write(logs)
+                            print(f"Saved to {filename}")
+                        except Exception as e:
+                            print(f"Failed to save: {e}")
+                else:
+                    print("No error logs (empty)")
             
             else:
-                print("Invalid choice. Please enter 1-19.")
+                print("Invalid choice. Please enter 1-20.")
     
     except KeyboardInterrupt:
         print("\nProgram interrupted by user")

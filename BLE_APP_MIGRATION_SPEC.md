@@ -34,11 +34,11 @@ Now:
 
 1. **Command channel (`...fea0`)**
    - Client writes command strings only.
-   - Examples: `TRUST_START`, `TRUST_STATUS`, `TRUST_CANCEL`, `GET_DEV_MODE`, `GET_FLUSH_COUNT`, `SET_DEV_MODE:<0|1>`, `ENABLE_OTA`
+   - Examples: `TRUST_START`, `TRUST_STATUS`, `TRUST_CANCEL`, `GET_DEV_MODE`, `GET_FLUSH_COUNT`, `SET_DEV_MODE:<0|1>`, `ENABLE_OTA`, `GET_LOGS`, `GET_LOGS:<offset>`
 
 2. **Response channel (`...fea4`)**
    - Client reads command responses only.
-   - Examples: `TRUST_WAITING`, `TRUST_CONFIRMED`, `TRUST_TIMEOUT`, `TRUST_CANCEL_ACK`, `AUTH_REQUIRED`, `DEV_MODE:0`, `FLUSH_COUNT:<n>`, `SET_DEV_MODE_ACK:1`, etc.
+   - Examples: `TRUST_WAITING`, `TRUST_CONFIRMED`, `TRUST_TIMEOUT`, `TRUST_CANCEL_ACK`, `AUTH_REQUIRED`, `DEV_MODE:0`, `FLUSH_COUNT:<n>`, `SET_DEV_MODE_ACK:1`, `LOGS:<offset>:<length>:<data>`, `LOGS_END`, etc.
 
 3. **Parameter read channel (`...fea5`)**
    - Client reads current parameter snapshot only.
@@ -81,6 +81,17 @@ Expected responses:
 - `PARAM_UPDATE_BLOCKED_FLUSH` -> firmware blocked write during flush
 - `PARAM_WRITE_ERR:BAD_FORMAT` -> malformed payload
 - any other response -> treat as failure and report raw response
+
+---
+
+## Error Log Retrieval (GET_LOGS)
+
+Command `GET_LOGS` retrieves persistent error logs for diagnostics. No trust handshake required.
+
+- **Command**: `GET_LOGS` or `GET_LOGS:<offset>`
+- **Response** (chunked): `LOGS:<offset>:<length>:<data>` or `LOGS_END`
+- **Protocol**: Client sends `GET_LOGS` (or `GET_LOGS:0`), reads response. If response starts with `LOGS:`, parse offset and length, append data to buffer, then send `GET_LOGS:<next_offset>` where next_offset = offset + length. Repeat until response is `LOGS_END`.
+- **Chunk size**: Up to 450 bytes per chunk. Response format `LOGS:offset:length:data` stays under 512 bytes total.
 
 ---
 
