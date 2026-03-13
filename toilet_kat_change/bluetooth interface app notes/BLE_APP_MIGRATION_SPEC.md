@@ -30,15 +30,28 @@ Now:
 
 ---
 
+## Payload Format (No Framing Required)
+
+This spec does **not** require framed payloads (e.g. `0x7E` + length + payload). All channels use plain UTF-8 text:
+
+- **Commands**: Plain strings written to `...fea0`
+- **Responses**: Plain strings read from `...fea4`
+- **Parameters**: Plain 22-value CSV on `...fea5` / `...fea6`
+- **Serial stream** (`...fea1`): Firmware sends raw text notifications; client writes `START_SERIAL` / `STOP_SERIAL` as plain strings (or optionally framed for compatibility with alternate implementations)
+
+Client implementations may use payload chunking to respect BLE MTU limits when writing large payloads, but the protocol itself is plain text. See Design_Decision_Rationale.md for why the Python client chunks writes.
+
+---
+
 ## Channel Responsibilities
 
 1. **Command channel (`...fea0`)**
    - Client writes command strings only.
-   - Examples: `TRUST_START`, `TRUST_STATUS`, `TRUST_CANCEL`, `GET_DEV_MODE`, `GET_FLUSH_COUNT`, `SET_DEV_MODE:<0|1>`, `ENABLE_OTA`
+   - Examples: `TRUST_START`, `TRUST_STATUS`, `TRUST_CANCEL`, `GET_DEV_MODE`, `GET_FLUSH_COUNT`, `SET_DEV_MODE:<0|1>`, `ENABLE_OTA`, `GET_LOGS`, `GET_LOGS:<offset>`
 
 2. **Response channel (`...fea4`)**
    - Client reads command responses only.
-   - Examples: `TRUST_WAITING`, `TRUST_CONFIRMED`, `TRUST_TIMEOUT`, `TRUST_CANCEL_ACK`, `AUTH_REQUIRED`, `DEV_MODE:0`, `FLUSH_COUNT:<n>`, `SET_DEV_MODE_ACK:1`, etc.
+   - Examples: `TRUST_WAITING`, `TRUST_CONFIRMED`, `TRUST_TIMEOUT`, `TRUST_CANCEL_ACK`, `AUTH_REQUIRED`, `DEV_MODE:0`, `FLUSH_COUNT:<n>`, `SET_DEV_MODE_ACK:1`, `LOGS:<offset>:<length>:<data>`, `LOGS_END`, etc.
 
 3. **Parameter read channel (`...fea5`)**
    - Client reads current parameter snapshot only.
@@ -84,6 +97,43 @@ Expected responses:
 
 ---
 
+## Error Log Retrieval (GET_LOGS)
+
+Command `GET_LOGS` retrieves persistent error logs for diagnostics. No trust handshake required (works even when trust flow cannot be completed, e.g. broken flush button).
+
+### Protocol
+
+- **Command**: `GET_LOGS` or `GET_LOGS:<offset>`
+- **Response** (chunked): `LOGS:<offset>:<length>:<data>` or `LOGS_END`
+- **Flow**: Client sends `GET_LOGS` (or `GET_LOGS:0`), reads response from response channel (`...fea4`). If response starts with `LOGS:`, parse offset and length, append data to buffer, then send `GET_LOGS:<next_offset>` where next_offset = offset + length. Repeat until response is `LOGS_END`.
+- **Chunk size**: Up to 450 bytes per chunk. Response format `LOGS:offset:length:data` stays under 512 bytes total.
+
+### Log format (per line)
+
+Each line is CSV: `type,timestamp,code,msg[,context]`
+
+- **type**: `reset` | `runtime` | `eeprom` | `ota` | `mcp`
+- **timestamp**: millis at log time
+- **code**: numeric (0–7 for runtime; 0 for others)
+- **msg**: short string (e.g. `panic`, `motor_timeout`, `low_battery`, `MCP_UNAVAILABLE`)
+- **context** (optional): `,step=N,cut=N,feed=N,bat=X,temp=X,m1A=X,heaterA=X,fan=off|forward|reverse`
+
+### Log types
+
+| type    | When logged                                      |
+|---------|---------------------------------------------------|
+| reset   | Unexpected boot (panic, WDT, brownout, SDIO)     |
+| runtime | Motor timeout (1), low battery (2), heater overheat (3), motor fault (4), heater current fail (5), heater max wall (6) |
+| eeprom  | EEPROM invalid (7) with reason string            |
+| ota     | OTA update failure with reason                   |
+| mcp     | MCP23017 I2C expander init failed                |
+
+### App use case
+
+Use for "Export logs" / "Get support" flows: retrieve full log, concatenate chunks, then share as text (email, ticket, etc.).
+
+---
+
 ## Trust Handshake (Unchanged Commands, New Response Path)
 
 Use existing trust commands on command channel:
@@ -118,11 +168,13 @@ Recommended timeout remains 60s.
 4. Refactor parameter write API to write `...fea6` + read ack from `...fea4`.
 5. Add strict parser for 22-float parameter payload.
 6. Update reconnect flow to read current params from `...fea5` after trust confirmation.
-7. Update tests for:
+7. Add GET_LOGS flow for "Export logs" / "Get support": chunked retrieval, concatenate, present/share as text.
+8. Update tests for:
    - trust flow
    - parameter write/read persistence across reconnect
    - auth-required path
    - malformed/unknown response handling
+   - GET_LOGS chunked retrieval and LOGS_END handling
 
 ---
 

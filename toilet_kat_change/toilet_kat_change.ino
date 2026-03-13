@@ -13,7 +13,14 @@
 #include <driver/rtc_io.h> // RTC GPIO for wake pin pull-up in deep sleep
 #include <driver/gpio.h>   // GPIO hold during deep sleep (fan PWM pin)
 #include <mbedtls/md5.h> // Include for MD5 validation
+#include <SPIFFS.h>
 #define LED_PHASE_COUNT 5
+
+// Error log (SPIFFS, bounded, BLE-retrievable)
+#define LOG_FILE "/logs/errors.txt"
+#define MAX_LOG_SIZE 8192
+#define LOG_CHUNK_SIZE 450
+#define LOG_LINE_MAX_LEN 200
 //########################################################################
 ///THIS IS IN THE BLE UPDATED FOLDER FROM FIVERR
 //########################################################################
@@ -44,15 +51,26 @@ bool mcpInitialized = false;
 unsigned long lastMcpUnavailableLogMillis = 0;
 const unsigned long MCP_UNAVAILABLE_LOG_INTERVAL_MS = 5000;
 
+int lastFanState = 0;  // 0=off, 1=forward, -1=reverse (for error log context)
+bool errorLogInitialized = false;
+
 #define SERVICE_UUID "5636340f-afc7-47b1-b0a8-15bc9d7d29a5"
 #define CHARACTERISTIC_UUID "c327b077-560f-46a1-8f35-b4ab0332fea0"
 #define SERIAL_CHARACTERISTIC_UUID "c327b077-560f-46a1-8f35-b4ab0332fea1"
+#define BLE_FRAME_START_BYTE 0x7E
+#define BLE_FRAME_HEADER_SIZE 3
 #define VERSION_CHARACTERISTIC_UUID "c327b077-560f-46a1-8f35-b4ab0332fea2"
 #define UPDATE_SERVICE_UUID "5636340f-afc7-47b1-b0a8-15bcb9d7d29a6"
 #define UPDATE_CHARACTERISTIC_UUID "c327b077-560f-46a1-8f35-b4ab0332fea3"
+#define RESPONSE_CHARACTERISTIC_UUID "c327b077-560f-46a1-8f35-b4ab0332fea4"
+#define PARAM_READ_CHARACTERISTIC_UUID "c327b077-560f-46a1-8f35-b4ab0332fea5"
+#define PARAM_WRITE_CHARACTERISTIC_UUID "c327b077-560f-46a1-8f35-b4ab0332fea6"
 
 // BLE Server global variables
 BLECharacteristic * blue_characteristic;
+BLECharacteristic * response_characteristic;
+BLECharacteristic * param_read_characteristic;
+BLECharacteristic * param_write_characteristic;
 BLECharacteristic * serial_characteristic;
 BLECharacteristic * version_characteristic;
 BLECharacteristic * update_characteristic;
@@ -60,6 +78,24 @@ BLEServer * blue_server;
 BLEService * update_service;
 bool is_device_connected, old_device_connect = false;
 bool serial_streaming_enabled = false;
+
+// Trust handshake state (BLE_APP_MIGRATION_SPEC, BLE_HANDSHAKE_INTERFACE_SPEC)
+enum TrustState {
+  TRUST_STATE_UNTRUSTED = 0,
+  TRUST_STATE_WAITING = 1,
+  TRUST_STATE_TRUSTED = 2,
+  TRUST_STATE_TIMEOUT = 3
+};
+static TrustState g_trustState = TRUST_STATE_UNTRUSTED;
+static unsigned long g_trustStartMs = 0;
+static const unsigned long TRUST_TIMEOUT_MS = 60000;  // 60s per spec
+
+void resetTrustState();
+void beginTrustWaiting();
+void onTrustConfirmedByFlushButton();
+void updateTrustTimeout();
+bool isTrustedConnection();
+void trustDoubleBeep();
 
 // EEPROM configuration
 #define EEPROM_SIZE 512
@@ -153,6 +189,8 @@ void sendSerialToBLE(const String& message);
 void sendSerialToBLE(float value);
 void sendSerialToBLE(int value);
 void sendSerialToBLE(unsigned long value);
+void writeResponseToChannel(const String& response);
+String buildParamCSV();
 String buildMotorFaultStatusSnapshot();
 void saveParametersToEEPROM();
 void loadParametersFromEEPROM();
@@ -171,6 +209,14 @@ bool lookupHardwareComponentId(const String& componentName, HardwareComponentId&
 bool initializeHWCFGStore();
 String handleHWCFGCommand(const String& cmd);
 void enterEEPROMInvalidErrorState(const char* reason);
+void initErrorLog();
+void logError(const char* type, int code, const char* msg);
+void logError(const char* type, int code, const char* msg, bool includeContext);
+String readLogChunk(size_t offset);
+float readBatteryVoltage();
+float readTemperature();
+float readM1Current();
+float readHeaterCurrent();
 void maintainEEPROMErrorIndicator();
 void startEEPROMWakeAlert();
 bool prepareForOTA();
@@ -551,44 +597,74 @@ bool enforceHeaterToleranceGap(const char* sourceTag, bool notifyBle) {
   return true;
 }
 
+// Trust handshake helpers (BLE_HANDSHAKE_INTERFACE_SPEC)
+void trustDoubleBeep() {
+  digitalWrite(buzzerPin, HIGH);
+  delay(70);
+  digitalWrite(buzzerPin, LOW);
+  delay(70);
+  digitalWrite(buzzerPin, HIGH);
+  delay(70);
+  digitalWrite(buzzerPin, LOW);
+}
+
+void resetTrustState() {
+  g_trustState = TRUST_STATE_UNTRUSTED;
+  g_trustStartMs = 0;
+  for (int i = 0; i < totalLeds; i++) {
+    mcp_digitalWrite(ledPins[i], LOW);
+  }
+}
+
+void beginTrustWaiting() {
+  g_trustState = TRUST_STATE_WAITING;
+  g_trustStartMs = millis();
+  slowCircleLedIndex = 0;
+}
+
+void onTrustConfirmedByFlushButton() {
+  if (g_trustState != TRUST_STATE_WAITING) return;
+  g_trustState = TRUST_STATE_TRUSTED;
+  for (int i = 0; i < totalLeds; i++) {
+    mcp_digitalWrite(ledPins[i], LOW);
+  }
+  trustDoubleBeep();
+}
+
+void updateTrustTimeout() {
+  if (g_trustState != TRUST_STATE_WAITING) return;
+  if ((millis() - g_trustStartMs) >= TRUST_TIMEOUT_MS) {
+    g_trustState = TRUST_STATE_TIMEOUT;
+    for (int i = 0; i < totalLeds; i++) {
+      mcp_digitalWrite(ledPins[i], LOW);
+    }
+  }
+}
+
+bool isTrustedConnection() {
+  return g_trustState == TRUST_STATE_TRUSTED;
+}
+
 // Setup BLE callbacks called onConnect and onDisconnect
 class server_callbacks: public BLEServerCallbacks {
   void onConnect(BLEServer * blue_server) {
     is_device_connected = true;
+    resetTrustState();
     Serial.println("Device connected!");
     sendSerialToBLE("BLE Device Connected!");
     
-    // Update characteristic with current parameters (22 BLE values; thermistorResistance, r2, r4 are constants)
-    String paramString = String(batteryThreshold) + "," +
-                        String(K) + "," +
-                        String(F) + "," +
-                        String(T) + "," +
-                        String(backupTime) + "," +
-                        String(fanDuration) + "," +
-                        String(H) + "," +
-                        String(continueFeeder) + "," +
-                        String(maxOpeningTime) + "," +
-                        String(typicalOpeningTime) + "," +
-                        String(MOTOR_CUT_TIME) + "," +
-                        String(CUT_MODE_HEAT_TIME) + "," +
-                        String(postCoolingFanDuration) + "," +
-                        String(preFeedFan) + "," +
-                        String(fanReverseTime) + "," +
-                        String(fanReverseStartTime) + "," +
-                        String(backupTimeAfterReopen) + "," +
-                        String(CUT_MODE_TEMP) + "," +
-                        String(heaterLowerToleranceC) + "," +
-                        String(heaterUpperToleranceC) + "," +
-                        String(COOL_OPEN_TEMP_C) + "," +
-                        String(MAX_COOL_WAIT_S);
-    blue_characteristic->setValue(paramString.c_str());
-    Serial.printf("Characteristic updated on connect: %s\n", paramString.c_str());
-    SerialBLE_println("Characteristic updated on connect");
+    // Update param read characteristic with current parameters
+    if (param_read_characteristic) {
+      param_read_characteristic->setValue(buildParamCSV().c_str());
+      Serial.printf("Param read characteristic updated on connect\n");
+      SerialBLE_println("Characteristic updated on connect");
+    }
   }
 
   void onDisconnect(BLEServer * blue_server) {
     is_device_connected = false;
     serial_streaming_enabled = false;
+    resetTrustState();
     Serial.println("Device disconnected!");
     if (isFlushing) {
       Serial.println("Parameter update on disconnect blocked - flush in progress");
@@ -596,28 +672,24 @@ class server_callbacks: public BLEServerCallbacks {
       return;
     }
 
-    // Receive message
-    int message_length = blue_characteristic->getLength();
-    Serial.printf("Length of message: %d\n", message_length);
-    unsigned char* message = blue_characteristic->getData();
-    Serial.printf("Message: ");
-    for (int i = 0; i < message_length; i++) {
-      Serial.printf("%c", message[i]);
-    }
+    // Apply any param write from param_write characteristic (legacy fallback)
+    if (!param_write_characteristic) return;
+    int message_length = param_write_characteristic->getLength();
+    if (message_length <= 0) return;
+    char buf[512];
+    int copyLen = (message_length < (int)sizeof(buf) - 1) ? message_length : (int)sizeof(buf) - 1;
+    memcpy(buf, param_write_characteristic->getData(), copyLen);
+    buf[copyLen] = '\0';
 
-    // Parse BLE comma-separated float values (20 legacy or 22 current; thermistorResistance, r2, r4 are constants)
-    char * parameters_string = strtok((char*) message, ",");
+    // Parse BLE comma-separated float values (20 legacy or 22 current)
+    char * parameters_string = strtok(buf, ",");
     float parameters_list[100];
     int k = 0;
-    while (parameters_string != NULL) {
+    while (parameters_string != NULL && k < 100) {
       char *endptr;
       parameters_list[k] = strtof(parameters_string, &endptr);
-      Serial.printf("\n%f", parameters_list[k]);
       parameters_string = strtok(NULL, ",");
       k++;
-    }
-    for (int j = 0; j < k; j++) {
-      Serial.printf("\n%f", parameters_list[j]);
     }
     if (k >= 20) {
       batteryThreshold = (int)parameters_list[0];
@@ -699,275 +771,289 @@ class update_characteristic_callbacks: public BLECharacteristicCallbacks {
   }
 };
 
-// BLE Characteristic callback for immediate parameter updates
-class characteristic_callbacks: public BLECharacteristicCallbacks {
+// Command channel (fea0): WRITE only. Routes all responses to response channel (fea4).
+class command_characteristic_callbacks: public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic *pCharacteristic) {
+    if (pCharacteristic->getUUID().toString() != CHARACTERISTIC_UUID) return;
+    int message_length = pCharacteristic->getLength();
+    if (message_length <= 0) return;
+    unsigned char* message = pCharacteristic->getData();
+    String cmd = String((char*)message, (unsigned int)message_length);
+    cmd.trim();
+    
+    if (cmd.startsWith("HWCFG_")) {
+      if (!isTrustedConnection() && (cmd.startsWith("HWCFG_APPLY_CHANGE:") || cmd == "HWCFG_ROLLBACK_LAST_GOOD" || cmd.startsWith("HWCFG_PROFILE_PUT:"))) {
+        writeResponseToChannel("AUTH_REQUIRED");
+        Serial.println("HWCFG command blocked - trust handshake required");
+        return;
+      }
+      String hwcfgResponse = handleHWCFGCommand(cmd);
+      writeResponseToChannel(hwcfgResponse);
+      Serial.printf("Processed HWCFG command '%s' -> '%s'\n", cmd.c_str(), hwcfgResponse.c_str());
+      sendSerialToBLE("Processed HWCFG command");
+      return;
+    }
+    if (cmd == "ENABLE_OTA") {
+      Serial.println("Received ENABLE_OTA command via BLE");
+      sendSerialToBLE("Received ENABLE_OTA command via BLE");
+      enableOTA();
+      writeResponseToChannel("ENABLE_OTA_ACK");
+      return;
+    }
+    if (cmd == "GET_DEV_MODE") {
+      String statusMessage = buildDevModeStatusMessage();
+      writeResponseToChannel(statusMessage);
+      Serial.printf("Processed GET_DEV_MODE, returned %s\n", statusMessage.c_str());
+      sendSerialToBLE("Processed GET_DEV_MODE");
+      return;
+    }
+    if (cmd == "GET_FLUSH_COUNT") {
+      String flushCountMessage = String("FLUSH_COUNT:") + String((unsigned long)lifetimeFlushCount);
+      writeResponseToChannel(flushCountMessage);
+      Serial.printf("Processed GET_FLUSH_COUNT, returned %s\n", flushCountMessage.c_str());
+      sendSerialToBLE("Processed GET_FLUSH_COUNT");
+      return;
+    }
+    if (cmd == "GET_HW_MATRIX") {
+      if (!hardwareMatrixInitialized && !initializeHardwareMatrix()) {
+        writeResponseToChannel("HW_MATRIX_ERR:INIT_FAIL");
+        sendSerialToBLE("GET_HW_MATRIX failed: init");
+        return;
+      }
+      String response = getHardwareComponentsListString();
+      writeResponseToChannel(response);
+      Serial.printf("Processed GET_HW_MATRIX, returned %s\n", response.c_str());
+      sendSerialToBLE("Processed GET_HW_MATRIX");
+      return;
+    }
+    if (cmd.startsWith("GET_HW_COMPONENT:")) {
+      if (!hardwareMatrixInitialized && !initializeHardwareMatrix()) {
+        writeResponseToChannel("HW_COMPONENT_ERR:INIT_FAIL");
+        sendSerialToBLE("GET_HW_COMPONENT failed: init");
+        return;
+      }
+      String componentName = cmd.substring(String("GET_HW_COMPONENT:").length());
+      componentName.trim();
+      HardwareComponentId componentId;
+      if (!lookupHardwareComponentId(componentName, componentId)) {
+        writeResponseToChannel("HW_COMPONENT_ERR:UNKNOWN_COMPONENT");
+        Serial.printf("Rejected GET_HW_COMPONENT with unknown component: %s\n", componentName.c_str());
+        sendSerialToBLE("GET_HW_COMPONENT rejected: unknown component");
+        return;
+      }
+      String response = getHardwareComponentString(componentId);
+      writeResponseToChannel(response);
+      sendSerialToBLE("Processed GET_HW_COMPONENT");
+      return;
+    }
+    if (cmd.startsWith("SET_HW_COMPONENT:")) {
+      if (!isTrustedConnection()) {
+        writeResponseToChannel("AUTH_REQUIRED");
+        Serial.println("SET_HW_COMPONENT blocked - trust handshake required");
+        return;
+      }
+      String payload = cmd.substring(String("SET_HW_COMPONENT:").length());
+      int firstSep = payload.indexOf(':');
+      int secondSep = (firstSep >= 0) ? payload.indexOf(':', firstSep + 1) : -1;
+      int thirdSep = (secondSep >= 0) ? payload.indexOf(':', secondSep + 1) : -1;
+      if (firstSep < 0 || secondSep < 0 || thirdSep < 0) {
+        writeResponseToChannel("SET_HW_COMPONENT_ERR:BAD_FORMAT");
+        sendSerialToBLE("SET_HW_COMPONENT rejected: bad format");
+        return;
+      }
+      String componentName = payload.substring(0, firstSep);
+      String version = payload.substring(firstSep + 1, secondSep);
+      String installDate = payload.substring(secondSep + 1, thirdSep);
+      String description = payload.substring(thirdSep + 1);
+      componentName.trim();
+      String errorCode;
+      if (!setHardwareComponentByName(componentName, version, installDate, description, errorCode)) {
+        String errResponse = String("SET_HW_COMPONENT_ERR:") + errorCode;
+        writeResponseToChannel(errResponse);
+        Serial.printf("SET_HW_COMPONENT failed for %s: %s\n", componentName.c_str(), errorCode.c_str());
+        sendSerialToBLE("SET_HW_COMPONENT failed");
+        return;
+      }
+      String ack = String("SET_HW_COMPONENT_ACK:") + componentName;
+      writeResponseToChannel(ack);
+      sendSerialToBLE("SET_HW_COMPONENT applied");
+      return;
+    }
+    updateTrustTimeout();
+    if (cmd == "TRUST_START") {
+      if (g_trustState == TRUST_STATE_TRUSTED) {
+        writeResponseToChannel("TRUST_CONFIRMED");
+        return;
+      }
+      beginTrustWaiting();
+      writeResponseToChannel("TRUST_WAITING");
+      return;
+    }
+    if (cmd == "TRUST_STATUS") {
+      if (g_trustState == TRUST_STATE_TRUSTED) {
+        writeResponseToChannel("TRUST_CONFIRMED");
+        return;
+      }
+      if (g_trustState == TRUST_STATE_TIMEOUT) {
+        writeResponseToChannel("TRUST_TIMEOUT");
+        return;
+      }
+      if (g_trustState == TRUST_STATE_WAITING) {
+        writeResponseToChannel("TRUST_WAITING");
+        return;
+      }
+      writeResponseToChannel("TRUST_TIMEOUT");
+      return;
+    }
+    if (cmd == "TRUST_CANCEL") {
+      resetTrustState();
+      writeResponseToChannel("TRUST_CANCEL_ACK");
+      return;
+    }
+    if (cmd == "GET_LOGS" || cmd.startsWith("GET_LOGS:")) {
+      size_t offset = 0;
+      if (cmd.startsWith("GET_LOGS:")) {
+        offset = (size_t)cmd.substring(9).toInt();
+      }
+      String response = readLogChunk(offset);
+      writeResponseToChannel(response);
+      Serial.printf("Processed GET_LOGS offset=%u -> %s\n", (unsigned)offset, response.substring(0, 60).c_str());
+      sendSerialToBLE("Processed GET_LOGS");
+      return;
+    }
+    if (cmd.startsWith("SET_DEV_MODE:")) {
+      String valueString = cmd.substring(String("SET_DEV_MODE:").length());
+      valueString.trim();
+      if (valueString != "0" && valueString != "1") {
+        writeResponseToChannel("SET_DEV_MODE_ERR:INVALID_VALUE");
+        Serial.printf("Rejected SET_DEV_MODE with invalid value: '%s'\n", valueString.c_str());
+        sendSerialToBLE("SET_DEV_MODE rejected: invalid value");
+        return;
+      }
+      bool requestedValue = (valueString == "1");
+      if (!setDevModeEnabled(requestedValue)) {
+        writeResponseToChannel("SET_DEV_MODE_ERR:PERSIST_FAIL");
+        sendSerialToBLE("SET_DEV_MODE failed: persist error");
+        return;
+      }
+      String ack = String("SET_DEV_MODE_ACK:") + String(devModeEnabled ? 1 : 0);
+      writeResponseToChannel(ack);
+      sendSerialToBLE("SET_DEV_MODE applied");
+      return;
+    }
+    // Unknown command - param writes go to param_write characteristic (fea6)
+    writeResponseToChannel("UNKNOWN_COMMAND:" + cmd.substring(0, 40));
+    Serial.printf("Unknown command on command channel: '%.40s'\n", cmd.c_str());
+  }
+};
+
+// Param read channel (fea5): READ only. Returns 22-float CSV or AUTH_REQUIRED if not trusted.
+class param_read_characteristic_callbacks: public BLECharacteristicCallbacks {
   void onRead(BLECharacteristic *pCharacteristic) {
-    if (pCharacteristic->getUUID().toString() == CHARACTERISTIC_UUID) {
-      // Return current parameters as comma-separated string (22 values)
-      String paramString = String(batteryThreshold) + "," +
-                          String(K) + "," +
-                          String(F) + "," +
-                          String(T) + "," +
-                          String(backupTime) + "," +
-                          String(fanDuration) + "," +
-                          String(H) + "," +
-                          String(continueFeeder) + "," +
-                          String(maxOpeningTime) + "," +
-                          String(typicalOpeningTime) + "," +
-                          String(MOTOR_CUT_TIME) + "," +
-                          String(CUT_MODE_HEAT_TIME) + "," +
-                          String(postCoolingFanDuration) + "," +
-                          String(preFeedFan) + "," +
-                          String(fanReverseTime) + "," +
-                          String(fanReverseStartTime) + "," +
-                          String(backupTimeAfterReopen) + "," +
-                          String(CUT_MODE_TEMP) + "," +
-                          String(heaterLowerToleranceC) + "," +
-                          String(heaterUpperToleranceC) + "," +
-                          String(COOL_OPEN_TEMP_C) + "," +
-                          String(MAX_COOL_WAIT_S);
-      
-      pCharacteristic->setValue(paramString.c_str());
-      Serial.printf("Read request - returning parameters: %s\n", paramString.c_str());
-      SerialBLE_println("Read request - returning parameters:");
-      SerialBLE_println(paramString);
+    if (pCharacteristic->getUUID().toString() == PARAM_READ_CHARACTERISTIC_UUID) {
+      if (!isTrustedConnection()) {
+        pCharacteristic->setValue("AUTH_REQUIRED");
+        Serial.println("Param read blocked - trust handshake required");
+        return;
+      }
+      pCharacteristic->setValue(buildParamCSV().c_str());
+      Serial.printf("Param read - returning %s\n", buildParamCSV().c_str());
     }
   }
-  
+};
+
+// Param write channel (fea6): WRITE only. Parses 22-float CSV, applies params, writes ack to response channel.
+class param_write_characteristic_callbacks: public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *pCharacteristic) {
-    if (pCharacteristic->getUUID().toString() == CHARACTERISTIC_UUID) {
-      // Process parameters immediately when written
-      int message_length = pCharacteristic->getLength();
-      if (message_length > 0) {
-        if (isFlushing) {
-          pCharacteristic->setValue("PARAM_UPDATE_BLOCKED_FLUSH");
-          Serial.println("Immediate parameter update blocked - flush in progress");
-          SerialBLE_println("Parameter update blocked - flush in progress");
-          return;
-        }
-        unsigned char* message = pCharacteristic->getData();
-        // Allow remote clients to request OTA mode via BLE write
-        String cmd = String((char*)message, (unsigned int)message_length);
-        cmd.trim();
-        if (cmd.startsWith("HWCFG_")) {
-          String hwcfgResponse = handleHWCFGCommand(cmd);
-          pCharacteristic->setValue(hwcfgResponse.c_str());
-          Serial.printf("Processed HWCFG command '%s' -> '%s'\n", cmd.c_str(), hwcfgResponse.c_str());
-          sendSerialToBLE("Processed HWCFG command");
-          return;
-        }
-        if (cmd == "ENABLE_OTA") {
-          Serial.println("Received ENABLE_OTA command via BLE");
-          sendSerialToBLE("Received ENABLE_OTA command via BLE");
-          enableOTA();
-          pCharacteristic->setValue("ENABLE_OTA_ACK");
-          return;
-        }
-        if (cmd == "GET_DEV_MODE") {
-          String statusMessage = buildDevModeStatusMessage();
-          pCharacteristic->setValue(statusMessage.c_str());
-          Serial.printf("Processed GET_DEV_MODE, returned %s\n", statusMessage.c_str());
-          sendSerialToBLE("Processed GET_DEV_MODE");
-          return;
-        }
-        if (cmd == "GET_FLUSH_COUNT") {
-          String flushCountMessage = String("FLUSH_COUNT:") + String((unsigned long)lifetimeFlushCount);
-          pCharacteristic->setValue(flushCountMessage.c_str());
-          Serial.printf("Processed GET_FLUSH_COUNT, returned %s\n", flushCountMessage.c_str());
-          sendSerialToBLE("Processed GET_FLUSH_COUNT");
-          return;
-        }
-        if (cmd == "GET_HW_MATRIX") {
-          if (!hardwareMatrixInitialized && !initializeHardwareMatrix()) {
-            pCharacteristic->setValue("HW_MATRIX_ERR:INIT_FAIL");
-            sendSerialToBLE("GET_HW_MATRIX failed: init");
-            return;
-          }
-          String response = getHardwareComponentsListString();
-          pCharacteristic->setValue(response.c_str());
-          Serial.printf("Processed GET_HW_MATRIX, returned %s\n", response.c_str());
-          sendSerialToBLE("Processed GET_HW_MATRIX");
-          return;
-        }
-        if (cmd.startsWith("GET_HW_COMPONENT:")) {
-          if (!hardwareMatrixInitialized && !initializeHardwareMatrix()) {
-            pCharacteristic->setValue("HW_COMPONENT_ERR:INIT_FAIL");
-            sendSerialToBLE("GET_HW_COMPONENT failed: init");
-            return;
-          }
-          String componentName = cmd.substring(String("GET_HW_COMPONENT:").length());
-          componentName.trim();
-          HardwareComponentId componentId;
-          if (!lookupHardwareComponentId(componentName, componentId)) {
-            pCharacteristic->setValue("HW_COMPONENT_ERR:UNKNOWN_COMPONENT");
-            Serial.printf("Rejected GET_HW_COMPONENT with unknown component: %s\n", componentName.c_str());
-            sendSerialToBLE("GET_HW_COMPONENT rejected: unknown component");
-            return;
-          }
-          String response = getHardwareComponentString(componentId);
-          pCharacteristic->setValue(response.c_str());
-          sendSerialToBLE("Processed GET_HW_COMPONENT");
-          return;
-        }
-        if (cmd.startsWith("SET_HW_COMPONENT:")) {
-          String payload = cmd.substring(String("SET_HW_COMPONENT:").length());
-          int firstSep = payload.indexOf(':');
-          int secondSep = (firstSep >= 0) ? payload.indexOf(':', firstSep + 1) : -1;
-          int thirdSep = (secondSep >= 0) ? payload.indexOf(':', secondSep + 1) : -1;
-          if (firstSep < 0 || secondSep < 0 || thirdSep < 0) {
-            pCharacteristic->setValue("SET_HW_COMPONENT_ERR:BAD_FORMAT");
-            sendSerialToBLE("SET_HW_COMPONENT rejected: bad format");
-            return;
-          }
-
-          String componentName = payload.substring(0, firstSep);
-          String version = payload.substring(firstSep + 1, secondSep);
-          String installDate = payload.substring(secondSep + 1, thirdSep);
-          String description = payload.substring(thirdSep + 1);
-          componentName.trim();
-
-          String errorCode;
-          if (!setHardwareComponentByName(componentName, version, installDate, description, errorCode)) {
-            String errResponse = String("SET_HW_COMPONENT_ERR:") + errorCode;
-            pCharacteristic->setValue(errResponse.c_str());
-            Serial.printf("SET_HW_COMPONENT failed for %s: %s\n", componentName.c_str(), errorCode.c_str());
-            sendSerialToBLE("SET_HW_COMPONENT failed");
-            return;
-          }
-
-          String ack = String("SET_HW_COMPONENT_ACK:") + componentName;
-          pCharacteristic->setValue(ack.c_str());
-          sendSerialToBLE("SET_HW_COMPONENT applied");
-          return;
-        }
-        if (cmd.startsWith("SET_DEV_MODE:")) {
-          String valueString = cmd.substring(String("SET_DEV_MODE:").length());
-          valueString.trim();
-
-          if (valueString != "0" && valueString != "1") {
-            pCharacteristic->setValue("SET_DEV_MODE_ERR:INVALID_VALUE");
-            Serial.printf("Rejected SET_DEV_MODE with invalid value: '%s'\n", valueString.c_str());
-            sendSerialToBLE("SET_DEV_MODE rejected: invalid value");
-            return;
-          }
-
-          bool requestedValue = (valueString == "1");
-          if (!setDevModeEnabled(requestedValue)) {
-            pCharacteristic->setValue("SET_DEV_MODE_ERR:PERSIST_FAIL");
-            sendSerialToBLE("SET_DEV_MODE failed: persist error");
-            return;
-          }
-
-          String ack = String("SET_DEV_MODE_ACK:") + String(devModeEnabled ? 1 : 0);
-          pCharacteristic->setValue(ack.c_str());
-          sendSerialToBLE("SET_DEV_MODE applied");
-          return;
-        }
-        Serial.printf("Immediate parameter update received, length: %d\n", message_length);
-        // Parse BLE comma-separated float values (20 legacy or 22 current)
-        char * parameters_string = strtok((char*) message, ",");
-        float parameters_list[100];
-        int k = 0;
-        while (parameters_string != NULL) {
-          char *endptr;
-          parameters_list[k] = strtof(parameters_string, &endptr);
-          parameters_string = strtok(NULL, ",");
-          k++;
-        }
-        
-        // Apply parameters immediately (20 legacy or 22 current values)
-        if (k >= 20) {
-          batteryThreshold = (int)parameters_list[0];
-          K = parameters_list[1];
-          F = (int)parameters_list[2];
-          T = (long)parameters_list[3];
-          backupTime = parameters_list[4];
-          fanDuration = (int)parameters_list[5];
-          H = (long)parameters_list[6];
-          continueFeeder = parameters_list[7];
-          maxOpeningTime = (int)parameters_list[8];
-          typicalOpeningTime = (int)parameters_list[9];
-          MOTOR_CUT_TIME = parameters_list[10];
-          CUT_MODE_HEAT_TIME = parameters_list[11];
-          postCoolingFanDuration = parameters_list[12];
-          preFeedFan = parameters_list[13];
-          fanReverseTime = parameters_list[14];
-          fanReverseStartTime = parameters_list[15];
-          backupTimeAfterReopen = parameters_list[16];
-          CUT_MODE_TEMP = parameters_list[17];
-          if (k >= 20) {
-            heaterLowerToleranceC = parameters_list[18];
-            heaterUpperToleranceC = parameters_list[19];
-            enforceHeaterToleranceGap("characteristic_write");
-          }
-          if (k >= 22) {
-            COOL_OPEN_TEMP_C = parameters_list[20];
-            MAX_COOL_WAIT_S = (long)parameters_list[21];
-          }
-          if (!(isFlushing && cutBag && case6CutMotorRun)) {
-            heaterTargetTemp = K;
-          }
-        }
-        
-        // Save parameters to EEPROM for persistence
-        saveParametersToEEPROM();
-        if (eepromErrorState) {
-          if (lastEEPROMWriteVerified) {
-            eepromErrorState = false;
-            eepromWakeAlertActive = false;
-            if (ERROR_CODE == EEPROM_INVALID_ERROR_CODE) {
-              ERROR_CODE = 0;
-            }
-            Serial.println("EEPROM recovery successful from BLE parameter write. Clearing latched EEPROM error.");
-            sendSerialToBLE("EEPROM RECOVERED - latched error cleared");
-          } else {
-            Serial.println("EEPROM recovery attempt failed - still in EEPROM error state");
-            sendSerialToBLE("EEPROM RECOVERY FAILED - write not verified");
-          }
-        }
-        
-        // Update characteristic value with new parameters (22 values)
-        String paramString = String(batteryThreshold) + "," +
-                            String(K) + "," +
-                            String(F) + "," +
-                            String(T) + "," +
-                            String(backupTime) + "," +
-                            String(fanDuration) + "," +
-                            String(H) + "," +
-                            String(continueFeeder) + "," +
-                            String(maxOpeningTime) + "," +
-                            String(typicalOpeningTime) + "," +
-                            String(MOTOR_CUT_TIME) + "," +
-                            String(CUT_MODE_HEAT_TIME) + "," +
-                            String(postCoolingFanDuration) + "," +
-                            String(preFeedFan) + "," +
-                            String(fanReverseTime) + "," +
-                            String(fanReverseStartTime) + "," +
-                            String(backupTimeAfterReopen) + "," +
-                            String(CUT_MODE_TEMP) + "," +
-                            String(heaterLowerToleranceC) + "," +
-                            String(heaterUpperToleranceC) + "," +
-                            String(COOL_OPEN_TEMP_C) + "," +
-                            String(MAX_COOL_WAIT_S);
-        pCharacteristic->setValue(paramString.c_str());
-        
-        Serial.printf("Parameters updated immediately! H=%ld, K=%.1f\n", H, K);
-        Serial.printf("Characteristic value updated to: %s\n", paramString.c_str());
-        Serial.printf("DEBUG: About to save to EEPROM - H=%ld, K=%.1f\n", H, K);
-        
-        // Send debug info via BLE
-        SerialBLE_print("Parameters updated immediately! H=");
-        SerialBLE_print((int)H);
-        SerialBLE_print(", K=");
-        SerialBLE_print(K);
-        SerialBLE_println();
-        SerialBLE_print("DEBUG: About to save to EEPROM - H=");
-        SerialBLE_print((int)H);
-        SerialBLE_print(", K=");
-        SerialBLE_print(K);
-        SerialBLE_println();
+    if (pCharacteristic->getUUID().toString() != PARAM_WRITE_CHARACTERISTIC_UUID) return;
+    int message_length = pCharacteristic->getLength();
+    if (message_length <= 0) return;
+    
+    if (!isTrustedConnection()) {
+      writeResponseToChannel("AUTH_REQUIRED");
+      Serial.println("Parameter update blocked - trust handshake required");
+      SerialBLE_println("Parameter update blocked - trust handshake required");
+      return;
+    }
+    if (isFlushing) {
+      writeResponseToChannel("PARAM_UPDATE_BLOCKED_FLUSH");
+      Serial.println("Parameter update blocked - flush in progress");
+      SerialBLE_println("Parameter update blocked - flush in progress");
+      return;
+    }
+    
+    // Copy payload (strtok mutates)
+    char buf[512];
+    int copyLen = (message_length < (int)sizeof(buf) - 1) ? message_length : (int)sizeof(buf) - 1;
+    memcpy(buf, pCharacteristic->getData(), copyLen);
+    buf[copyLen] = '\0';
+    
+    char * parameters_string = strtok(buf, ",");
+    float parameters_list[100];
+    int k = 0;
+    while (parameters_string != NULL && k < 100) {
+      char *endptr;
+      parameters_list[k] = strtof(parameters_string, &endptr);
+      parameters_string = strtok(NULL, ",");
+      k++;
+    }
+    
+    if (k != 22) {
+      writeResponseToChannel("PARAM_WRITE_ERR:BAD_FORMAT");
+      Serial.printf("Param write rejected: expected 22 values, got %d\n", k);
+      return;
+    }
+    
+    batteryThreshold = (int)parameters_list[0];
+    K = parameters_list[1];
+    F = (int)parameters_list[2];
+    T = (long)parameters_list[3];
+    backupTime = parameters_list[4];
+    fanDuration = (int)parameters_list[5];
+    H = (long)parameters_list[6];
+    continueFeeder = parameters_list[7];
+    maxOpeningTime = (int)parameters_list[8];
+    typicalOpeningTime = (int)parameters_list[9];
+    MOTOR_CUT_TIME = parameters_list[10];
+    CUT_MODE_HEAT_TIME = parameters_list[11];
+    postCoolingFanDuration = parameters_list[12];
+    preFeedFan = parameters_list[13];
+    fanReverseTime = parameters_list[14];
+    fanReverseStartTime = parameters_list[15];
+    backupTimeAfterReopen = parameters_list[16];
+    CUT_MODE_TEMP = parameters_list[17];
+    heaterLowerToleranceC = parameters_list[18];
+    heaterUpperToleranceC = parameters_list[19];
+    enforceHeaterToleranceGap("param_write");
+    COOL_OPEN_TEMP_C = parameters_list[20];
+    MAX_COOL_WAIT_S = (long)parameters_list[21];
+    if (!(isFlushing && cutBag && case6CutMotorRun)) {
+      heaterTargetTemp = K;
+    }
+    
+    saveParametersToEEPROM();
+    if (eepromErrorState) {
+      if (lastEEPROMWriteVerified) {
+        eepromErrorState = false;
+        eepromWakeAlertActive = false;
+        if (ERROR_CODE == EEPROM_INVALID_ERROR_CODE) ERROR_CODE = 0;
+        Serial.println("EEPROM recovery successful from BLE parameter write.");
+        sendSerialToBLE("EEPROM RECOVERED - latched error cleared");
+      } else {
+        Serial.println("EEPROM recovery attempt failed - still in EEPROM error state");
+        sendSerialToBLE("EEPROM RECOVERY FAILED - write not verified");
       }
     }
+    
+    if (param_read_characteristic) {
+      param_read_characteristic->setValue(buildParamCSV().c_str());
+    }
+    writeResponseToChannel("PARAM_WRITE_ACK");
+    Serial.printf("Parameters updated via param write! H=%ld, K=%.1f\n", H, K);
+    SerialBLE_print("Parameters updated! H=");
+    SerialBLE_print((int)H);
+    SerialBLE_print(", K=");
+    SerialBLE_println(K);
   }
 };
 
@@ -992,6 +1078,7 @@ void mcp_setup() {
 
   if (!mcpInitialized) {
     Serial.println("ERROR: MCP23017 unavailable after retries - continuing without expander.");
+    logError("mcp", 0, "MCP_UNAVAILABLE", false);
     return;
   }
 
@@ -1038,44 +1125,37 @@ void server_setup(bool includeOTA = false) {
   blue_server->setCallbacks(new server_callbacks());
   // Set up a service for the server
   BLEService * blue_service = blue_server->createService(SERVICE_UUID);
-  // Set the characteristics for the service - a client can both READ and WRITE to the server
+  
+  // Command channel (fea0): WRITE only - client writes commands
   blue_characteristic = blue_service->createCharacteristic(
                                                           CHARACTERISTIC_UUID, 
-                                                          BLECharacteristic::PROPERTY_READ |
                                                           BLECharacteristic::PROPERTY_WRITE
                                                         );
-  // Set callback for immediate parameter updates
-  blue_characteristic->setCallbacks(new characteristic_callbacks());
+  blue_characteristic->setCallbacks(new command_characteristic_callbacks());
   
-  // Set initial value to current parameters (22 values)
-  String initialParams = String(batteryThreshold) + "," +
-                        String(K) + "," +
-                        String(F) + "," +
-                        String(T) + "," +
-                        String(backupTime) + "," +
-                        String(fanDuration) + "," +
-                        String(H) + "," +
-                        String(continueFeeder) + "," +
-                        String(maxOpeningTime) + "," +
-                        String(typicalOpeningTime) + "," +
-                        String(MOTOR_CUT_TIME) + "," +
-                        String(CUT_MODE_HEAT_TIME) + "," +
-                        String(postCoolingFanDuration) + "," +
-                        String(preFeedFan) + "," +
-                        String(fanReverseTime) + "," +
-                        String(fanReverseStartTime) + "," +
-                        String(backupTimeAfterReopen) + "," +
-                        String(CUT_MODE_TEMP) + "," +
-                        String(heaterLowerToleranceC) + "," +
-                        String(heaterUpperToleranceC) + "," +
-                        String(COOL_OPEN_TEMP_C) + "," +
-                        String(MAX_COOL_WAIT_S);
-  blue_characteristic->setValue(initialParams.c_str());
-  Serial.printf("Initial characteristic value set to: %s\n", initialParams.c_str());
+  // Response channel (fea4): READ only - client reads command/param responses
+  response_characteristic = blue_service->createCharacteristic(
+                                                              RESPONSE_CHARACTERISTIC_UUID,
+                                                              BLECharacteristic::PROPERTY_READ
+                                                            );
+  response_characteristic->setValue("READY");
+  
+  // Param read channel (fea5): READ only - 22-float CSV snapshot
+  param_read_characteristic = blue_service->createCharacteristic(
+                                                                PARAM_READ_CHARACTERISTIC_UUID,
+                                                                BLECharacteristic::PROPERTY_READ
+                                                              );
+  param_read_characteristic->setCallbacks(new param_read_characteristic_callbacks());
+  param_read_characteristic->setValue(buildParamCSV().c_str());
+  
+  // Param write channel (fea6): WRITE only - client writes 22-float CSV
+  param_write_characteristic = blue_service->createCharacteristic(
+                                                                PARAM_WRITE_CHARACTERISTIC_UUID,
+                                                                BLECharacteristic::PROPERTY_WRITE
+                                                              );
+  param_write_characteristic->setCallbacks(new param_write_characteristic_callbacks());
+  
   Serial.printf("DEBUG: H value at BLE init: %ld\n", H);
-  //SerialBLE_print("DEBUG: H value at BLE init: ");
-  //SerialBLE_print((int)H);
-  //SerialBLE_println();
   
   // Create serial streaming characteristic
   serial_characteristic = blue_service->createCharacteristic(
@@ -1188,10 +1268,91 @@ void saveParametersToEEPROM() {
   EEPROM.end();
 }
 
+void initErrorLog() {
+  if (!SPIFFS.begin(true)) {
+    Serial.println("WARN: SPIFFS init failed, error log disabled");
+    return;
+  }
+  errorLogInitialized = true;
+  esp_reset_reason_t r = esp_reset_reason();
+  if (r == ESP_RST_PANIC || r == ESP_RST_WDT || r == ESP_RST_BROWNOUT || r == ESP_RST_SDIO) {
+    const char* reasonStr = "unknown";
+    switch (r) {
+      case ESP_RST_PANIC:   reasonStr = "panic"; break;
+      case ESP_RST_WDT:     reasonStr = "wdt"; break;
+      case ESP_RST_BROWNOUT: reasonStr = "brownout"; break;
+      case ESP_RST_SDIO:    reasonStr = "sdio"; break;
+      default: break;
+    }
+    logError("reset", (int)r, reasonStr, false);
+  }
+}
+
+static String getCurrentContextString() {
+  float bat = readBatteryVoltage();
+  float temp = readTemperature();
+  float m1A = readM1Current();
+  float heaterA = readHeaterCurrent();
+  const char* fanStr = (lastFanState > 0) ? "forward" : (lastFanState < 0) ? "reverse" : "off";
+  char buf[128];
+  snprintf(buf, sizeof(buf), ",step=%d,cut=%d,feed=%d,bat=%.1f,temp=%.1f,m1A=%.2f,heaterA=%.2f,fan=%s",
+           flushStep, cutBag ? 1 : 0, continueFeeder ? 1 : 0, bat, temp, m1A, heaterA, fanStr);
+  return String(buf);
+}
+
+void logError(const char* type, int code, const char* msg) {
+  logError(type, code, msg, true);
+}
+
+void logError(const char* type, int code, const char* msg, bool includeContext) {
+  if (!errorLogInitialized) return;
+  unsigned long ts = millis();
+  String line = String(type) + "," + String(ts) + "," + String(code) + "," + String(msg);
+  if (includeContext) line += getCurrentContextString();
+  if (line.length() > LOG_LINE_MAX_LEN) line = line.substring(0, LOG_LINE_MAX_LEN);
+  line += "\n";
+  File f = SPIFFS.open(LOG_FILE, "a");
+  if (!f) return;
+  f.print(line);
+  size_t sz = f.size();
+  f.close();
+  if (sz > MAX_LOG_SIZE) {
+    String content;
+    f = SPIFFS.open(LOG_FILE, "r");
+    if (!f) return;
+    content = f.readString();
+    f.close();
+    size_t drop = content.indexOf('\n') + 1;
+    if (drop > 0 && drop < content.length()) {
+      content = content.substring(drop);
+      f = SPIFFS.open(LOG_FILE, "w");
+      if (f) { f.print(content); f.close(); }
+    }
+  }
+}
+
+String readLogChunk(size_t offset) {
+  if (!errorLogInitialized) return "LOGS_END";
+  File f = SPIFFS.open(LOG_FILE, "r");
+  if (!f) return "LOGS_END";
+  size_t total = f.size();
+  if (offset >= total) { f.close(); return "LOGS_END"; }
+  f.seek(offset, SeekSet);
+  size_t toRead = (total - offset > LOG_CHUNK_SIZE) ? LOG_CHUNK_SIZE : (size_t)(total - offset);
+  uint8_t buf[LOG_CHUNK_SIZE + 1];
+  size_t n = f.read(buf, toRead);
+  f.close();
+  if (n == 0) return "LOGS_END";
+  buf[n] = '\0';
+  String chunk = String((char*)buf);
+  return String("LOGS:") + String((unsigned int)offset) + ":" + String((unsigned int)n) + ":" + chunk;
+}
+
 void enterEEPROMInvalidErrorState(const char* reason) {
   Serial.printf("EEPROM INVALID: %s\n", reason);
   SerialBLE_print("EEPROM INVALID: ");
   SerialBLE_println(reason);
+  logError("eeprom", EEPROM_INVALID_ERROR_CODE, reason, true);
 
   // Flash all LEDs 5 times before showing dedicated EEPROM error code.
   for (int i = 0; i < 5; i++) {
@@ -3007,6 +3168,7 @@ void setup() {
       err = nvs_flash_init();
     }
     ESP_ERROR_CHECK(err);
+    initErrorLog();
     loadDevModeSetting();
     initializeHardwareMatrix();
     if (!initializeHWCFGStore()) {
@@ -3064,6 +3226,7 @@ void setup() {
     err = nvs_flash_init();
   }
   ESP_ERROR_CHECK(err);
+  initErrorLog();
   loadDevModeSetting();
   initializeHardwareMatrix();
   if (!initializeHWCFGStore()) {
@@ -3182,6 +3345,11 @@ void loop() {
       }
     }
   }
+
+  // Trust handshake: LED circle while waiting for flush button
+  if (g_trustState == TRUST_STATE_WAITING) {
+    slowCircleLeds();
+  }
   
   // Keep BLE alive while serial streaming is active. When idle (not streaming),
   // allow timeout after BLE_TIMEOUT even if a client remains connected.
@@ -3234,31 +3402,44 @@ void loop() {
     old_device_connect = is_device_connected;
   }
   
-  // Handle serial streaming commands
+  // Handle serial streaming commands (supports both framed [0x7E+len+payload] and raw)
   if (is_device_connected && serial_characteristic) {
     int serial_message_length = serial_characteristic->getLength();
-    Serial.print("DEBUG: serial_message_length = ");
-    Serial.println(serial_message_length);
     
     if (serial_message_length > 0) {
       unsigned char* serial_message = serial_characteristic->getData();
-      String command = String((char*)serial_message);
+      const char* payload_ptr = (const char*)serial_message;
+      size_t payload_len = (size_t)serial_message_length;
+
+      // Framed format: 0x7E, len_lo, len_hi, payload (matches Python/Android BLE frame)
+      if (serial_message_length >= BLE_FRAME_HEADER_SIZE && serial_message[0] == BLE_FRAME_START_BYTE) {
+        uint16_t frame_payload_len = serial_message[1] | (serial_message[2] << 8);
+        if (frame_payload_len > 0 && serial_message_length >= BLE_FRAME_HEADER_SIZE + frame_payload_len) {
+          payload_ptr = (const char*)(serial_message + BLE_FRAME_HEADER_SIZE);
+          payload_len = frame_payload_len;
+        }
+      }
+
+      String command = String(payload_ptr, payload_len);
       command.trim();
       
-      Serial.print("DEBUG: Received command: '");
-      Serial.print(command);
-      Serial.println("'");
-      
       if (command == "START_SERIAL") {
-        Serial.println("DEBUG: Processing START_SERIAL command");
-        serial_streaming_enabled = true;
-        Serial.println("Serial streaming enabled via BLE");
-        sendSerialToBLE("Serial streaming ENABLED via BLE");
+        if (!isTrustedConnection()) {
+          Serial.println("Serial streaming blocked - trust handshake required");
+          sendSerialToBLE("AUTH_REQUIRED\n");
+          writeResponseToChannel("AUTH_REQUIRED");
+        } else {
+          serial_streaming_enabled = true;
+          Serial.println("Serial streaming enabled via BLE");
+          sendSerialToBLE("Serial streaming ENABLED via BLE");
+        }
       } else if (command == "STOP_SERIAL") {
         Serial.println("DEBUG: Processing STOP_SERIAL command");
         serial_streaming_enabled = false;
         Serial.println("Serial streaming disabled via BLE");
         sendSerialToBLE("Serial streaming DISABLED via BLE");
+      } else if (command.startsWith("Motor Fault Status:") || command.startsWith("System Status:")) {
+        // Ignore: this is our own status output echoed back (same characteristic used for TX/RX)
       } else {
         Serial.print("DEBUG: Unknown command: '");
         Serial.print(command);
@@ -3396,6 +3577,11 @@ void loop() {
   
   // Handle individual button presses only if not in battery display mode
   if (!batteryDisplayMode) {
+    // Trust handshake: flush button confirms trust during TRUST_WAITING
+    if (g_trustState == TRUST_STATE_WAITING && button1Pressed) {
+      onTrustConfirmedByFlushButton();
+      SerialBLE_println("Trust confirmed via flush button");
+    } else
     // Handle button 1 (Flush) - check for hold to enable cutBag
     if (button1Pressed && !button1WasPressed) {
       SerialBLE_println("Button 1 just pressed - start delay timer");
@@ -4263,6 +4449,9 @@ bool setOTAState(OTAState nextState, const char* reason) {
   otaState = nextState;
   otaStateEnteredAt = millis();
   Serial.printf("OTA state: %s (%s)\n", otaStateToString(otaState), reason);
+  if (nextState == OTA_ERROR) {
+    logError("ota", 0, reason, false);
+  }
   return true;
 }
 
@@ -5115,6 +5304,12 @@ void locateMotorPos() {
 void LEDErrorCode(int errorCode) { // Modified to accept errorCode
   Serial.print("Flashing Error Code: ");
   Serial.println(errorCode);
+  if (errorCode != EEPROM_INVALID_ERROR_CODE) {
+    const char* msg = (errorCode == 1) ? "motor_timeout" : (errorCode == 2) ? "low_battery" :
+      (errorCode == 3) ? "heater_overheat" : (errorCode == 4) ? "motor_fault" :
+      (errorCode == 5) ? "heater_current_fail" : (errorCode == 6) ? "heater_max_wall" : "unknown";
+    logError("runtime", errorCode, msg, true);
+  }
   for (int j = 0; j < totalLeds; j++) {
     mcp_digitalWrite(ledPins[j], LOW);
   }
@@ -5195,14 +5390,17 @@ void heaterOff() {
 // Motor 3 control functions (PWM fan)
 void setFanSpeed(int speed) {
   if (speed > 0) {
+    lastFanState = 1;
     digitalWrite(sealerFanPwr, HIGH);
     digitalWrite(sealerFanReverse, LOW);   // Forward
     ledcWrite(sealerFanPWM, 255);          // 100% duty
   } else if (speed < 0) {
+    lastFanState = -1;
     digitalWrite(sealerFanPwr, HIGH);
     digitalWrite(sealerFanReverse, HIGH);  // Reverse
     ledcWrite(sealerFanPWM, 255);          // 100% duty
   } else {
+    lastFanState = 0;
     digitalWrite(sealerFanPwr, LOW);
     ledcWrite(sealerFanPWM, 0);
     digitalWrite(sealerFanReverse, LOW);   // Forward
@@ -5397,6 +5595,39 @@ void checkAllMotorFaults() {
 // Global buffer for serial streaming
 String serialBuffer = "";
 unsigned long lastSerialFlush = 0;
+
+// Write command/param response to response channel (fea4) for client to read
+void writeResponseToChannel(const String& response) {
+  if (bleEnabled && is_device_connected && response_characteristic) {
+    response_characteristic->setValue(response.c_str());
+  }
+}
+
+// Build 22-value CSV for param read/write
+String buildParamCSV() {
+  return String(batteryThreshold) + "," +
+         String(K) + "," +
+         String(F) + "," +
+         String(T) + "," +
+         String(backupTime) + "," +
+         String(fanDuration) + "," +
+         String(H) + "," +
+         String(continueFeeder) + "," +
+         String(maxOpeningTime) + "," +
+         String(typicalOpeningTime) + "," +
+         String(MOTOR_CUT_TIME) + "," +
+         String(CUT_MODE_HEAT_TIME) + "," +
+         String(postCoolingFanDuration) + "," +
+         String(preFeedFan) + "," +
+         String(fanReverseTime) + "," +
+         String(fanReverseStartTime) + "," +
+         String(backupTimeAfterReopen) + "," +
+         String(CUT_MODE_TEMP) + "," +
+         String(heaterLowerToleranceC) + "," +
+         String(heaterUpperToleranceC) + "," +
+         String(COOL_OPEN_TEMP_C) + "," +
+         String(MAX_COOL_WAIT_S);
+}
 
 // Function to send serial data to BLE
 void sendSerialToBLE(const String& message) {

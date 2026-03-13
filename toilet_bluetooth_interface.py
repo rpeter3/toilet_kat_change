@@ -11,7 +11,7 @@ import json
 import platform
 import os
 from datetime import datetime
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 
 try:
     from bleak import BleakClient, BleakScanner
@@ -19,14 +19,25 @@ except ImportError:
     BleakClient = Any  # type: ignore[assignment]
     BleakScanner = None  # type: ignore[assignment]
 
-# ESP32 BLE Configuration (from toilet_kat_change.ino)
+# ESP32 BLE Configuration (from BLE_APP_MIGRATION_SPEC.md)
 SERVICE_UUID = "5636340f-afc7-47b1-b0a8-15bc9d7d29a5"
-CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea0"
+COMMAND_CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea0"
+RESPONSE_CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea4"
+PARAM_READ_CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea5"
+PARAM_WRITE_CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea6"
 SERIAL_CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea1"
+# Legacy: pre-refactor firmware used fea0 for commands, responses, and params
+CHARACTERISTIC_UUID = COMMAND_CHARACTERISTIC_UUID
 DEVICE_NAME = "ESP32 Toilet"
 FRAME_START_BYTE = 0x7E
 FRAME_HEADER_SIZE = 3
 MAX_FRAME_PAYLOAD = 0xFFFF
+
+
+def _normalize_uuid(uuid_val: Any) -> str:
+    """Normalize UUID for comparison (lowercase, standard format)."""
+    s = str(uuid_val).lower().strip()
+    return s.replace("-", "") if s else ""
 
 
 def make_frame(payload: bytes) -> bytes:
@@ -106,7 +117,10 @@ class ToiletSystemInterface:
         self.serial_framed_active = False
         self.serial_parser = BleFrameParser()
         self.serial_frames_received = 0
-        
+        self.trusted = False  # Trust handshake state; cleared on disconnect per BLE_APP_MIGRATION_SPEC
+        self.trust_timeout_s = 60.0  # Per spec recommended timeout
+        self.trust_poll_interval_s = 0.25  # Per BLE_HANDSHAKE_INTERFACE_SPEC
+
         # Parameter definitions with descriptions and units (defaults = 1.5mil High Barrier Plastic from material_parameters.csv)
         self.param_definitions = {
             "batteryThreshold": {"description": "Battery voltage threshold", "units": "ADC", "default": 5.0},
@@ -311,10 +325,41 @@ class ToiletSystemInterface:
                 f"mode={self.serial_transport_mode}, preferred_mtu={self.preferred_mtu}, "
                 f"chunk_pacing_s={self.chunk_pacing_s}, frame_debug={self.frame_debug}"
             )
-            
-            # Wait a moment for ESP32 to fully initialize
             await asyncio.sleep(1.0)
-            print("Connection stabilized, ready to read parameters")
+            # Verify new protocol (fea4/fea5/fea6): discovery + probe
+            has_response = False
+            try:
+                services = await self.client.get_services()
+                resp_norm = _normalize_uuid(RESPONSE_CHARACTERISTIC_UUID)
+                for svc in services.services.values():
+                    for char in svc.characteristics:
+                        if char.uuid and _normalize_uuid(char.uuid) == resp_norm:
+                            has_response = True
+                            break
+                    if has_response:
+                        break
+            except Exception:
+                pass
+            if not has_response:
+                try:
+                    data = await self.client.read_gatt_char(PARAM_READ_CHARACTERISTIC_UUID)
+                    msg = data.decode("utf-8", errors="replace")
+                    if self._parse_param_payload(msg) is not None:
+                        has_response = True
+                        print("Protocol probe: fea5 param read succeeded")
+                except Exception:
+                    pass
+            if not has_response:
+                print("New protocol (fea4/fea5/fea6) not found. Device may need firmware update.")
+                await self.disconnect()
+                return False
+            # Per BLE_HANDSHAKE_INTERFACE_SPEC: trust handshake required before allowing session
+            print("Trust handshake required before connection is fully established...")
+            if not await self.trust_handshake():
+                print("Connection rejected: trust handshake failed or timed out.")
+                await self.disconnect()
+                return False
+            print("Connection established and trusted.")
             return True
         except Exception as e:
             print(f"Failed to connect: {e}")
@@ -328,7 +373,19 @@ class ToiletSystemInterface:
                 await self.stop_serial_streaming()
             await self.client.disconnect()
             self.connected = False
+            self.trusted = False  # Per spec: clear trust state on disconnect
             print("Disconnected from ESP32")
+
+    def _parse_param_payload(self, message: str) -> Optional[Dict[str, Any]]:
+        """Strict parser: exactly 22 comma-separated floats. Returns None on invalid."""
+        values = [v.strip() for v in message.split(",")]
+        if len(values) != 22:
+            return None
+        try:
+            floats = [float(v) for v in values]
+        except ValueError:
+            return None
+        return dict(zip(self.param_order, floats))
 
     async def read_current_params(self) -> Dict[str, Any]:
         """Read current parameter values from ESP32"""
@@ -337,25 +394,17 @@ class ToiletSystemInterface:
             return {}
         
         try:
-            # Read the characteristic value
-            data = await self.client.read_gatt_char(CHARACTERISTIC_UUID)
-            message = data.decode('utf-8')
-            print(f"Received message: {message}")
-            
-            # Parse comma-separated values
-            values = message.split(',')
-            params = {}
-            
-            for i, param_name in enumerate(self.param_order):
-                if i < len(values):
-                    try:
-                        params[param_name] = float(values[i])
-                    except ValueError:
-                        print(f"Invalid value for {param_name}: {values[i]}")
-                        params[param_name] = float(self.param_definitions[param_name]["default"])
-                else:
-                    params[param_name] = float(self.param_definitions[param_name]["default"])
-            
+            data = await self.client.read_gatt_char(PARAM_READ_CHARACTERISTIC_UUID)
+            message = data.decode("utf-8", errors="replace")
+            print(f"Received message: {message[:80]}...")
+            if message.strip() == "AUTH_REQUIRED":
+                self.trusted = False
+                print("Parameter read blocked: trust handshake required.")
+                return {}
+            params = self._parse_param_payload(message)
+            if params is None:
+                print("Parameter read failed: invalid payload (expected 22 floats)")
+                return {}
             self.current_params = params
             return params
             
@@ -405,7 +454,6 @@ class ToiletSystemInterface:
             return False
         
         try:
-            # Create comma-separated message (all values as float strings for BLE)
             message_parts = []
             for param_name in self.param_order:
                 if param_name in new_params:
@@ -413,27 +461,34 @@ class ToiletSystemInterface:
                 else:
                     val = self.current_params.get(param_name, self.param_definitions[param_name]["default"])
                 message_parts.append(str(float(val)))
-            
             message = ",".join(message_parts)
-            print(f"Sending message: {message}")
+            print(f"Sending message: {message[:60]}...")
             
-            # Write to characteristic
-            await self.client.write_gatt_char(CHARACTERISTIC_UUID, message.encode('utf-8'))
-            # Read firmware feedback after write so flush-blocked updates are reported to user.
-            await asyncio.sleep(0.1)
-            response = ""
-            try:
-                data = await self.client.read_gatt_char(CHARACTERISTIC_UUID)
-                response = data.decode('utf-8', errors='ignore').strip()
-            except Exception as read_error:
-                print(f"Warning: unable to read firmware response after update: {read_error}")
-
+            # Guard behind trust; write to fea6, read ack from fea4
+            if not self.trusted:
+                print("Trust handshake required before parameter update. Starting trust flow...")
+                if not await self.trust_handshake():
+                    print("Parameter update aborted: trust handshake failed or timed out.")
+                    return False
+            await self.client.write_gatt_char(PARAM_WRITE_CHARACTERISTIC_UUID, message.encode("utf-8"))
+            await asyncio.sleep(0.15)
+            data = await self.client.read_gatt_char(RESPONSE_CHARACTERISTIC_UUID)
+            response = data.decode("utf-8", errors="replace").strip()
+            if response == "PARAM_WRITE_ACK":
+                print("Parameters updated successfully")
+                return True
             if response == "PARAM_UPDATE_BLOCKED_FLUSH":
                 print("Parameter update rejected: flush in progress (firmware blocked this write).")
                 return False
-
-            print("Parameters updated successfully")
-            return True
+            if response == "AUTH_REQUIRED":
+                self.trusted = False  # Per spec: reset local trust state
+                print("Parameter update rejected: trust handshake required. Run trust handshake and retry.")
+                return False
+            if response.startswith("PARAM_WRITE_ERR:"):
+                print(f"Parameter update rejected: {response}")
+                return False
+            print(f"Parameter update failed: unexpected response: {response}")
+            return False
             
         except Exception as e:
             print(f"Failed to update parameters: {e}")
@@ -630,7 +685,6 @@ class ToiletSystemInterface:
                 payloads = self.serial_parser.append(bytes(data))
 
             if payloads:
-                self.serial_framed_active = True
                 self.serial_frames_received += len(payloads)
                 for payload in payloads:
                     message = payload.decode("utf-8", errors="replace")
@@ -646,10 +700,9 @@ class ToiletSystemInterface:
                     )
                 return
 
-            # Legacy path (for older firmware that does not frame serial notifications).
-            if not self.serial_framed_active:
-                message = data.decode("utf-8", errors="replace")
-                print(f"{message}", end="", flush=True)
+            # Firmware sends raw (unframed) serial stream; always fall through to legacy when framed parse yields nothing.
+            message = data.decode("utf-8", errors="replace")
+            print(f"{message}", end="", flush=True)
         except Exception as e:
             print(f"Error decoding serial data: {e}")
             print(f"Raw data: {data}")
@@ -659,14 +712,10 @@ class ToiletSystemInterface:
         if not self.connected:
             print("Not connected to device")
             return None
-
         try:
             for _ in range(3):
-                await self.client.write_gatt_char(CHARACTERISTIC_UUID, b"GET_DEV_MODE")
-                await asyncio.sleep(0.15)
-                data = await self.client.read_gatt_char(CHARACTERISTIC_UUID)
-                response = data.decode("utf-8").strip()
-                if response.startswith("DEV_MODE:"):
+                response = await self._send_command_and_read_response("GET_DEV_MODE")
+                if response and response.startswith("DEV_MODE:"):
                     mode_str = response.split(":", 1)[1].strip()
                     if mode_str in ("0", "1"):
                         return int(mode_str)
@@ -675,6 +724,39 @@ class ToiletSystemInterface:
             return None
         except Exception as e:
             print(f"Failed to read DEV mode status: {e}")
+            return None
+
+    async def get_logs(self) -> Optional[str]:
+        """Retrieve persistent error logs from firmware (GET_LOGS). Returns None on failure."""
+        if not self.connected:
+            print("Not connected to device")
+            return None
+        try:
+            chunks: List[str] = []
+            offset = 0
+            while True:
+                cmd = f"GET_LOGS:{offset}" if offset > 0 else "GET_LOGS"
+                response = await self._send_command_and_read_response(cmd)
+                if not response:
+                    break
+                if response == "LOGS_END":
+                    break
+                if response.startswith("LOGS:"):
+                    parts = response.split(":", 3)
+                    if len(parts) >= 4:
+                        offset = int(parts[1])
+                        length = int(parts[2])
+                        data = parts[3]
+                        chunks.append(data)
+                        offset += length
+                    else:
+                        break
+                else:
+                    print(f"Unexpected GET_LOGS response: {response[:80]}")
+                    break
+            return "".join(chunks) if chunks else ""
+        except Exception as e:
+            print(f"Failed to get logs: {e}")
             return None
 
     async def get_flush_count(self) -> Optional[int]:
@@ -707,24 +789,16 @@ class ToiletSystemInterface:
         if new_mode not in (0, 1):
             print("Invalid DEV mode value. Use 0 or 1.")
             return False
-
         try:
-            command = f"SET_DEV_MODE:{new_mode}"
-            await self.client.write_gatt_char(CHARACTERISTIC_UUID, command.encode("utf-8"))
-            await asyncio.sleep(0.15)
-
-            data = await self.client.read_gatt_char(CHARACTERISTIC_UUID)
-            response = data.decode("utf-8").strip()
-
+            response = await self._send_command_and_read_response(f"SET_DEV_MODE:{new_mode}")
+            if not response:
+                return False
             if response.startswith("SET_DEV_MODE_ACK:"):
                 ack_value = response.split(":", 1)[1].strip()
                 return ack_value == str(new_mode)
-
             if response.startswith("SET_DEV_MODE_ERR:"):
                 print(f"Firmware rejected DEV mode update: {response}")
                 return False
-
-            # If response is not an ACK/ERR, verify by reading back.
             verify_mode = await self.get_dev_mode_status()
             return verify_mode == new_mode
         except Exception as e:
@@ -732,22 +806,75 @@ class ToiletSystemInterface:
             return False
 
     async def _send_command_and_read_response(self, command: str, retries: int = 3, response_delay_s: float = 0.15) -> Optional[str]:
+        """Write command to fea0, read response from fea4."""
         if not self.connected:
             print("Not connected to device")
             return None
+        write_uuid = COMMAND_CHARACTERISTIC_UUID
+        read_uuid = RESPONSE_CHARACTERISTIC_UUID
         try:
             for _ in range(retries):
-                await self.client.write_gatt_char(CHARACTERISTIC_UUID, command.encode("utf-8"))
+                await self.client.write_gatt_char(write_uuid, command.encode("utf-8"))
                 await asyncio.sleep(response_delay_s)
-                data = await self.client.read_gatt_char(CHARACTERISTIC_UUID)
-                response = data.decode("utf-8").strip()
+                data = await self.client.read_gatt_char(read_uuid)
+                response = data.decode("utf-8", errors="replace").strip()
                 if response:
+                    if response == "AUTH_REQUIRED":
+                        self.trusted = False  # Per spec: reset local trust state
                     return response
                 await asyncio.sleep(0.1)
             return None
         except Exception as e:
             print(f"Command failed ({command}): {e}")
             return None
+
+    # --- Trust handshake (BLE_APP_MIGRATION_SPEC, BLE_HANDSHAKE_INTERFACE_SPEC) ---
+    async def trust_start(self) -> Optional[str]:
+        """Send TRUST_START, read response from fea4. Returns TRUST_WAITING, TRUST_CONFIRMED, or error."""
+        return await self._send_command_and_read_response("TRUST_START")
+
+    async def trust_status(self) -> Optional[str]:
+        """Send TRUST_STATUS, read response from fea4. Returns TRUST_WAITING, TRUST_CONFIRMED, TRUST_TIMEOUT."""
+        return await self._send_command_and_read_response("TRUST_STATUS")
+
+    async def trust_cancel(self) -> Optional[str]:
+        """Send TRUST_CANCEL, read response from fea4. Returns TRUST_CANCEL_ACK."""
+        return await self._send_command_and_read_response("TRUST_CANCEL")
+
+    async def trust_handshake(self, timeout_s: Optional[float] = None) -> bool:
+        """
+        Run full trust flow: TRUST_START, poll TRUST_STATUS until TRUST_CONFIRMED or timeout.
+        Per spec: user presses flush button during TRUST_WAITING to confirm.
+        Returns True if trusted, False on timeout/cancel/error.
+        """
+        timeout = timeout_s if timeout_s is not None else self.trust_timeout_s
+        start_resp = await self.trust_start()
+        if not start_resp:
+            print("Trust handshake failed: no response to TRUST_START")
+            return False
+        if start_resp == "TRUST_CONFIRMED":
+            self.trusted = True
+            print("Already trusted for this connection.")
+            return True
+        if start_resp != "TRUST_WAITING":
+            print(f"Trust handshake failed: unexpected TRUST_START response: {start_resp}")
+            return False
+        print("Press flush button on device to confirm connection...")
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            status = await self.trust_status()
+            if status == "TRUST_CONFIRMED":
+                self.trusted = True
+                print("Trust confirmed.")
+                return True
+            if status == "TRUST_TIMEOUT":
+                print("Trust handshake timed out.")
+                self.trusted = False
+                return False
+            await asyncio.sleep(self.trust_poll_interval_s)
+        print("Trust handshake timed out (client).")
+        self.trusted = False
+        return False
 
     # HWCFG command reference (exact command strings):
     #   HWCFG_GET_CAPS
@@ -889,6 +1016,10 @@ class ToiletSystemInterface:
         if not self._is_valid_iso_date(install_date):
             print("install_date must use YYYY-MM-DD")
             return False
+        if not self.trusted:
+            if not await self.trust_handshake():
+                print("HWCFG apply aborted: trust handshake required.")
+                return False
         command = (
             f"HWCFG_APPLY_CHANGE:{component}|new_version={new_version}|"
             f"install_date={install_date}|desc={desc}"
@@ -899,16 +1030,26 @@ class ToiletSystemInterface:
             return False
         if response.startswith("HWCFG_APPLY_ACK:"):
             return True
+        if response == "AUTH_REQUIRED":
+            print("Firmware rejected: trust handshake required. Run trust handshake and retry.")
+            return False
         print(f"Apply failed: {response}")
         return False
 
     async def hwcfg_rollback_last_good(self) -> bool:
+        if not self.trusted:
+            if not await self.trust_handshake():
+                print("HWCFG rollback aborted: trust handshake required.")
+                return False
         response = await self._send_command_and_read_response("HWCFG_ROLLBACK_LAST_GOOD")
         if not response:
             print("No response from firmware for HWCFG_ROLLBACK_LAST_GOOD")
             return False
         if response == "HWCFG_ROLLBACK_ACK":
             return True
+        if response == "AUTH_REQUIRED":
+            print("Firmware rejected: trust handshake required. Run trust handshake and retry.")
+            return False
         print(f"Rollback failed: {response}")
         return False
 
@@ -976,6 +1117,11 @@ class ToiletSystemInterface:
             print("install_date must use ISO format YYYY-MM-DD")
             return False
 
+        if not self.trusted:
+            if not await self.trust_handshake():
+                print("Hardware component update aborted: trust handshake required.")
+                return False
+
         command = f"SET_HW_COMPONENT:{component}:{version}:{install_date}:{description}"
         response = await self._send_command_and_read_response(command)
         if not response:
@@ -983,6 +1129,9 @@ class ToiletSystemInterface:
             return False
         if response.startswith("SET_HW_COMPONENT_ACK:"):
             return response.split(":", 1)[1].strip().upper() == component
+        if response == "AUTH_REQUIRED":
+            print("Firmware rejected: trust handshake required. Run trust handshake and retry.")
+            return False
         if response.startswith("SET_HW_COMPONENT_ERR:"):
             print(f"Firmware rejected SET_HW_COMPONENT: {response}")
             return False
@@ -1059,8 +1208,10 @@ async def main():
             print("17. HWCFG validate + apply change")
             print("18. HWCFG rollback last good")
             print("19. Read flush count")
+            print("20. Read error logs (GET_LOGS)")
+            print("21. Trust handshake (press flush button to confirm)")
             
-            choice = input("\nEnter your choice (1-19): ").strip()
+            choice = input("\nEnter your choice (1-21): ").strip()
             
             if choice == "1":
                 print("\nReading current parameters...")
@@ -1390,9 +1541,30 @@ async def main():
                     print("Failed to read flush count")
                 else:
                     print(f"Lifetime flush count: {flush_count}")
-            
+
+            elif choice == "20":
+                print("\nReading error logs...")
+                logs = await interface.get_logs()
+                if logs is None:
+                    print("Failed to read logs")
+                elif logs:
+                    print(logs)
+                else:
+                    print("(no logs)")
+
+            elif choice == "21":
+                print("\nTrust handshake...")
+                if await interface.trust_handshake():
+                    print("Trust confirmed. Parameter updates and privileged commands are now allowed.")
+                    params = await interface.read_current_params()
+                    if params:
+                        interface.current_params = params
+                        interface.display_params_table(params)
+                else:
+                    print("Trust handshake failed or timed out.")
+
             else:
-                print("Invalid choice. Please enter 1-19.")
+                print("Invalid choice. Please enter 1-21.")
     
     except KeyboardInterrupt:
         print("\nProgram interrupted by user")
