@@ -1,0 +1,5 @@
+File Name                           | Flash Address
+------------------------------------|---------------
+ILLUMINATE_LEDS.ino.bootloader.bin  | 0x1000
+ILLUMINATE_LEDS.ino.partitions.bin  | 0x8000
+ILLUMINATE_LEDS.ino.bin             | 0x10000

@@ -141,7 +141,7 @@ enum HardwareComponentId {
   HW_THERMISTOR,
   HW_BATTERY,
   HW_FACTORY_SOFTWARE_DATE,
-  HW_FACTORY_SOFTWARE_VERSION_NUMBER,
+  HW_SOFTWARE_VERSION_NUMBER,
   HW_COMPONENT_COUNT
 };
 
@@ -180,8 +180,13 @@ struct HWCFGConfigStore {
   HWCFGProfileEntry profiles[HWCFG_PROFILE_MAX];
   uint32_t crc32;
 };
-
-const char* SOFTWARE_VERSION = "2.4.3"; //HOPEFULLY FIX MD5
+//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+//set this when building the firmware
+//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+const char* SOFTWARE_VERSION_NUMBER = "2.5.0";
+const char* FACTORY_SOFTWARE_DATE = "2026-03-13";
 const char* SOFTWARE_BUILD_DATE = __DATE__ " " __TIME__;
 
 // Forward declarations
@@ -545,7 +550,7 @@ const char* HARDWARE_COMPONENT_NAMES[HW_COMPONENT_COUNT] = {
   "THERMISTOR",
   "BATTERY",
   "FACTORY_SOFTWARE_DATE",
-  "FACTORY_SOFTWARE_VERSION_NUMBER"
+  "SOFTWARE_VERSION_NUMBER"
 };
 
 // Motor Driver Definitions
@@ -767,6 +772,50 @@ class update_characteristic_callbacks: public BLECharacteristicCallbacks {
         Serial.println("'");
         SerialBLE_println("Unknown OTA payload while not receiving");
       }
+    }
+  }
+};
+
+// Serial stream (fea1): Client writes START_SERIAL/STOP_SERIAL; firmware sends via notify.
+// Uses onWrite so we only process client writes, never our own setValue+notify output.
+class serial_characteristic_callbacks: public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic *pCharacteristic) {
+    if (pCharacteristic->getUUID().toString() != SERIAL_CHARACTERISTIC_UUID) return;
+    int serial_message_length = pCharacteristic->getLength();
+    if (serial_message_length <= 0) return;
+
+    unsigned char* serial_message = pCharacteristic->getData();
+    const char* payload_ptr = (const char*)serial_message;
+    size_t payload_len = (size_t)serial_message_length;
+
+    // Framed format: 0x7E, len_lo, len_hi, payload (matches Python/Android BLE frame)
+    if (serial_message_length >= BLE_FRAME_HEADER_SIZE && serial_message[0] == BLE_FRAME_START_BYTE) {
+      uint16_t frame_payload_len = serial_message[1] | (serial_message[2] << 8);
+      if (frame_payload_len > 0 && serial_message_length >= BLE_FRAME_HEADER_SIZE + frame_payload_len) {
+        payload_ptr = (const char*)(serial_message + BLE_FRAME_HEADER_SIZE);
+        payload_len = frame_payload_len;
+      }
+    }
+
+    String command = String(payload_ptr, payload_len);
+    command.trim();
+
+    if (command == "START_SERIAL") {
+      if (!isTrustedConnection()) {
+        Serial.println("Serial streaming blocked - trust handshake required");
+        sendSerialToBLE("AUTH_REQUIRED\n");
+        writeResponseToChannel("AUTH_REQUIRED");
+      } else {
+        serial_streaming_enabled = true;
+        Serial.println("Serial streaming enabled via BLE");
+        sendSerialToBLE("Serial streaming ENABLED via BLE");
+      }
+    } else if (command == "STOP_SERIAL") {
+      serial_streaming_enabled = false;
+      Serial.println("Serial streaming disabled via BLE");
+      sendSerialToBLE("Serial streaming DISABLED via BLE");
+    } else {
+      Serial.printf("DEBUG: Unknown serial command: '%.40s'\n", command.c_str());
     }
   }
 };
@@ -1059,6 +1108,7 @@ class param_write_characteristic_callbacks: public BLECharacteristicCallbacks {
 
 // Function to initialize the MCP23017 for output and input
 void mcp_setup() {
+  delay(200);  // Allow power rail and I2C bus to settle after reset
   // ✅ Use GPIO6 for SDA and GPIO7 for SCL
   myI2C.begin(6, 7, 100000);
 
@@ -1164,6 +1214,7 @@ void server_setup(bool includeOTA = false) {
                                                              BLECharacteristic::PROPERTY_WRITE |
                                                              BLECharacteristic::PROPERTY_NOTIFY
                                                            );
+  serial_characteristic->setCallbacks(new serial_characteristic_callbacks());
   serial_characteristic->setValue("Serial streaming ready");
   
   // Create version characteristic with dummy value
@@ -1674,8 +1725,8 @@ void initializeDefaultHardwareMatrix(HardwareMatrix& matrix) {
   setHardwareComponentDefaults(matrix.components[HW_MECHANISM_MOTOR], "1", "MOTOR DESIGN FOR THE OPEN & CLOSE CLAMPING MECANISM", "2026-02-28");
   setHardwareComponentDefaults(matrix.components[HW_THERMISTOR], "1", "VERSION OF THE THERMISTOR IN THE HEATING ELEMENT", "2026-02-28");
   setHardwareComponentDefaults(matrix.components[HW_BATTERY], "1", "VERSION OF THE BATTERY POWER SUPPLY", "2026-02-28");
-  setHardwareComponentDefaults(matrix.components[HW_FACTORY_SOFTWARE_DATE], "2026-02-28", "DATE OF THE FACTORY SOFTWARE", "2026-02-28");
-  setHardwareComponentDefaults(matrix.components[HW_FACTORY_SOFTWARE_VERSION_NUMBER], "1", "SOFTWARE VERSION NUMBER", "2026-02-28");
+  setHardwareComponentDefaults(matrix.components[HW_FACTORY_SOFTWARE_DATE], FACTORY_SOFTWARE_DATE, "DATE OF THE FACTORY SOFTWARE", FACTORY_SOFTWARE_DATE);
+  setHardwareComponentDefaults(matrix.components[HW_SOFTWARE_VERSION_NUMBER], SOFTWARE_VERSION_NUMBER, "SOFTWARE VERSION NUMBER", __DATE__);
   refreshHardwareMatrixCRC(matrix);
 }
 
@@ -1831,6 +1882,10 @@ bool initializeHardwareMatrix() {
   if (loadHardwareMatrixBlob(HW_MATRIX_ACTIVE_KEY, hardwareMatrixScratchActive) &&
       validateHardwareMatrix(hardwareMatrixScratchActive, &validationError)) {
     hardwareMatrix = hardwareMatrixScratchActive;
+    copyBoundedString(hardwareMatrix.components[HW_SOFTWARE_VERSION_NUMBER].current_version,
+                      sizeof(hardwareMatrix.components[HW_SOFTWARE_VERSION_NUMBER].current_version),
+                      SOFTWARE_VERSION_NUMBER);
+    refreshHardwareMatrixCRC(hardwareMatrix);
     hardwareMatrixInitialized = true;
     Serial.println("Hardware matrix loaded from active NVS record");
     return true;
@@ -1845,6 +1900,10 @@ bool initializeHardwareMatrix() {
   if (loadHardwareMatrixBlob(HW_MATRIX_LAST_GOOD_KEY, hardwareMatrixScratchLastGood) &&
       validateHardwareMatrix(hardwareMatrixScratchLastGood, &validationError)) {
     hardwareMatrix = hardwareMatrixScratchLastGood;
+    copyBoundedString(hardwareMatrix.components[HW_SOFTWARE_VERSION_NUMBER].current_version,
+                      sizeof(hardwareMatrix.components[HW_SOFTWARE_VERSION_NUMBER].current_version),
+                      SOFTWARE_VERSION_NUMBER);
+    refreshHardwareMatrixCRC(hardwareMatrix);
     hardwareMatrixInitialized = true;
     saveHardwareMatrixBlob(hardwareMatrix, false);
     Serial.println("Recovered hardware matrix from last-known-good record");
@@ -1873,6 +1932,10 @@ bool setHardwareComponentByName(const String& componentName, const String& versi
   HardwareComponentId componentId;
   if (!lookupHardwareComponentId(componentName, componentId)) {
     errorCode = "UNKNOWN_COMPONENT";
+    return false;
+  }
+  if (componentId == HW_SOFTWARE_VERSION_NUMBER) {
+    errorCode = "READ_ONLY";
     return false;
   }
 
@@ -2665,7 +2728,7 @@ String getVersionString() {
   }
   
   versionString += "SW:";
-  versionString += SOFTWARE_VERSION;
+  versionString += SOFTWARE_VERSION_NUMBER;
   versionString += "|Build:";
   versionString += SOFTWARE_BUILD_DATE;
   
@@ -3388,6 +3451,7 @@ void loop() {
       lastStatusPrint = millis();
       Serial.println("BLE Connected - System Running");
       sendSerialToBLE("System Status: Running - " + String(millis() / 1000) + "s");
+      yield();  // Space between rapid BLE notifies to avoid LoadProhibited
       String motorFaultStatus = "Motor Fault Status: " + buildMotorFaultStatusSnapshot();
       Serial.println(motorFaultStatus);
       sendSerialToBLE(motorFaultStatus);
@@ -3402,51 +3466,6 @@ void loop() {
     old_device_connect = is_device_connected;
   }
   
-  // Handle serial streaming commands (supports both framed [0x7E+len+payload] and raw)
-  if (is_device_connected && serial_characteristic) {
-    int serial_message_length = serial_characteristic->getLength();
-    
-    if (serial_message_length > 0) {
-      unsigned char* serial_message = serial_characteristic->getData();
-      const char* payload_ptr = (const char*)serial_message;
-      size_t payload_len = (size_t)serial_message_length;
-
-      // Framed format: 0x7E, len_lo, len_hi, payload (matches Python/Android BLE frame)
-      if (serial_message_length >= BLE_FRAME_HEADER_SIZE && serial_message[0] == BLE_FRAME_START_BYTE) {
-        uint16_t frame_payload_len = serial_message[1] | (serial_message[2] << 8);
-        if (frame_payload_len > 0 && serial_message_length >= BLE_FRAME_HEADER_SIZE + frame_payload_len) {
-          payload_ptr = (const char*)(serial_message + BLE_FRAME_HEADER_SIZE);
-          payload_len = frame_payload_len;
-        }
-      }
-
-      String command = String(payload_ptr, payload_len);
-      command.trim();
-      
-      if (command == "START_SERIAL") {
-        if (!isTrustedConnection()) {
-          Serial.println("Serial streaming blocked - trust handshake required");
-          sendSerialToBLE("AUTH_REQUIRED\n");
-          writeResponseToChannel("AUTH_REQUIRED");
-        } else {
-          serial_streaming_enabled = true;
-          Serial.println("Serial streaming enabled via BLE");
-          sendSerialToBLE("Serial streaming ENABLED via BLE");
-        }
-      } else if (command == "STOP_SERIAL") {
-        Serial.println("DEBUG: Processing STOP_SERIAL command");
-        serial_streaming_enabled = false;
-        Serial.println("Serial streaming disabled via BLE");
-        sendSerialToBLE("Serial streaming DISABLED via BLE");
-      } else if (command.startsWith("Motor Fault Status:") || command.startsWith("System Status:")) {
-        // Ignore: this is our own status output echoed back (same characteristic used for TX/RX)
-      } else {
-        Serial.print("DEBUG: Unknown command: '");
-        Serial.print(command);
-        Serial.println("'");
-      }
-    }
-  }
   } // End of BLE-specific operations
 
   if (eepromWakeAlertActive) {
@@ -3843,14 +3862,12 @@ void loop() {
   if (!isFlushing) {
     if (digitalRead(controlPanelWake) == LOW) { // Button 1 / wake switch (GPIO2)
       lastActivityMillis = millis();
-      Serial.println("Button 1 pressed: Clockwise");
       clockwise = true;
       ledIndex = 0;
       ledLastUpdateMillis = millis();
     }
     if (mcp_digitalRead(button2Pin) == LOW) { // Button 2 pressed
       lastActivityMillis = millis();
-      Serial.println("Button 2 pressed: Anticlockwise");
       clockwise = false;
       ledIndex = 0;
       ledLastUpdateMillis = millis();
@@ -3866,8 +3883,6 @@ void flushSequence() {
   long totalHeaterTime = H;
   if (cutBag) {
     totalHeaterTime += (long)CUT_MODE_HEAT_TIME;
-    Serial.printf("DEBUG: Cut mode - Total time above K: %ld seconds (H=%ld + CUT_MODE_HEAT_TIME=%.1f)\n", 
-                 totalHeaterTime, H, CUT_MODE_HEAT_TIME);
   }
   switch (flushStep) {
     case 0: {
@@ -4193,7 +4208,13 @@ void flushSequence() {
       break;
     }
 
-    case 8:
+    case 8: {
+      int sw = digitalRead(microswitchOpenPin);
+      // Stop M1 immediately when open switch closes to prevent overshoot
+      if (sw == LOW) {
+        motors.setM1Speed(0);
+        mechanismMotorRunning = false;
+      }
       if (currentMillis - stepStartMillis >= backupTime * 1000) {
         Serial.println("Stop backing bag up");
         motors.setM2Speed(0);
@@ -4202,6 +4223,7 @@ void flushSequence() {
         SerialBLE_println(millis());
       }
       break;
+    }
 
     case 9:
       case10FanStarted = false;  // Reset flag for case 10
@@ -4211,15 +4233,35 @@ void flushSequence() {
       Serial.println(millis());
       break;
 
-    case 10:
-      if ((digitalRead(microswitchOpenPin) == LOW)) {
+    case 10: {
+      int sw10 = digitalRead(microswitchOpenPin);
+      Serial.print("sw10:");
+      Serial.println(sw10);
+      SerialBLE_print("sw10:");
+      SerialBLE_println(sw10);
+      
+      if (sw10 == LOW) {
+        Serial.println("motorFaultStatus:");
+        String motorFaultStatus = "Motor Fault Status: " + buildMotorFaultStatusSnapshot();
+        Serial.println(motorFaultStatus);
+        sendSerialToBLE(motorFaultStatus);
+        Serial.println("Stopping Motor");
+        SerialBLE_println("Stopping Motor");
+        
         motors.setM1Speed(0);
+        
+        Serial.println("Motor stopped");
+        SerialBLE_println("Motor stopped");
         mechanismMotorRunning = false;
+        SerialBLE_println("Motor flag set to false");
+        yield();  // Let BLE/I2C settle after motor change; reduces EMI-related crashes
         
         // First, start backup if not started yet
         if (!case10BackupStarted) {
           SerialBLE_println("Stop opening, starting backup");
           motors.setM2Speed(400);  // M2 in reverse for backup
+          SerialBLE_println("M2 STARTED BACKUP");
+          yield();
           case10BackupStartTime = currentMillis;
           case10BackupStarted = true;
         }
@@ -4249,6 +4291,7 @@ void flushSequence() {
         }
       }
       break;
+    }
 
     case 11:
       if (currentMillis - stepStartMillis >= continueFeeder * 1000) {
@@ -5632,8 +5675,12 @@ String buildParamCSV() {
 // Function to send serial data to BLE
 void sendSerialToBLE(const String& message) {
   if (bleEnabled && is_device_connected && serial_characteristic) {
-    serial_characteristic->setValue(message.c_str());
-    serial_characteristic->notify();
+    const char* ptr = message.c_str();
+    if (ptr) {
+      serial_characteristic->setValue(ptr);
+      yield();  // Let BLE stack process before notify (avoids LoadProhibited in rapid notify)
+      serial_characteristic->notify();
+    }
   }
 }
 

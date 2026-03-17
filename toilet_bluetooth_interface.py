@@ -218,7 +218,7 @@ class ToiletSystemInterface:
             "THERMISTOR",
             "BATTERY",
             "FACTORY_SOFTWARE_DATE",
-            "FACTORY_SOFTWARE_VERSION_NUMBER",
+            "SOFTWARE_VERSION_NUMBER",
         ]
 
     async def _request_preferred_mtu(self):
@@ -808,7 +808,6 @@ class ToiletSystemInterface:
     async def _send_command_and_read_response(self, command: str, retries: int = 3, response_delay_s: float = 0.15) -> Optional[str]:
         """Write command to fea0, read response from fea4."""
         if not self.connected:
-            print("Not connected to device")
             return None
         write_uuid = COMMAND_CHARACTERISTIC_UUID
         read_uuid = RESPONSE_CHARACTERISTIC_UUID
@@ -825,7 +824,17 @@ class ToiletSystemInterface:
                 await asyncio.sleep(0.1)
             return None
         except Exception as e:
-            print(f"Command failed ({command}): {e}")
+            err_str = str(e).lower()
+            if "not connected" in err_str or "disconnected" in err_str:
+                # Throttle connection-error spam (e.g. during trust poll when link drops)
+                if not hasattr(self, "_last_conn_err_log"):
+                    self._last_conn_err_log = 0.0
+                now = time.monotonic()
+                if now - self._last_conn_err_log >= 1.0:
+                    self._last_conn_err_log = now
+                    print(f"Command failed ({command}): {e}")
+            else:
+                print(f"Command failed ({command}): {e}")
             return None
 
     # --- Trust handshake (BLE_APP_MIGRATION_SPEC, BLE_HANDSHAKE_INTERFACE_SPEC) ---

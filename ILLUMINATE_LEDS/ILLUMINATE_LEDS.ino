@@ -1,6 +1,5 @@
 #include <Wire.h>
 #include <Adafruit_MCP23X17.h>
-#include <esp_sleep.h>
 
 // Custom I2C instance
 TwoWire myI2C = TwoWire(0);
@@ -9,16 +8,16 @@ TwoWire myI2C = TwoWire(0);
 Adafruit_MCP23X17 mcp;
 
 // Button 1: ESP32 GPIO2 (direct to main board, goes to GND when pressed)
-const int controlPanelWake = 2;
+const int controlPanelWake = 2; //GND
 // Button 2: MCP23017 pin 15
-const int button2Pin = 15;
+const int button2Pin = 15;  //MCP
+
+const int microswitchClosePin = 16;   // GPIO16
+const int microswitchOpenPin = 15;    // GPIO15
 
 // LED pins (MCP23017 side) - same as toilet_kat_change.ino
 const int ledPins[] = {1, 9, 13, 14, 10, 6, 11, 12, 8, 0, 2, 3, 4, 5};
 const int totalLeds = sizeof(ledPins) / sizeof(ledPins[0]);
-
-const unsigned long DEEP_SLEEP_AFTER_MS = 120000;  // 2 minutes
-unsigned long startMs = 0;
 
 void setup() {
   Serial.begin(115200);
@@ -35,6 +34,8 @@ void setup() {
   Serial.println("MCP23017 OK.");
 
   pinMode(controlPanelWake, INPUT_PULLUP);
+  //pinMode(microswitchClosePin, INPUT_PULLUP);
+  //pinMode(microswitchOpenPin, INPUT_PULLUP);
   mcp.pinMode(button2Pin, INPUT_PULLUP);
 
   for (int i = 0; i < totalLeds; i++) {
@@ -43,8 +44,7 @@ void setup() {
 
   // Illuminate all LEDs on startup
   turnAllLEDsOn();
-  startMs = millis();
-  Serial.println("All LEDs illuminated. B1=flash(hold to loop), B2=circle(hold to loop), both=fast flash. Deep sleep 2min.");
+  Serial.println("All LEDs illuminated. B1=flash(hold to loop), B2=circle(hold to loop), both=fast flash. Runs indefinitely.");
 }
 
 void loop() {
@@ -64,13 +64,6 @@ void loop() {
       }
     }
     turnAllLEDsOn();
-  }
-
-  if (millis() - startMs >= DEEP_SLEEP_AFTER_MS) {
-    Serial.println("Entering deep sleep. Power cycle to restart.");
-    for (int i = 0; i < totalLeds; i++) mcp.digitalWrite(ledPins[i], LOW);
-    delay(100);
-    esp_deep_sleep_start();
   }
 
   delay(100);

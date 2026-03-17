@@ -151,6 +151,32 @@ Recommended timeout remains 60s.
 
 ---
 
+## Hardware Matrix Interface
+
+Commands for querying and updating hardware component metadata (versions, install dates). Write commands to `...fea0`, read responses from `...fea4`.
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `GET_HW_MATRIX` | Returns `HW_COMPONENTS:` + comma-separated component names |
+| `GET_HW_COMPONENT:<name>` | Returns `HW_COMPONENT:` + name + version + description + install_date (pipe-separated) |
+| `SET_HW_COMPONENT:<name>:<version>:<install_date>:<description>` | Update component (trust required). `SOFTWARE_VERSION_NUMBER` is read-only; returns `SET_HW_COMPONENT_ERR:READ_ONLY` |
+
+### Component list
+
+CONTROL_PANEL, HEATING_ELEMENT, MAIN_CIRCUIT_BOARD, VACUUM_FAN, FEED_MOTOR, MECHANISM_MOTOR, THERMISTOR, BATTERY, FACTORY_SOFTWARE_DATE, SOFTWARE_VERSION_NUMBER
+
+### CHECK_VERSION
+
+Write `CHECK_VERSION` to command channel; read response from response channel. Returns `HW:<hw_ver>|SW:<sw_ver>|Build:<date>|Desc:<desc>` (also exposed on version characteristic `...fea2`).
+
+### Breaking change
+
+Component `FACTORY_SOFTWARE_VERSION_NUMBER` was renamed to `SOFTWARE_VERSION_NUMBER`. Apps using the old name will receive `HW_COMPONENT_ERR:UNKNOWN_COMPONENT`.
+
+---
+
 ## Error Handling Requirements
 
 - Never assume a response belongs to params unless it came from parameter read characteristic.
