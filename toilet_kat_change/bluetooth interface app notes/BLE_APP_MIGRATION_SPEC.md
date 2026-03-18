@@ -47,11 +47,11 @@ Client implementations may use payload chunking to respect BLE MTU limits when w
 
 1. **Command channel (`...fea0`)**
    - Client writes command strings only.
-   - Examples: `TRUST_START`, `TRUST_STATUS`, `TRUST_CANCEL`, `GET_DEV_MODE`, `GET_FLUSH_COUNT`, `SET_DEV_MODE:<0|1>`, `ENABLE_OTA`, `GET_LOGS`, `GET_LOGS:<offset>`
+   - Examples: `TRUST_START`, `TRUST_STATUS`, `TRUST_CANCEL`, `GET_DEV_MODE`, `GET_FLUSH_COUNT`, `GET_BATTERY`, `SET_DEV_MODE:<0|1>`, `ENABLE_OTA`, `GET_LOGS`, `GET_LOGS:<offset>`
 
 2. **Response channel (`...fea4`)**
    - Client reads command responses only.
-   - Examples: `TRUST_WAITING`, `TRUST_CONFIRMED`, `TRUST_TIMEOUT`, `TRUST_CANCEL_ACK`, `AUTH_REQUIRED`, `DEV_MODE:0`, `FLUSH_COUNT:<n>`, `SET_DEV_MODE_ACK:1`, `LOGS:<offset>:<length>:<data>`, `LOGS_END`, etc.
+   - Examples: `TRUST_WAITING`, `TRUST_CONFIRMED`, `TRUST_TIMEOUT`, `TRUST_CANCEL_ACK`, `AUTH_REQUIRED`, `DEV_MODE:0`, `FLUSH_COUNT:<n>`, `BATTERY:<n>`, `SET_DEV_MODE_ACK:1`, `LOGS:<offset>:<length>:<data>`, `LOGS_END`, etc.
 
 3. **Parameter read channel (`...fea5`)**
    - Client reads current parameter snapshot only.
@@ -131,6 +131,23 @@ Each line is CSV: `type,timestamp,code,msg[,context]`
 ### App use case
 
 Use for "Export logs" / "Get support" flows: retrieve full log, concatenate chunks, then share as text (email, ticket, etc.).
+
+---
+
+## Battery Level (GET_BATTERY)
+
+Command `GET_BATTERY` retrieves the current battery charge level as a percentage. No trust handshake required.
+
+### Protocol
+
+- **Command**: `GET_BATTERY`
+- **Response**: `BATTERY:<n>` where `<n>` is 0–100 (integer percentage)
+- **Flow**: Client writes `GET_BATTERY` to command characteristic (`...fea0`), reads response from response channel (`...fea4`).
+- **Parsing**: Extract the integer from `BATTERY:NN` (e.g. `BATTERY:85` → 85). Regex: `^BATTERY[:_]?\s*(\d+)\s*%?$/i` or equivalent.
+
+### App use case
+
+Use for battery status indicator in the UI. Poll periodically (e.g. on connect and every 30–60 seconds) to display charge level or low-battery warning.
 
 ---
 

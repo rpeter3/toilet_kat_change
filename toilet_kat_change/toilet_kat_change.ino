@@ -863,6 +863,14 @@ class command_characteristic_callbacks: public BLECharacteristicCallbacks {
       sendSerialToBLE("Processed GET_FLUSH_COUNT");
       return;
     }
+    if (cmd == "GET_BATTERY") {
+      int level = getBatteryChargeLevel();
+      String batteryMessage = String("BATTERY:") + String(level);
+      writeResponseToChannel(batteryMessage);
+      Serial.printf("Processed GET_BATTERY, returned %s\n", batteryMessage.c_str());
+      sendSerialToBLE("Processed GET_BATTERY");
+      return;
+    }
     if (cmd == "GET_HW_MATRIX") {
       if (!hardwareMatrixInitialized && !initializeHardwareMatrix()) {
         writeResponseToChannel("HW_MATRIX_ERR:INIT_FAIL");
@@ -4771,10 +4779,16 @@ float readBatteryVoltage() {
   // Battery = VMON * (10k + 2.2k) / 2.2k = VMON * 5.545
   float batteryVoltage = voltage * 7.317; //Changed to 7.317, from 5.545
   
+  // Charge level: 11.0V = 0%, 12.6V = 100%
+  int chargeLevel;
+  if (batteryVoltage >= 12.6f) chargeLevel = 100;
+  else if (batteryVoltage <= 11.0f) chargeLevel = 0;
+  else chargeLevel = (int)((batteryVoltage - 11.0f) / 1.6f * 100.0f);
+
   // Debug output: one BLE string to avoid truncation/interleaving
   Serial.printf("Battery Debug: ADC=%d, VMON=%.3fV, Battery=%.2fV\n", analogValue, voltage, batteryVoltage);
   if (serial_streaming_enabled) {
-    sendSerialToBLE("Battery Debug analog: " + String(analogValue) + ", voltage: " + String(voltage, 2) + "V, battery: " + String(batteryVoltage, 2) + "V\n");
+    sendSerialToBLE("BAT_ADC: " + String(analogValue) + ", CHARGE: " + String(chargeLevel) + "%\n");
   }
   return batteryVoltage;
 }

@@ -5,11 +5,12 @@ Connects to ESP32 via BLE to read and update system parameters
 """
 
 import asyncio
+import json
+import os
+import platform
+import re
 import struct
 import time
-import json
-import platform
-import os
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Union
 
@@ -780,6 +781,25 @@ class ToiletSystemInterface:
             print(f"Invalid negative flush count payload: {response}")
             return None
         return flush_count
+
+    async def get_battery(self) -> Optional[int]:
+        """Read battery charge level (0-100%) from firmware. Returns int or None on failure."""
+        response = await self._send_command_and_read_response("GET_BATTERY")
+        if not response:
+            print("No response from firmware for GET_BATTERY")
+            return None
+        m = re.match(r"^BATTERY[:_]?\s*(\d+)\s*%?$", response, re.IGNORECASE)
+        if not m:
+            print(f"Unexpected GET_BATTERY response: {response}")
+            return None
+        try:
+            level = int(m.group(1))
+        except ValueError:
+            return None
+        if level < 0 or level > 100:
+            print(f"Invalid battery level out of range 0-100: {response}")
+            return None
+        return level
 
     async def set_dev_mode(self, new_mode: int) -> bool:
         """Set firmware DEV mode to 0 or 1."""
