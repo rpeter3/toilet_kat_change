@@ -16,6 +16,15 @@
 #include <SPIFFS.h>
 #define LED_PHASE_COUNT 5
 
+// Continuous thermal flush test (80°C hold, open after cooling below 60°C). See CONTINUOUS_FLUSH_TEST.ino.
+#ifndef CONTINUOUS_FLUSH_TEST
+#define CONTINUOUS_FLUSH_TEST 1
+#endif
+#if CONTINUOUS_FLUSH_TEST
+bool continuousFlushTestOnFlushStarting();
+bool continuousFlushTestTryRestartFromCase13();
+#endif
+
 // Error log (SPIFFS, bounded, BLE-retrievable)
 #define LOG_FILE "/logs/errors.txt"
 #define MAX_LOG_SIZE 8192
@@ -1117,8 +1126,8 @@ class param_write_characteristic_callbacks: public BLECharacteristicCallbacks {
 // Function to initialize the MCP23017 for output and input
 void mcp_setup() {
   delay(200);  // Allow power rail and I2C bus to settle after reset
-  // ✅ Use GPIO6 for SDA and GPIO7 for SCL
-  myI2C.begin(6, 7, 100000);
+  // ✅ Use GPIO6 for SDA and GPIO7 for SCL (20 kHz I2C for slower edges / EMI)
+  myI2C.begin(6, 7, 20000);
 
   // Retry MCP startup to survive first-boot rail/I2C bring-up timing.
   const int maxAttempts = 20;
@@ -3638,7 +3647,13 @@ void loop() {
           cutBag = true;
           SerialBLE_println("Cut Bag mode enabled!");
           Serial.printf("DEBUG: cutBag set to true, hold time: %lu ms\n", millis() - button1HoldStartTime);
+#if CONTINUOUS_FLUSH_TEST
+          if (!continuousFlushTestOnFlushStarting()) {
+            cutModeLEDAnimation();
+          }
+#else
           cutModeLEDAnimation();
+#endif
           
           // Start flush sequence with cut bag enabled
           SerialBLE_println("Starting flush sequence with cut bag enabled");
@@ -3675,7 +3690,13 @@ void loop() {
         SerialBLE_println("Cut Bag mode enabled!");
         SerialBLE_println("Short press - starting flush sequence with cut bag enabled");
         Serial.printf("DEBUG: cutBag set to true, short press duration: %lu ms\n", holdDuration);
+#if CONTINUOUS_FLUSH_TEST
+        if (!continuousFlushTestOnFlushStarting()) {
+          cutModeLEDAnimation();
+        }
+#else
         cutModeLEDAnimation();
+#endif
         
         // Calculate sequence timing and reset LED state
         calculateSequenceTiming();
@@ -3882,6 +3903,7 @@ void loop() {
     }
   }
   maintainEEPROMErrorIndicator();
+  delay(1);  // Throttle main loop / MCP I2C poll rate (~1 kHz max)
 }
 
 void flushSequence() {
@@ -4336,6 +4358,12 @@ void flushSequence() {
         for (int i = 0; i < totalLeds; i++) {
           mcp_digitalWrite(ledPins[i], LOW);
         }
+#if CONTINUOUS_FLUSH_TEST
+        if (continuousFlushTestTryRestartFromCase13()) {
+          SerialBLE_println("CONTINUOUS_FLUSH_TEST: cycle restarted");
+          break;
+        }
+#endif
         incrementFlushCount();
         isFlushing = false;
         flushStep = 0;
