@@ -145,20 +145,6 @@ enum HardwareComponentId {
   HW_COMPONENT_COUNT
 };
 
-//UPDATE THIS TO 6 FOR DEV TESTING USING NEW BOARD
-#ifndef CONTROL_PANEL_PINOUT_OVERRIDE
-#define CONTROL_PANEL_PINOUT_OVERRIDE 6
-#endif
-
-enum ControlPanelPinout : uint8_t {
-  CP_PINOUT_V5_LEGACY = 5,
-  CP_PINOUT_V6 = 6
-};
-
-const int CP_V5_BTN2_MCP = 15;
-const int CP_V6_BTN1_MCP = 6;
-const int CP_V6_BTN2_MCP = 14;
-
 struct HardwareComponentEntry {
   char current_version[HW_COMPONENT_VERSION_LEN];
   char current_description[HW_COMPONENT_DESC_LEN];
@@ -204,12 +190,6 @@ const char* FACTORY_SOFTWARE_DATE = "2026-03-13";
 const char* SOFTWARE_BUILD_DATE = __DATE__ " " __TIME__;
 
 // Forward declarations
-// sendSerialToBLEImpl: setValue+notify (ungated) — use only for AUTH or internal plumbing.
-// sendSerialToBLE: gated on serial_streaming_enabled
-void sendSerialToBLEImpl(const String& message);
-void sendSerialToBLEImpl(float value);
-void sendSerialToBLEImpl(int value);
-void sendSerialToBLEImpl(unsigned long value);
 void sendSerialToBLE(const String& message);
 void sendSerialToBLE(float value);
 void sendSerialToBLE(int value);
@@ -230,15 +210,6 @@ String getVersionString();
 String getHardwareComponentsListString();
 String getHardwareComponentString(HardwareComponentId componentId);
 bool setHardwareComponentByName(const String& componentName, const String& version, const String& installDate, const String& description, String& errorCode);
-ControlPanelPinout getControlPanelPinout();
-void configureControlPanelMcpInputs();
-void configureControlPanelLedOutputs();
-const int* getActiveLedPins();
-int getLedPin(int uiIndex);
-void logControlPanelPinout();
-bool readControlPanelButton1();
-bool readControlPanelButton2();
-bool readControlPanelWakeLine();
 bool lookupHardwareComponentId(const String& componentName, HardwareComponentId& outId);
 bool initializeHWCFGStore();
 String handleHWCFGCommand(const String& cmd);
@@ -276,14 +247,17 @@ void playHardwareNotConnectedAlert();
 bool enforceHeaterToleranceGap(const char* sourceTag, bool notifyBle = true);
 
 // Macros to automatically forward Serial output to BLE when streaming is enabled
-#define SerialBLE_print(x) do { Serial.print(x); if(serial_streaming_enabled) sendSerialToBLEImpl(x); } while(0)
-#define SerialBLE_println(x) do { Serial.println(x); if(serial_streaming_enabled) sendSerialToBLEImpl(String(x) + "\n"); } while(0)
-#define SerialBLE_println_empty() do { Serial.println(); if(serial_streaming_enabled) sendSerialToBLEImpl("\n"); } while(0)
+#define SerialBLE_print(x) do { Serial.print(x); if(serial_streaming_enabled) sendSerialToBLE(x); } while(0)
+#define SerialBLE_println(x) do { Serial.println(x); if(serial_streaming_enabled) sendSerialToBLE(String(x) + "\n"); } while(0)
+#define SerialBLE_println_empty() do { Serial.println(); if(serial_streaming_enabled) sendSerialToBLE("\n"); } while(0)
 
-// LED pins (UI index 0-13 -> MCP pin; v6 uses 15/7 at indices 3/5 instead of v5's 14/6)
-static const int ledPinsV5[] = {1, 9, 13, 14, 10, 6, 11, 12, 8, 0, 2, 3, 4, 5};
-static const int ledPinsV6[] = {1, 9, 13, 15, 10, 7, 11, 12, 8, 0, 2, 3, 4, 5};
-const int totalLeds = 14;
+// Button pins (MCP23017 side)
+const int button1Pin = 7;
+const int button2Pin = 15;
+
+// LED pins
+const int ledPins[] = {1, 9, 13, 14, 10, 6, 11, 12, 8, 0, 2, 3, 4, 5};
+const int totalLeds = sizeof(ledPins) / sizeof(ledPins[0]);
 int ledIndex = 0;
 bool clockwise = true; // Direction flag for LED cycling
 const float HARDWARE_DISCONNECT_RESISTANCE_OHMS = 100000.0;
@@ -643,7 +617,7 @@ void resetTrustState() {
   g_trustState = TRUST_STATE_UNTRUSTED;
   g_trustStartMs = 0;
   for (int i = 0; i < totalLeds; i++) {
-    mcp_digitalWrite(getLedPin(i), LOW);
+    mcp_digitalWrite(ledPins[i], LOW);
   }
 }
 
@@ -657,7 +631,7 @@ void onTrustConfirmedByFlushButton() {
   if (g_trustState != TRUST_STATE_WAITING) return;
   g_trustState = TRUST_STATE_TRUSTED;
   for (int i = 0; i < totalLeds; i++) {
-    mcp_digitalWrite(getLedPin(i), LOW);
+    mcp_digitalWrite(ledPins[i], LOW);
   }
   trustDoubleBeep();
 }
@@ -667,7 +641,7 @@ void updateTrustTimeout() {
   if ((millis() - g_trustStartMs) >= TRUST_TIMEOUT_MS) {
     g_trustState = TRUST_STATE_TIMEOUT;
     for (int i = 0; i < totalLeds; i++) {
-      mcp_digitalWrite(getLedPin(i), LOW);
+      mcp_digitalWrite(ledPins[i], LOW);
     }
   }
 }
@@ -829,7 +803,7 @@ class serial_characteristic_callbacks: public BLECharacteristicCallbacks {
     if (command == "START_SERIAL") {
       if (!isTrustedConnection()) {
         Serial.println("Serial streaming blocked - trust handshake required");
-        sendSerialToBLEImpl("AUTH_REQUIRED\n");
+        sendSerialToBLE("AUTH_REQUIRED\n");
         writeResponseToChannel("AUTH_REQUIRED");
       } else {
         serial_streaming_enabled = true;
@@ -837,9 +811,9 @@ class serial_characteristic_callbacks: public BLECharacteristicCallbacks {
         sendSerialToBLE("Serial streaming ENABLED via BLE");
       }
     } else if (command == "STOP_SERIAL") {
+      serial_streaming_enabled = false;
       Serial.println("Serial streaming disabled via BLE");
       sendSerialToBLE("Serial streaming DISABLED via BLE");
-      serial_streaming_enabled = false;
     } else {
       Serial.printf("DEBUG: Unknown serial command: '%.40s'\n", command.c_str());
     }
@@ -1140,61 +1114,11 @@ class param_write_characteristic_callbacks: public BLECharacteristicCallbacks {
   }
 };
 
-ControlPanelPinout getControlPanelPinout() {
-  if (CONTROL_PANEL_PINOUT_OVERRIDE == 5) {
-    return CP_PINOUT_V5_LEGACY;
-  }
-  if (CONTROL_PANEL_PINOUT_OVERRIDE == 6) {
-    return CP_PINOUT_V6;
-  }
-  if (hardwareMatrixInitialized) {
-    const char* ver = hardwareMatrix.components[HW_CONTROL_PANEL].current_version;
-    if (ver[0] == '6' && ver[1] == '\0') {
-      return CP_PINOUT_V6;
-    }
-  }
-  return CP_PINOUT_V5_LEGACY;
-}
-
-void configureControlPanelMcpInputs() {
-  if (!mcpInitialized) {
-    return;
-  }
-  if (getControlPanelPinout() == CP_PINOUT_V6) {
-    mcp.pinMode(CP_V6_BTN1_MCP, INPUT_PULLUP);
-    mcp.pinMode(CP_V6_BTN2_MCP, INPUT_PULLUP);
-  } else {
-    mcp.pinMode(CP_V5_BTN2_MCP, INPUT_PULLUP);
-  }
-}
-
-const int* getActiveLedPins() {
-  return getControlPanelPinout() == CP_PINOUT_V6 ? ledPinsV6 : ledPinsV5;
-}
-
-int getLedPin(int uiIndex) {
-  if (uiIndex < 0 || uiIndex >= totalLeds) {
-    return getActiveLedPins()[0];
-  }
-  return getActiveLedPins()[uiIndex];
-}
-
-void configureControlPanelLedOutputs() {
-  if (!mcpInitialized) {
-    return;
-  }
-  for (int i = 0; i < totalLeds; i++) {
-    int pin = getLedPin(i);
-    mcp.pinMode(pin, OUTPUT);
-    mcp.digitalWrite(pin, LOW);
-  }
-}
-
 // Function to initialize the MCP23017 for output and input
 void mcp_setup() {
   delay(200);  // Allow power rail and I2C bus to settle after reset
   // ✅ Use GPIO6 for SDA and GPIO7 for SCL
-  myI2C.begin(6, 7, 100000);
+  myI2C.begin(6, 7, 20000);
 
   // Retry MCP startup to survive first-boot rail/I2C bring-up timing.
   const int maxAttempts = 20;
@@ -1216,8 +1140,13 @@ void mcp_setup() {
     return;
   }
 
-  configureControlPanelMcpInputs();
-  configureControlPanelLedOutputs();
+  // Setup button pins on expander
+  mcp.pinMode(button2Pin, INPUT_PULLUP);
+
+  // Setup LED pins on expander
+  for (int i = 0; i < totalLeds; i++) {
+    mcp.pinMode(ledPins[i], OUTPUT);
+  }
 }
 
 // Function to write a value to a specific MCP23017 pin
@@ -1239,34 +1168,6 @@ int mcp_digitalRead(int pin) {
     return HIGH;
   }
   return mcp.digitalRead(pin);
-}
-
-void logControlPanelPinout() {
-  if (getControlPanelPinout() == CP_PINOUT_V6) {
-    Serial.println("Control panel pinout: v6 (MCP6 + MCP14, wake GPIO2); LEDs use v6 map");
-    SerialBLE_println("Control panel pinout: v6 (MCP6 + MCP14, wake GPIO2); LEDs use v6 map");
-  } else {
-    Serial.println("Control panel pinout: v5 legacy (GPIO2 + MCP15); LEDs use v5 map");
-    SerialBLE_println("Control panel pinout: v5 legacy (GPIO2 + MCP15); LEDs use v5 map");
-  }
-}
-
-bool readControlPanelButton1() {
-  if (getControlPanelPinout() == CP_PINOUT_V6) {
-    return mcp_digitalRead(CP_V6_BTN1_MCP) == LOW;
-  }
-  return digitalRead(controlPanelWake) == LOW;
-}
-
-bool readControlPanelButton2() {
-  if (getControlPanelPinout() == CP_PINOUT_V6) {
-    return mcp_digitalRead(CP_V6_BTN2_MCP) == LOW;
-  }
-  return mcp_digitalRead(CP_V5_BTN2_MCP) == LOW;
-}
-
-bool readControlPanelWakeLine() {
-  return digitalRead(controlPanelWake) == LOW;
 }
 
 // Function to initialize the BLE Server
@@ -1515,11 +1416,11 @@ void enterEEPROMInvalidErrorState(const char* reason) {
   // Flash all LEDs 5 times before showing dedicated EEPROM error code.
   for (int i = 0; i < 5; i++) {
     for (int j = 0; j < totalLeds; j++) {
-      mcp_digitalWrite(getLedPin(j), HIGH);
+      mcp_digitalWrite(ledPins[j], HIGH);
     }
     delay(100);
     for (int j = 0; j < totalLeds; j++) {
-      mcp_digitalWrite(getLedPin(j), LOW);
+      mcp_digitalWrite(ledPins[j], LOW);
     }
     delay(100);
   }
@@ -1534,7 +1435,7 @@ void maintainEEPROMErrorIndicator() {
     return;
   }
   // Keep the EEPROM error LED latched high whenever the device is awake.
-  mcp_digitalWrite(getLedPin(EEPROM_INVALID_ERROR_CODE), HIGH);
+  mcp_digitalWrite(ledPins[EEPROM_INVALID_ERROR_CODE], HIGH);
 }
 
 void startEEPROMWakeAlert() {
@@ -2057,10 +1958,6 @@ bool setHardwareComponentByName(const String& componentName, const String& versi
     errorCode = "BAD_VERSION";
     return false;
   }
-  if (componentId == HW_CONTROL_PANEL && versionTrim != "5" && versionTrim != "6") {
-    errorCode = "BAD_VERSION";
-    return false;
-  }
   if (descriptionTrim.length() == 0 || descriptionTrim.length() >= HW_COMPONENT_DESC_LEN) {
     errorCode = "BAD_DESCRIPTION";
     return false;
@@ -2101,13 +1998,6 @@ bool setHardwareComponentByName(const String& componentName, const String& versi
                 HARDWARE_COMPONENT_NAMES[componentId],
                 hardwareMatrix.components[componentId].current_version,
                 hardwareMatrix.components[componentId].install_date);
-  if (componentId == HW_CONTROL_PANEL) {
-    logControlPanelPinout();
-    configureControlPanelMcpInputs();
-    configureControlPanelLedOutputs();
-    ledIndex = 0;
-    slowCircleLedIndex = 0;
-  }
   return true;
 }
 
@@ -2165,10 +2055,6 @@ bool isKnownParameterKey(const String& key) {
 
 bool validateParameterBlob(const String& componentName, const String& paramsBlob, String& errorCode) {
   if (paramsBlob.length() == 0) {
-    if (componentName == "CONTROL_PANEL") {
-      errorCode = "";
-      return true;
-    }
     errorCode = "EMPTY_PARAMS";
     return false;
   }
@@ -2388,11 +2274,8 @@ bool validateHWCFGStore(const HWCFGConfigStore& store, String& errorCode) {
     }
     if (!isSafeFieldString(entry.profile_id, false) ||
         !isSafeFieldString(entry.component_name, false) ||
-        !isSafeFieldString(entry.component_version, false)) {
-      errorCode = "BAD_FIELDS";
-      return false;
-    }
-    if (entry.params_blob[0] != '\0' && !isSafeFieldString(entry.params_blob, false)) {
+        !isSafeFieldString(entry.component_version, false) ||
+        !isSafeFieldString(entry.params_blob, false)) {
       errorCode = "BAD_FIELDS";
       return false;
     }
@@ -2415,16 +2298,10 @@ void initializeDefaultHWCFG(HWCFGConfigStore& store) {
   memset(&store, 0, sizeof(store));
   store.magic = HWCFG_MAGIC;
   store.schema_version = HWCFG_SCHEMA_VERSION;
-  store.profile_count = 1;
+  store.profile_count = 0;
   store.active_profile_id[0] = '\0';
   store.last_good_profile_id[0] = '\0';
   store.active_validated = 0;
-  HWCFGProfileEntry& cpV6 = store.profiles[0];
-  cpV6.in_use = 1;
-  copyBoundedString(cpV6.profile_id, sizeof(cpV6.profile_id), "cp_v6_pinout");
-  copyBoundedString(cpV6.component_name, sizeof(cpV6.component_name), "CONTROL_PANEL");
-  copyBoundedString(cpV6.component_version, sizeof(cpV6.component_version), "6");
-  cpV6.params_blob[0] = '\0';
   refreshHWCFGCRC(store);
 }
 
@@ -2718,11 +2595,8 @@ String handleHWCFGCommand(const String& cmd) {
     hwcfgSnapshotStore = hwcfgStore;
 
     String applyError;
-    String paramsBlob = String(hwcfgStore.profiles[profileIndex].params_blob);
-    if (paramsBlob.length() > 0) {
-      if (!applyParameterBlobToRuntime(paramsBlob, applyError)) {
-        return String("HWCFG_APPLY_ERR:") + applyError;
-      }
+    if (!applyParameterBlobToRuntime(String(hwcfgStore.profiles[profileIndex].params_blob), applyError)) {
+      return String("HWCFG_APPLY_ERR:") + applyError;
     }
 
     if (!setHardwareComponentByName(component, version, installDate, description, applyError)) {
@@ -3378,7 +3252,6 @@ void setup() {
 
     mcp_setup();
     Serial.println("MCP23017 Initialized");
-    logControlPanelPinout();
     circleLeds();
 
     loadParametersFromEEPROM();
@@ -3439,7 +3312,6 @@ void setup() {
 
   mcp_setup();
   Serial.println("MCP23017 Initialized");
-  logControlPanelPinout();
   circleLeds();
 
   Serial.println("LED startup test complete");
@@ -3545,7 +3417,7 @@ void loop() {
     }
   }
 
-  // Trust handshake: LED circle while waiting for GPIO2 wake line press
+  // Trust handshake: LED circle while waiting for flush button
   if (g_trustState == TRUST_STATE_WAITING) {
     slowCircleLeds();
   }
@@ -3586,11 +3458,11 @@ void loop() {
     if (millis() - lastStatusPrint > 5000) { // Every 5 seconds
       lastStatusPrint = millis();
       Serial.println("BLE Connected - System Running");
-      SerialBLE_print("System Status: Running - " + String(millis() / 1000) + "s");
+      sendSerialToBLE("System Status: Running - " + String(millis() / 1000) + "s");
       yield();  // Space between rapid BLE notifies to avoid LoadProhibited
       String motorFaultStatus = "Motor Fault Status: " + buildMotorFaultStatusSnapshot();
       Serial.println(motorFaultStatus);
-      SerialBLE_print(motorFaultStatus);
+      sendSerialToBLE(motorFaultStatus);
     }
   }
   if (!is_device_connected && old_device_connect) {
@@ -3608,6 +3480,7 @@ void loop() {
     if (millis() - eepromWakeAlertStartMillis < EEPROM_WAKE_ALERT_MS) {
       // Show latched EEPROM error indicator while holding controls for user awareness.
       maintainEEPROMErrorIndicator();
+      delay(1);  // Cap loop rate ~1 kHz (same as main path)
       return;
     }
     eepromWakeAlertActive = false;
@@ -3617,8 +3490,8 @@ void loop() {
   
   // OTA update handling is now done via update_characteristic_callbacks class
   // Read button states
-  bool button1Pressed = readControlPanelButton1();
-  bool button2Pressed = readControlPanelButton2();
+  bool button1Pressed = (digitalRead(controlPanelWake) == LOW);
+  bool button2Pressed = (mcp_digitalRead(button2Pin) == LOW);
   if (button1Pressed || button2Pressed) {
     lastActivityMillis = millis();
   }
@@ -3725,17 +3598,17 @@ void loop() {
       // Turn off battery display after 3 seconds
       batteryDisplayMode = false;
       for (int i = 0; i < totalLeds; i++) {
-        mcp_digitalWrite(getLedPin(i), LOW);
+        mcp_digitalWrite(ledPins[i], LOW);
       }
     }
   }
   
   // Handle individual button presses only if not in battery display mode
   if (!batteryDisplayMode) {
-    // Trust handshake: GPIO2 wake line confirms trust during TRUST_WAITING
-    if (g_trustState == TRUST_STATE_WAITING && readControlPanelWakeLine()) {
+    // Trust handshake: flush button confirms trust during TRUST_WAITING
+    if (g_trustState == TRUST_STATE_WAITING && button1Pressed) {
       onTrustConfirmedByFlushButton();
-      SerialBLE_println("Trust confirmed via GPIO2 wake line");
+      SerialBLE_println("Trust confirmed via flush button");
     } else
     // Handle button 1 (Flush) - check for hold to enable cutBag
     if (button1Pressed && !button1WasPressed) {
@@ -3779,11 +3652,10 @@ void loop() {
           
           // Turn off all LEDs first, then turn on the first one
           for (int i = 0; i < totalLeds; i++) {
-            mcp_digitalWrite(getLedPin(i), LOW);
+            mcp_digitalWrite(ledPins[i], LOW);
           }
-          mcp_digitalWrite(getLedPin(0), HIGH);
+          mcp_digitalWrite(ledPins[0], HIGH);
           
-          flushStep = 0;
           isFlushing = true;
           flushStartMillis = millis();
         }
@@ -3814,11 +3686,10 @@ void loop() {
         
         // Turn off all LEDs first, then turn on the first one
         for (int i = 0; i < totalLeds; i++) {
-          mcp_digitalWrite(getLedPin(i), LOW);
+          mcp_digitalWrite(ledPins[i], LOW);
         }
-        mcp_digitalWrite(getLedPin(0), HIGH);
+        mcp_digitalWrite(ledPins[0], HIGH);
         
-        flushStep = 0;
         isFlushing = true;
         flushStartMillis = millis();
         }
@@ -3998,13 +3869,13 @@ void loop() {
   // Check buttons for direction change only while idle.
   // During flush, LED progress is phase-driven and monotonic.
   if (!isFlushing) {
-    if (readControlPanelButton1()) {
+    if (digitalRead(controlPanelWake) == LOW) { // Button 1 / wake switch (GPIO2)
       lastActivityMillis = millis();
       clockwise = true;
       ledIndex = 0;
       ledLastUpdateMillis = millis();
     }
-    if (readControlPanelButton2()) {
+    if (mcp_digitalRead(button2Pin) == LOW) { // Button 2 pressed
       lastActivityMillis = millis();
       clockwise = false;
       ledIndex = 0;
@@ -4012,6 +3883,7 @@ void loop() {
     }
   }
   maintainEEPROMErrorIndicator();
+  delay(1);  // Cap main-loop polling at ~1 kHz max
 }
 
 void flushSequence() {
@@ -4034,6 +3906,7 @@ void flushSequence() {
        Serial.println(lowBatteryMsg);
        SerialBLE_println(lowBatteryMsg);
        stopEverything();
+       flushStep = 12;
        ERROR_CODE = 2;
        LEDErrorCode(ERROR_CODE);
        return;
@@ -4115,7 +3988,7 @@ void flushSequence() {
 
     case 3:
       SerialBLE_println("Heater on");
-      mcp_digitalWrite(getLedPin(0), HIGH);
+      mcp_digitalWrite(ledPins[0], HIGH);
       heaterOn = true;
       heaterTargetTemp = K;  // Target K until cut motor runs (then CUT_MODE_TEMP in cut mode)
       timeAboveSetpointMillis = 0;
@@ -4458,12 +4331,12 @@ void flushSequence() {
       // Hold full LED bar for 3 seconds before turning everything off.
       if (currentMillis - stepStartMillis < 3000) {
         for (int i = 0; i < totalLeds; i++) {
-          mcp_digitalWrite(getLedPin(i), HIGH);
+          mcp_digitalWrite(ledPins[i], HIGH);
         }
       } else {
         Serial.println("All LEDs off");
         for (int i = 0; i < totalLeds; i++) {
-          mcp_digitalWrite(getLedPin(i), LOW);
+          mcp_digitalWrite(ledPins[i], LOW);
         }
         incrementFlushCount();
         isFlushing = false;
@@ -4490,11 +4363,11 @@ void flashLeds() {
   unsigned int duration = 200;
   for (int j = 0; j < 5; j++) {
     for (int i = 0; i < totalLeds; i++) {
-      mcp_digitalWrite(getLedPin(i), HIGH);
+      mcp_digitalWrite(ledPins[i], HIGH);
     }
     delay(duration);
     for (int i = 0; i < totalLeds; i++) {
-      mcp_digitalWrite(getLedPin(i), LOW);
+      mcp_digitalWrite(ledPins[i], LOW);
     }
     delay(duration);
   }
@@ -4503,9 +4376,9 @@ void flashLeds() {
 void circleLeds() {
   unsigned int duration = 40;
   for (int i = 0; i < totalLeds; i++) {
-    mcp_digitalWrite(getLedPin(i), HIGH);
+    mcp_digitalWrite(ledPins[i], HIGH);
     delay(duration);
-    mcp_digitalWrite(getLedPin(i), LOW);
+    mcp_digitalWrite(ledPins[i], LOW);
   }
 }
 
@@ -4516,13 +4389,13 @@ void slowCircleLeds() {
     slowCircleLastUpdate = currentMillis;
     
     // Turn off previous LED
-    mcp_digitalWrite(getLedPin(slowCircleLedIndex), LOW);
+    mcp_digitalWrite(ledPins[slowCircleLedIndex], LOW);
     
     // Move to next LED (forward direction)
     slowCircleLedIndex = (slowCircleLedIndex + 1) % totalLeds;
     
     // Turn on current LED
-    mcp_digitalWrite(getLedPin(slowCircleLedIndex), HIGH);
+    mcp_digitalWrite(ledPins[slowCircleLedIndex], HIGH);
   }
 }
 
@@ -4539,7 +4412,7 @@ void enableOTA() {
   batteryMonitoringActive = false;
   // Turn off all LEDs immediately (clear battery level display if it was on)
   for (int i = 0; i < totalLeds; i++) {
-    mcp_digitalWrite(getLedPin(i), LOW);
+    mcp_digitalWrite(ledPins[i], LOW);
   }
   Serial.println("\n=== OTA MODE ENABLED ===");
   Serial.println("OTA window open for 1 minute - awaiting firmware update over USB serial or BLE");
@@ -4578,7 +4451,7 @@ void disableOTA() {
   
   // Turn off all LEDs
   for (int i = 0; i < totalLeds; i++) {
-    mcp_digitalWrite(getLedPin(i), LOW);
+    mcp_digitalWrite(ledPins[i], LOW);
   }
   
   Serial.println("OTA mode disabled");
@@ -4878,13 +4751,13 @@ void playHardwareNotConnectedAlert() {
 
   for (int cycle = 0; cycle < cycles; cycle++) {
     for (int i = 0; i < totalLeds; i++) {
-      mcp_digitalWrite(getLedPin(i), HIGH);
+      mcp_digitalWrite(ledPins[i], HIGH);
     }
     digitalWrite(buzzerPin, HIGH);
     delay(onMs);
 
     for (int i = 0; i < totalLeds; i++) {
-      mcp_digitalWrite(getLedPin(i), LOW);
+      mcp_digitalWrite(ledPins[i], LOW);
     }
     digitalWrite(buzzerPin, LOW);
     delay(offMs);
@@ -4893,7 +4766,7 @@ void playHardwareNotConnectedAlert() {
   // Ensure alert outputs are off after the pattern completes.
   digitalWrite(buzzerPin, LOW);
   for (int i = 0; i < totalLeds; i++) {
-    mcp_digitalWrite(getLedPin(i), LOW);
+    mcp_digitalWrite(ledPins[i], LOW);
   }
 }
 
@@ -5003,7 +4876,7 @@ void displayBatteryChargeLevel() {
   
   // Turn off all LEDs first
   for (int i = 0; i < totalLeds; i++) {
-    mcp_digitalWrite(getLedPin(i), LOW);
+    mcp_digitalWrite(ledPins[i], LOW);
   }
   
   // Calculate how many LEDs to light based on charge level
@@ -5014,15 +4887,15 @@ void displayBatteryChargeLevel() {
   // Light up LEDs from the bottom (LED 14 = index 13) upwards
   // Start from the highest index and work down
   for (int i = totalLeds - ledsToLight; i < totalLeds; i++) {
-    mcp_digitalWrite(getLedPin(i), HIGH);
+    mcp_digitalWrite(ledPins[i], HIGH);
   }
   
   // Flash the last LED if charge is very low (0-20%)
   if (chargeLevel <= 20) {
     for (int flash = 0; flash < 3; flash++) {
-      mcp_digitalWrite(getLedPin(totalLeds - 1), HIGH);
+      mcp_digitalWrite(ledPins[totalLeds - 1], HIGH);
       delay(200);
-      mcp_digitalWrite(getLedPin(totalLeds - 1), LOW);
+      mcp_digitalWrite(ledPins[totalLeds - 1], LOW);
       delay(200);
     }
   }
@@ -5031,11 +4904,11 @@ void displayBatteryChargeLevel() {
 void flashLEDsAcknowledgment() {
   // Flash all LEDs once to acknowledge cutBag command
   for (int i = 0; i < totalLeds; i++) {
-    mcp_digitalWrite(getLedPin(i), HIGH);
+    mcp_digitalWrite(ledPins[i], HIGH);
   }
   delay(500);
   for (int i = 0; i < totalLeds; i++) {
-    mcp_digitalWrite(getLedPin(i), LOW);
+    mcp_digitalWrite(ledPins[i], LOW);
   }
 }
 
@@ -5054,18 +4927,18 @@ void cutModeLEDAnimation() {
   for (int cycle = 0; cycle < 3; cycle++) {
     // Turn on LEDs from left to right
     for (int i = 0; i < 8; i++) {
-      mcp_digitalWrite(getLedPin(leftLEDs[i]), HIGH);
+      mcp_digitalWrite(ledPins[leftLEDs[i]], HIGH);
       if (rightLEDs[i] != -1) {
-        mcp_digitalWrite(getLedPin(rightLEDs[i]), HIGH);
+        mcp_digitalWrite(ledPins[rightLEDs[i]], HIGH);
       }
       delay(animationDelay);
     }
     
     // Turn off LEDs from right to left
     for (int i = 7; i >= 0; i--) {
-      mcp_digitalWrite(getLedPin(leftLEDs[i]), LOW);
+      mcp_digitalWrite(ledPins[leftLEDs[i]], LOW);
       if (rightLEDs[i] != -1) {
-        mcp_digitalWrite(getLedPin(rightLEDs[i]), LOW);
+        mcp_digitalWrite(ledPins[rightLEDs[i]], LOW);
       }
       delay(animationDelay);
     }
@@ -5083,6 +4956,7 @@ void stopEverything() {
   motors.setM1Speed(0);
   setFanSpeed(0);  // Stop M3 motor
   heaterOff();
+  flushStep = 12;
   isFlushing = false;
 }
 
@@ -5105,7 +4979,7 @@ void applyLedFillToIndex(int targetIndex, bool forceImmediate = false) {
   }
 
   for (int i = ledIndex + 1; i <= targetIndex; i++) {
-    mcp_digitalWrite(getLedPin(i), HIGH);
+    mcp_digitalWrite(ledPins[i], HIGH);
   }
   ledIndex = targetIndex;
   ledLastUpdateMillis = millis();
@@ -5496,19 +5370,19 @@ void LEDErrorCode(int errorCode) { // Modified to accept errorCode
     logError("runtime", errorCode, msg, true);
   }
   for (int j = 0; j < totalLeds; j++) {
-    mcp_digitalWrite(getLedPin(j), LOW);
+    mcp_digitalWrite(ledPins[j], LOW);
   }
   if (errorCode == EEPROM_INVALID_ERROR_CODE) {
     // EEPROM warning mode: steady indicator while allowing device operation.
-    mcp_digitalWrite(getLedPin(EEPROM_INVALID_ERROR_CODE), HIGH);
+    mcp_digitalWrite(ledPins[EEPROM_INVALID_ERROR_CODE], HIGH);
     return;
   }
   for (int j = 0; j < 10; j++) {
-    mcp_digitalWrite(getLedPin(errorCode), HIGH);
+    mcp_digitalWrite(ledPins[errorCode], HIGH);
 
     digitalWrite(buzzerPin, HIGH);
     delay(300);
-    mcp_digitalWrite(getLedPin(errorCode), LOW);
+    mcp_digitalWrite(ledPins[errorCode], LOW);
     digitalWrite(buzzerPin, LOW);
   }
 }
@@ -5814,8 +5688,8 @@ String buildParamCSV() {
          String(MAX_COOL_WAIT_S);
 }
 
-// Low-level: push value+notify to serial GATT. Does not check serial_streaming_enabled.
-void sendSerialToBLEImpl(const String& message) {
+// Function to send serial data to BLE
+void sendSerialToBLE(const String& message) {
   if (bleEnabled && is_device_connected && serial_characteristic) {
     const char* ptr = message.c_str();
     if (ptr) {
@@ -5824,26 +5698,6 @@ void sendSerialToBLEImpl(const String& message) {
       serial_characteristic->notify();
     }
   }
-}
-
-void sendSerialToBLEImpl(float value) {
-  sendSerialToBLEImpl(String(value));
-}
-
-void sendSerialToBLEImpl(int value) {
-  sendSerialToBLEImpl(String(value));
-}
-
-void sendSerialToBLEImpl(unsigned long value) {
-  sendSerialToBLEImpl(String(value));
-}
-
-// Gated: only when client has started serial streaming (START_SERIAL).
-void sendSerialToBLE(const String& message) {
-  if (!serial_streaming_enabled) {
-    return;
-  }
-  sendSerialToBLEImpl(message);
 }
 
 // Overloaded functions for different data types

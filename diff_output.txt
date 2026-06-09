@@ -1,0 +1,125 @@
+--- recovered
++++ current
+@@ -190,6 +190,12 @@
+ const char* SOFTWARE_BUILD_DATE = __DATE__ " " __TIME__;
+ 
+ // Forward declarations
++// sendSerialToBLEImpl: setValue+notify (ungated) — use only for AUTH or internal plumbing.
++// sendSerialToBLE: gated on serial_streaming_enabled
++void sendSerialToBLEImpl(const String& message);
++void sendSerialToBLEImpl(float value);
++void sendSerialToBLEImpl(int value);
++void sendSerialToBLEImpl(unsigned long value);
+ void sendSerialToBLE(const String& message);
+ void sendSerialToBLE(float value);
+ void sendSerialToBLE(int value);
+@@ -247,9 +253,9 @@
+ bool enforceHeaterToleranceGap(const char* sourceTag, bool notifyBle = true);
+ 
+ // Macros to automatically forward Serial output to BLE when streaming is enabled
+-#define SerialBLE_print(x) do { Serial.print(x); if(serial_streaming_enabled) sendSerialToBLE(x); } while(0)
+-#define SerialBLE_println(x) do { Serial.println(x); if(serial_streaming_enabled) sendSerialToBLE(String(x) + "\n"); } while(0)
+-#define SerialBLE_println_empty() do { Serial.println(); if(serial_streaming_enabled) sendSerialToBLE("\n"); } while(0)
++#define SerialBLE_print(x) do { Serial.print(x); if(serial_streaming_enabled) sendSerialToBLEImpl(x); } while(0)
++#define SerialBLE_println(x) do { Serial.println(x); if(serial_streaming_enabled) sendSerialToBLEImpl(String(x) + "\n"); } while(0)
++#define SerialBLE_println_empty() do { Serial.println(); if(serial_streaming_enabled) sendSerialToBLEImpl("\n"); } while(0)
+ 
+ // Button pins (MCP23017 side)
+ const int button1Pin = 7;
+@@ -803,7 +809,7 @@
+     if (command == "START_SERIAL") {
+       if (!isTrustedConnection()) {
+         Serial.println("Serial streaming blocked - trust handshake required");
+-        sendSerialToBLE("AUTH_REQUIRED\n");
++        sendSerialToBLEImpl("AUTH_REQUIRED\n");
+         writeResponseToChannel("AUTH_REQUIRED");
+       } else {
+         serial_streaming_enabled = true;
+@@ -811,9 +817,9 @@
+         sendSerialToBLE("Serial streaming ENABLED via BLE");
+       }
+     } else if (command == "STOP_SERIAL") {
+-      serial_streaming_enabled = false;
+       Serial.println("Serial streaming disabled via BLE");
+       sendSerialToBLE("Serial streaming DISABLED via BLE");
++      serial_streaming_enabled = false;
+     } else {
+       Serial.printf("DEBUG: Unknown serial command: '%.40s'\n", command.c_str());
+     }
+@@ -1118,7 +1124,7 @@
+ void mcp_setup() {
+   delay(200);  // Allow power rail and I2C bus to settle after reset
+   // ✅ Use GPIO6 for SDA and GPIO7 for SCL
+-  myI2C.begin(6, 7, 20000);
++  myI2C.begin(6, 7, 100000);
+ 
+   // Retry MCP startup to survive first-boot rail/I2C bring-up timing.
+   const int maxAttempts = 20;
+@@ -3458,11 +3464,11 @@
+     if (millis() - lastStatusPrint > 5000) { // Every 5 seconds
+       lastStatusPrint = millis();
+       Serial.println("BLE Connected - System Running");
+-      sendSerialToBLE("System Status: Running - " + String(millis() / 1000) + "s");
++      SerialBLE_print("System Status: Running - " + String(millis() / 1000) + "s");
+       yield();  // Space between rapid BLE notifies to avoid LoadProhibited
+       String motorFaultStatus = "Motor Fault Status: " + buildMotorFaultStatusSnapshot();
+       Serial.println(motorFaultStatus);
+-      sendSerialToBLE(motorFaultStatus);
++      SerialBLE_print(motorFaultStatus);
+     }
+   }
+   if (!is_device_connected && old_device_connect) {
+@@ -3480,7 +3486,6 @@
+     if (millis() - eepromWakeAlertStartMillis < EEPROM_WAKE_ALERT_MS) {
+       // Show latched EEPROM error indicator while holding controls for user awareness.
+       maintainEEPROMErrorIndicator();
+-      delay(1);  // Cap loop rate ~1 kHz (same as main path)
+       return;
+     }
+     eepromWakeAlertActive = false;
+@@ -3883,7 +3888,6 @@
+     }
+   }
+   maintainEEPROMErrorIndicator();
+-  delay(1);  // Cap main-loop polling at ~1 kHz max
+ }
+ 
+ void flushSequence() {
+@@ -5688,8 +5692,8 @@
+          String(MAX_COOL_WAIT_S);
+ }
+ 
+-// Function to send serial data to BLE
+-void sendSerialToBLE(const String& message) {
++// Low-level: push value+notify to serial GATT. Does not check serial_streaming_enabled.
++void sendSerialToBLEImpl(const String& message) {
+   if (bleEnabled && is_device_connected && serial_characteristic) {
+     const char* ptr = message.c_str();
+     if (ptr) {
+@@ -5698,6 +5702,26 @@
+       serial_characteristic->notify();
+     }
+   }
++}
++
++void sendSerialToBLEImpl(float value) {
++  sendSerialToBLEImpl(String(value));
++}
++
++void sendSerialToBLEImpl(int value) {
++  sendSerialToBLEImpl(String(value));
++}
++
++void sendSerialToBLEImpl(unsigned long value) {
++  sendSerialToBLEImpl(String(value));
++}
++
++// Gated: only when client has started serial streaming (START_SERIAL).
++void sendSerialToBLE(const String& message) {
++  if (!serial_streaming_enabled) {
++    return;
++  }
++  sendSerialToBLEImpl(message);
+ }
+ 
+ // Overloaded functions for different data types

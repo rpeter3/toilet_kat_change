@@ -164,6 +164,8 @@ Read trust responses on response channel:
 - `TRUST_TIMEOUT`
 - `TRUST_CANCEL_ACK`
 
+Physical confirmation: firmware reads ESP32 GPIO2 (SW1 wake line), not MCP pins. On v5 only flush pulls GPIO2; on v6 either control-panel button may confirm via diode-OR.
+
 Recommended timeout remains 60s.
 
 ---

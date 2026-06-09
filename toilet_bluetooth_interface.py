@@ -873,7 +873,7 @@ class ToiletSystemInterface:
     async def trust_handshake(self, timeout_s: Optional[float] = None) -> bool:
         """
         Run full trust flow: TRUST_START, poll TRUST_STATUS until TRUST_CONFIRMED or timeout.
-        Per spec: user presses flush button during TRUST_WAITING to confirm.
+        Per spec: user presses a control panel button (GPIO2 wake line) during TRUST_WAITING to confirm.
         Returns True if trusted, False on timeout/cancel/error.
         """
         timeout = timeout_s if timeout_s is not None else self.trust_timeout_s
@@ -888,7 +888,7 @@ class ToiletSystemInterface:
         if start_resp != "TRUST_WAITING":
             print(f"Trust handshake failed: unexpected TRUST_START response: {start_resp}")
             return False
-        print("Press flush button on device to confirm connection...")
+        print("Press a control panel button on device to confirm connection (GPIO2 wake line)...")
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             status = await self.trust_status()
@@ -1238,7 +1238,7 @@ async def main():
             print("18. HWCFG rollback last good")
             print("19. Read flush count")
             print("20. Read error logs (GET_LOGS)")
-            print("21. Trust handshake (press flush button to confirm)")
+            print("21. Trust handshake (press control panel button / GPIO2 wake line to confirm)")
             
             choice = input("\nEnter your choice (1-21): ").strip()
             

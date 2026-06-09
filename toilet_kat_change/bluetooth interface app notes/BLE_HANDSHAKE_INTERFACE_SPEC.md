@@ -6,7 +6,7 @@ This interface enforces a simple physical trust gate for each BLE connection:
 
 - when a client starts trust flow, the toilet LEDs circle,
 - the toilet blocks privileged commands from that connection,
-- user presses the physical flush button to answer,
+- user presses a control panel button (GPIO2 wake line / SW1) to answer,
 - toilet beeps two times, stops LED circling, and marks connection trusted.
 
 ## Location
@@ -28,7 +28,7 @@ Per BLE connection:
 
 - `UNTRUSTED` - default after connect
 - `WAITING_FOR_BUTTON` - trust flow active, LEDs circling
-- `TRUSTED` - flush button accepted, double beep emitted, LEDs stopped
+- `TRUSTED` - GPIO2 wake line accepted, double beep emitted, LEDs stopped
 - `TIMEOUT` - trust flow expired, still untrusted
 
 Rules:
@@ -84,9 +84,9 @@ Behavior on cancel:
 - Stop LED circling.
 - Return to untrusted state.
 
-## Flush Button Confirmation Behavior
+## Physical confirmation via GPIO2 (SW1)
 
-When flush button is pressed during `TRUST_WAITING`:
+When GPIO2 (`controlPanelWake`) is pulled LOW during `TRUST_WAITING`:
 
 1. Mark connection trusted.
 2. Play two beeps.
@@ -95,7 +95,7 @@ When flush button is pressed during `TRUST_WAITING`:
 
 Notes:
 
-- Only physical flush button input can confirm trust.
+- Firmware reads ESP32 GPIO2 only (not MCP expander pins). On **CONTROL_PANEL v5**, GPIO2 is the flush switch. On **v6**, either panel button pulls SW1 (GPIO2) low via diode-OR, so either button confirms trust.
 - Presses before `TRUST_START` do not count.
 - Firmware should debounce button input.
 
@@ -131,7 +131,7 @@ On timeout:
 
 1. Connect and discover services.
 2. Send `TRUST_START`.
-3. Show prompt: "Press flush button to confirm connection."
+3. Show prompt: "Press a control panel button to confirm connection." (On v5 this is flush only; on v6 either button pulls GPIO2.)
 4. Poll `TRUST_STATUS` until `TRUST_CONFIRMED` or timeout.
 5. Enable write controls only after confirmation.
 6. On disconnect, clear local trusted state.

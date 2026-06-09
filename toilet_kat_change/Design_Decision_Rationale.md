@@ -147,6 +147,70 @@ Rationale:
 - Keeps storage bounded and deterministic by retaining one previous snapshot per component (instead of unbounded history).
 - Provides consistent parsing/sorting across firmware and Python tools by standardizing date format to ISO 8601.
 
+## Control panel pinout versioning (CONTROL_PANEL v5 vs v6)
+
+The control panel uses an MCP23017 I/O expander (I2C `0x20`) for LEDs and button inputs.
+
+**Background**:
+
+- Original control panel **v5** had a pin-assignment bug on the MCP: button 2 was wired to MCP pin 15 (GPB7, output-only on this design), and button 1 was routed directly to ESP32 **GPIO2** for wake and flush.
+- Revised control panel **v6** moves both buttons to valid MCP input pins (button 1 → MCP pin 6 / GPA6, button 2 → MCP pin 14 / GPB6) and adds a **diode-OR** so either button pulls **SW1** (GPIO2) low to wake the main board from sleep.
+
+**Pinout table** (firmware read paths):
+
+| Function | CONTROL_PANEL v5 (legacy) | CONTROL_PANEL v6 (new) |
+|----------|---------------------------|------------------------|
+| Button 1 (flush) | ESP32 GPIO2 | MCP23017 pin 6 |
+| Button 2 (feed) | MCP23017 pin 15 | MCP23017 pin 14 |
+| Wake / light sleep | GPIO2 (button 1 only) | GPIO2 via diode-OR (both buttons) |
+| LED MCP pins (UI indices 3 and 5) | MCP 14, MCP 6 | MCP 15, MCP 7 |
+
+Full 14-LED UI-order tables in firmware:
+
+- **v5** (`ledPinsV5`): `{1, 9, 13, 14, 10, 6, 11, 12, 8, 0, 2, 3, 4, 5}`
+- **v6** (`ledPinsV6`): `{1, 9, 13, 15, 10, 7, 11, 12, 8, 0, 2, 3, 4, 5}`
+
+On v6, MCP pins 6 and 14 are reserved for buttons; the two LEDs that were on MCP 14 and 6 in v5 move to MCP 15 (GPB7) and 7 (GPA7).
+
+**Firmware behavior**:
+
+- Pinout is selected from the on-device hardware matrix component `CONTROL_PANEL` (`5` = legacy, `6` = new). Unknown versions default to v5 for backward compatibility with deployed units.
+- LED I/O uses `getLedPin(uiIndex)` to resolve the active `ledPinsV5` / `ledPinsV6` table; MCP LED outputs are configured separately from button inputs so v6 never drives pins 6/14 as LEDs.
+- Button state for flush/feed/battery gestures is read through version-aware helpers; GPIO2 is **not** used for flush/feed discrimination on v6 (reading GPIO2 there would falsely report button 1 when button 2 is pressed, because both share the wake line). GPIO2 **is** still used for wake, light/deep sleep, and BLE trust confirmation on all panel versions.
+- Deep sleep and inactivity light sleep continue to wake on GPIO2 LOW for both versions; on v6 this is correct because hardware ORs both switches onto SW1.
+- Optional compile-time `CONTROL_PANEL_PINOUT_OVERRIDE` (5 or 6) forces pinout during development without changing NVS.
+
+**Configuration paths**:
+
+- **Field / production**: `SET_HW_COMPONENT:CONTROL_PANEL|...` or full HWCFG apply (`HWCFG_APPLY_CHANGE`) after setting `CONTROL_PANEL` version to `6`. Reconfigures MCP button inputs and LED outputs immediately when MCP is available.
+- **Development**: `#define CONTROL_PANEL_PINOUT_OVERRIDE 6` at top of firmware.
+
+**Rationale**:
+
+- **Single firmware binary**: one image supports both board revisions; pinout is data (hardware matrix version), not a separate build.
+- **Safe default**: factory default remains v5 so existing installed base is unaffected until a technician explicitly records a v6 panel.
+- **Separation of wake vs logic**: wake stays on GPIO2 (RTC-capable, already integrated with sleep paths); distinct button actions on v6 require MCP reads on the corrected pins.
+- **Hardware matrix integration**: reuses existing offline component versioning, previous-version history, and BLE tooling rather than a new config mechanism.
+- **Pin-only HWCFG**: v6 is a wiring change, not a parameter change; empty parameter profiles are permitted for `CONTROL_PANEL` so apply does not require dummy tuning values.
+- **Field serviceability**: boot log and BLE serial report active pinout so support can confirm configuration matches the physical panel installed.
+
+## BLE trust confirmation uses GPIO2 (SW1), not version-aware button reads
+
+The BLE trust handshake requires a physical button press near the device before privileged commands (parameter writes, hardware updates) are allowed.
+
+**Behavior**:
+
+- Firmware always reads ESP32 **GPIO2** (`controlPanelWake` / connector **SW1**) to confirm trust during `TRUST_WAITING`, regardless of `CONTROL_PANEL` version.
+- **v5**: GPIO2 is wired to the flush button only; only flush confirms trust.
+- **v6**: GPIO2 is driven by a diode-OR from both panel buttons; either button confirms trust. Flush vs feed for normal operation still uses MCP pins 6 and 14 respectively.
+- Trust is a proximity gate, not a flush action; using GPIO2 keeps pairing compatible with all control panel revisions and aligned with wake/sleep paths (no MCP dependency for trust).
+
+**Rationale**:
+
+- One stable confirmation signal across v5 and v6 without duplicating pinout logic in the trust path.
+- Matches hardware wake wiring on v6 (both buttons already pull SW1 low).
+- Avoids trust failures when MCP expander reads differ from the GPIO2 wake line.
+
 ## BLE payload chunking in the Python client
 
 The Python BLE client (`toilet_bluetooth_interface.py`) splits large writes into chunks when sending to GATT characteristics.
