@@ -297,6 +297,52 @@ class ToiletSystemInterface:
         await self.client.write_gatt_char(SERIAL_CHARACTERISTIC_UUID, command_bytes)
         self.serial_framed_active = False
 
+    async def _get_gatt_service_collection(self):
+        """Return GATT services across bleak versions (get_services removed in bleak 3.x)."""
+        get_services = getattr(self.client, "get_services", None)
+        if get_services is not None:
+            return await get_services()
+        services = getattr(self.client, "services", None)
+        if services is None:
+            raise RuntimeError("Could not obtain GATT services from BleakClient")
+        return services
+
+    async def _detect_new_ble_protocol(self) -> bool:
+        """Return True if device exposes fea4/fea5/fea6 split-channel protocol."""
+        new_uuids = {
+            _normalize_uuid(RESPONSE_CHARACTERISTIC_UUID),
+            _normalize_uuid(PARAM_READ_CHARACTERISTIC_UUID),
+            _normalize_uuid(PARAM_WRITE_CHARACTERISTIC_UUID),
+        }
+        try:
+            services = await self._get_gatt_service_collection()
+            for char in services.characteristics.values():
+                if char.uuid and _normalize_uuid(char.uuid) in new_uuids:
+                    return True
+        except Exception as discovery_error:
+            if self.frame_debug:
+                print(f"Protocol discovery via services failed: {discovery_error}")
+
+        try:
+            data = await self.client.read_gatt_char(RESPONSE_CHARACTERISTIC_UUID)
+            msg = data.decode("utf-8", errors="replace").strip()
+            if msg:
+                print(f"Protocol probe: fea4 response channel read succeeded ({msg[:40]})")
+                return True
+        except Exception:
+            pass
+
+        try:
+            data = await self.client.read_gatt_char(PARAM_READ_CHARACTERISTIC_UUID)
+            msg = data.decode("utf-8", errors="replace").strip()
+            if self._parse_param_payload(msg) is not None or msg == "AUTH_REQUIRED":
+                print("Protocol probe: fea5 param read channel present")
+                return True
+        except Exception:
+            pass
+
+        return False
+
     async def scan_for_device(self) -> Optional[str]:
         """Scan for ESP32 Toilet device"""
         if BleakScanner is None:
@@ -327,30 +373,7 @@ class ToiletSystemInterface:
                 f"chunk_pacing_s={self.chunk_pacing_s}, frame_debug={self.frame_debug}"
             )
             await asyncio.sleep(1.0)
-            # Verify new protocol (fea4/fea5/fea6): discovery + probe
-            has_response = False
-            try:
-                services = await self.client.get_services()
-                resp_norm = _normalize_uuid(RESPONSE_CHARACTERISTIC_UUID)
-                for svc in services.services.values():
-                    for char in svc.characteristics:
-                        if char.uuid and _normalize_uuid(char.uuid) == resp_norm:
-                            has_response = True
-                            break
-                    if has_response:
-                        break
-            except Exception:
-                pass
-            if not has_response:
-                try:
-                    data = await self.client.read_gatt_char(PARAM_READ_CHARACTERISTIC_UUID)
-                    msg = data.decode("utf-8", errors="replace")
-                    if self._parse_param_payload(msg) is not None:
-                        has_response = True
-                        print("Protocol probe: fea5 param read succeeded")
-                except Exception:
-                    pass
-            if not has_response:
+            if not await self._detect_new_ble_protocol():
                 print("New protocol (fea4/fea5/fea6) not found. Device may need firmware update.")
                 await self.disconnect()
                 return False

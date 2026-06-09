@@ -3550,14 +3550,14 @@ void loop() {
     slowCircleLeds();
   }
   
-  // Keep BLE alive while serial streaming is active. When idle (not streaming),
+  // Keep BLE alive while serial streaming or flush is active. When idle (not streaming),
   // allow timeout after BLE_TIMEOUT even if a client remains connected.
-  if (serial_streaming_enabled) {
+  if (serial_streaming_enabled || isFlushing) {
     bleIdleStartTime = millis();
   }
 
   // Check for BLE timeout during idle (no serial streaming) - never shut down during OTA transfer.
-  if (!devModeEnabled && bleEnabled && !otaTransferInProgress() && !serial_streaming_enabled &&
+  if (!devModeEnabled && bleEnabled && !otaTransferInProgress() && !serial_streaming_enabled && !isFlushing &&
       (millis() - bleIdleStartTime > BLE_TIMEOUT)) {
     Serial.println("BLE shutting down after 10 minutes to save power");
     SerialBLE_println("BLE shutting down after 10 minutes to save power");
@@ -3639,13 +3639,8 @@ void loop() {
   } else if (bothButtonsPressedNow && !bothButtonsPressed && !otaEnabled) {
     SerialBLE_println("Both buttons pressed - Stopping all operations and displaying battery charge level");
     
-    // Stop all ongoing operations immediately
-    Serial.println("DEBUG: Stopping all motors for battery display");
-    motors.setM2Speed(0);  // Stop feed motor
-    setFanSpeed(0);         // Stop fan
-    isFlushing = false;    // Stop any flush sequence
-    fanRunning = false;    // Stop fan timer
-    
+    stopEverything();
+
     // Reset all button state tracking
     button1WasPressed = false;
     button2WasPressed = false;
@@ -3790,39 +3785,10 @@ void loop() {
         }
       }
     } else if (!button1Pressed && button1Held) {
-      // Button 1 released - check if it was a short press
       unsigned long holdDuration = millis() - button1HoldStartTime;
       button1Held = false;
-      
       if (holdDuration < BUTTON_HOLD_TIME) {
-        if (isHardwareLikelyDisconnectedForUserAction()) {
-          SerialBLE_println("Hardware not connected (thermistor open) - flush blocked");
-          playHardwareNotConnectedAlert();
-          button1DisconnectAlertedForCurrentPress = true;
-        } else {
-        // Short press - also enable cutBag mode before starting flush
-        cutBag = true;
-        SerialBLE_println("Cut Bag mode enabled!");
-        SerialBLE_println("Short press - starting flush sequence with cut bag enabled");
-        Serial.printf("DEBUG: cutBag set to true, short press duration: %lu ms\n", holdDuration);
-        cutModeLEDAnimation();
-        
-        // Calculate sequence timing and reset LED state
-        calculateSequenceTiming();
-        ledIndex = 0;
-        clockwise = true; // Start clockwise when flushing begins.
-        ledLastUpdateMillis = millis();  // Reset the timer
-        
-        // Turn off all LEDs first, then turn on the first one
-        for (int i = 0; i < totalLeds; i++) {
-          mcp_digitalWrite(getLedPin(i), LOW);
-        }
-        mcp_digitalWrite(getLedPin(0), HIGH);
-        
-        flushStep = 0;
-        isFlushing = true;
-        flushStartMillis = millis();
-        }
+        SerialBLE_println("Flush requires 1.5s hold");
       }
     }
     
@@ -3930,12 +3896,6 @@ void loop() {
   
   button1WasPressed = button1Pressed;
   button2WasPressed = button2Pressed;
-  if (mechanismMotorRunning && (millis() - motorStartMillis > TIMEOUT) && ERROR_CODE == 0) {
-    SerialBLE_println("Mechanism Motor Running Timeout in loop");
-    ERROR_CODE = 1;
-    stopEverything();
-    LEDErrorCode(ERROR_CODE);
-  }
 
   // Inactivity light sleep: 2 min with no activity, wake on GPIO2 (controlPanelWake)
   // Only enter when wake button is released (HIGH) so pin does not trigger immediate wake.
@@ -4180,6 +4140,14 @@ void flushSequence() {
       break;
 
     case 5: {
+      if (mechanismMotorRunning && (currentMillis - motorStartMillis > TIMEOUT) && ERROR_CODE == 0) {
+        SerialBLE_println("Mechanism close timeout in case 5");
+        ERROR_CODE = 1;
+        stopEverything();
+        LEDErrorCode(ERROR_CODE);
+        return;
+      }
+
       // Check M3 reverse timing in case 5 (where we wait for mechanism to close)
       // Check if it's time to start M3 reverse (if not started yet and not completed)
       if (!m3ReverseActive && !m3ReverseCompleted && m1CloseStartTime > 0) {
@@ -4348,6 +4316,16 @@ void flushSequence() {
     }
 
     case 8: {
+      if (mechanismMotorRunning && (currentMillis - motorStartMillis > (unsigned long)maxOpeningTime * 1000UL) && ERROR_CODE == 0) {
+        SerialBLE_println("Mechanism open timeout in case 8");
+        motors.setM1Speed(0);
+        mechanismMotorRunning = false;
+        ERROR_CODE = 1;
+        stopEverything();
+        LEDErrorCode(ERROR_CODE);
+        return;
+      }
+
       int sw = digitalRead(microswitchOpenPin);
       // Stop M1 immediately when open switch closes to prevent overshoot
       if (sw == LOW) {
@@ -4461,7 +4439,7 @@ void flushSequence() {
       if (currentMillis - stepStartMillis < 3000) {
         for (int i = 0; i < totalLeds; i++) {
           mcp_digitalWrite(getLedPin(i), HIGH);
-        }
+        } 
       } else {
         Serial.println("All LEDs off");
         for (int i = 0; i < totalLeds; i++) {
@@ -4550,7 +4528,6 @@ void enableOTA() {
   // Reset OTA state to ensure clean slate for new update attempt
   resetOTAState();
   updateInProgress = false;
-  isFlushing = false;
   otaEnabled = true;
   otaWindowStartTime = millis();
   slowCircleLedIndex = 0;
@@ -5079,13 +5056,37 @@ void cutModeLEDAnimation() {
 
 
 void stopEverything() {
-  
   SerialBLE_println("stop everything");
   motors.setM2Speed(0);
   motors.setM1Speed(0);
   setFanSpeed(0);  // Stop M3 motor
   heaterOff();
+
   isFlushing = false;
+  flushStep = 0;
+  cutBag = false;
+  mechanismMotorRunning = false;
+  fanRunning = false;
+  cutMotorRunning = false;
+  case1FeedStarted = false;
+  case5FeedExecuted = false;
+  case6CutMotorRun = false;
+  case10FanStarted = false;
+  case10BackupStarted = false;
+  m3ReverseActive = false;
+  m3ReverseCompleted = false;
+  m1CloseStartTime = 0;
+  m3ReverseStartTime = 0;
+  timeAboveSetpointMillis = 0;
+  timeAboveCutModeTempMillis = 0;
+  maxHeaterWallTimeMs = 0;
+  heaterTargetTemp = K;
+  m1CurrentLogWindowStartMillis = 0;
+  m1CurrentMaxInWindow = 0.0;
+
+  for (int i = 0; i < totalLeds; i++) {
+    mcp_digitalWrite(getLedPin(i), LOW);
+  }
 }
 
 float clampLedProgress(float value) {
