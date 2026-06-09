@@ -73,6 +73,31 @@ Rationale:
 - Keep behavior predictable after session end: once streaming/disconnect transitions the link to idle, the same 10-minute idle shutdown policy applies.
 - Improve shutdown safety: BLE send paths are guarded by `bleEnabled`, and streaming/connection state is cleared before BLE deinit to avoid stale-notify behavior during shutdown.
 
+## Open microswitch latch during flush (cases 8–10)
+
+During the post-cooling open phase, firmware uses `openSwitchLatched` to record the first time the open microswitch (`microswitchOpenPin`) reads LOW, then continues the timed post-open sequence even if the switch reads HIGH again.
+
+**Behavior**:
+
+- Latch is cleared when the open phase starts (case 7), on `stopEverything()`, and when advancing from case 10 to case 11.
+- Latch is set on first LOW read in case 8 or case 10; M1 is stopped at that point.
+- Once latched, backup → fan → feed steps run on timers (`backupTimeAfterReopen`, `postCoolingFanDuration`) without requiring the switch to stay LOW.
+- Open-phase timeout uses `motorStartMillis` from case 7 and `maxOpeningTime`; it does not depend on `mechanismMotorRunning` remaining true.
+- `sw10` debug output is logged only on state change to avoid BLE spam.
+
+**Rationale**:
+
+- The open switch is a momentary end-of-travel indicator, not a “held closed” interlock. Requiring LOW for the entire backup/fan/feed chain is incorrect for this hardware.
+- Switch bounce, mechanical overshoot, or brief release after trigger can cause LOW → HIGH transitions in production (not only during manual bench testing). Without a latch, M2 backup can start and then stall with no path to advance, leaving motors running indefinitely.
+- Latch-on-first-detection matches the intended process: “open complete” is an event; subsequent steps are time-based.
+- `maxOpeningTime` still protects the case where the switch never latches.
+
+**Close side (case 5) — latch intentionally not used**:
+
+- The close microswitch near the heater **must be closed and held closed** for safe sealing and heating. Case 5 requires the switch to read LOW and additionally confirms M1 load current (`> 0.5 A`) before stopping the close motor and advancing.
+- If the close switch opens again, the mechanism is no longer in a verified sealed state; firmware should not treat a momentary close as completion. A latch on the close side would incorrectly allow progression after the mechanism had opened.
+- Close-phase timeout is enforced in case 5 via `motorStartMillis` and `TIMEOUT` (15 s).
+
 ## Heater tolerance gap enforcement policy (2C minimum)
 
 The system now enforces a minimum 2C separation between `heaterLowerToleranceC` and `heaterUpperToleranceC` using a split policy:

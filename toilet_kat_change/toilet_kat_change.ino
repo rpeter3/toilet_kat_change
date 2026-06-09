@@ -381,6 +381,7 @@ unsigned long button2FanStartTime = 0; // Timestamp when fan starts for button 2
 bool case10FanStarted = false; // Flag to track if fan has started in case 10
 bool case10BackupStarted = false; // Flag to track if backup has started in case 10
 unsigned long case10BackupStartTime = 0; // Track when backup starts in case 10
+bool openSwitchLatched = false; // Open microswitch seen; continue post-open steps even if switch bounces
 unsigned long m1CloseStartTime = 0; // Track when M1 starts closing
 unsigned long m3ReverseStartTime = 0; // Track when M3 reverse starts
 bool m3ReverseActive = false; // Track if M3 reverse is running
@@ -4301,6 +4302,9 @@ void flushSequence() {
         }
         Serial.print(currentMillis);
         SerialBLE_println("  Cooling complete opening sealer");
+        openSwitchLatched = false;
+        case10BackupStarted = false;
+        case10FanStarted = false;
         mechanismMotorRunning = true;
         motorStartMillis = millis();
         motors.setM1Speed(-400);
@@ -4316,7 +4320,7 @@ void flushSequence() {
     }
 
     case 8: {
-      if (mechanismMotorRunning && (currentMillis - motorStartMillis > (unsigned long)maxOpeningTime * 1000UL) && ERROR_CODE == 0) {
+      if ((currentMillis - motorStartMillis > (unsigned long)maxOpeningTime * 1000UL) && ERROR_CODE == 0) {
         SerialBLE_println("Mechanism open timeout in case 8");
         motors.setM1Speed(0);
         mechanismMotorRunning = false;
@@ -4329,6 +4333,7 @@ void flushSequence() {
       int sw = digitalRead(microswitchOpenPin);
       // Stop M1 immediately when open switch closes to prevent overshoot
       if (sw == LOW) {
+        openSwitchLatched = true;
         motors.setM1Speed(0);
         mechanismMotorRunning = false;
       }
@@ -4351,29 +4356,33 @@ void flushSequence() {
       break;
 
     case 10: {
-      int sw10 = digitalRead(microswitchOpenPin);
-      Serial.print("sw10:");
-      Serial.println(sw10);
-      SerialBLE_print("sw10:");
-      SerialBLE_println(sw10);
-      
-      if (sw10 == LOW) {
-        Serial.println("motorFaultStatus:");
-        String motorFaultStatus = "Motor Fault Status: " + buildMotorFaultStatusSnapshot();
-        Serial.println(motorFaultStatus);
-        sendSerialToBLE(motorFaultStatus);
-        Serial.println("Stopping Motor");
-        SerialBLE_println("Stopping Motor");
-        
+      if ((currentMillis - motorStartMillis > (unsigned long)maxOpeningTime * 1000UL) && ERROR_CODE == 0) {
+        SerialBLE_println("Mechanism open timeout in case 10");
         motors.setM1Speed(0);
-        
-        Serial.println("Motor stopped");
-        SerialBLE_println("Motor stopped");
         mechanismMotorRunning = false;
-        SerialBLE_println("Motor flag set to false");
-        yield();  // Let BLE/I2C settle after motor change; reduces EMI-related crashes
-        
-        // First, start backup if not started yet
+        ERROR_CODE = 1;
+        stopEverything();
+        LEDErrorCode(ERROR_CODE);
+        return;
+      }
+
+      int sw10 = digitalRead(microswitchOpenPin);
+      if (sw10 == LOW) {
+        openSwitchLatched = true;
+        motors.setM1Speed(0);
+        mechanismMotorRunning = false;
+      }
+
+      static int lastSw10Logged = -1;
+      if (sw10 != lastSw10Logged) {
+        Serial.print("sw10:");
+        Serial.println(sw10);
+        SerialBLE_print("sw10:");
+        SerialBLE_println(sw10);
+        lastSw10Logged = sw10;
+      }
+
+      if (openSwitchLatched) {
         if (!case10BackupStarted) {
           SerialBLE_println("Stop opening, starting backup");
           motors.setM2Speed(400);  // M2 in reverse for backup
@@ -4382,26 +4391,24 @@ void flushSequence() {
           case10BackupStartTime = currentMillis;
           case10BackupStarted = true;
         }
-        
-        // Wait for backupTimeAfterReopen before proceeding to fan
+
         if (case10BackupStarted && (currentMillis - case10BackupStartTime >= backupTimeAfterReopen * 1000)) {
-          // Stop backup and start fan (only once)
           if (!case10FanStarted) {
             SerialBLE_println("Backup complete, stopping backup and activating fan");
-            motors.setM2Speed(0);  // Stop backup
-            setFanSpeed(400);  // M3 at full power
+            motors.setM2Speed(0);
+            setFanSpeed(400);
             stepStartMillis = currentMillis;
             case10FanStarted = true;
           }
         }
-        
-        // Wait for postCoolingFanDuration before starting feed motors (only after backup and fan started)
+
         if (case10BackupStarted && case10FanStarted && (currentMillis - stepStartMillis >= postCoolingFanDuration * 1000)) {
           SerialBLE_println("Fan delay complete, starting feed motors");
           motors.setM2Speed(-400);
           stepStartMillis = currentMillis;
-          case10FanStarted = false;  // Reset for next cycle
-          case10BackupStarted = false;  // Reset for next cycle
+          case10FanStarted = false;
+          case10BackupStarted = false;
+          openSwitchLatched = false;
           flushStep++;
           SerialBLE_print("Moving to Case11:");
           Serial.println(millis());
@@ -5073,6 +5080,7 @@ void stopEverything() {
   case6CutMotorRun = false;
   case10FanStarted = false;
   case10BackupStarted = false;
+  openSwitchLatched = false;
   m3ReverseActive = false;
   m3ReverseCompleted = false;
   m1CloseStartTime = 0;
