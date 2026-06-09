@@ -1194,7 +1194,7 @@ void configureControlPanelLedOutputs() {
 void mcp_setup() {
   delay(200);  // Allow power rail and I2C bus to settle after reset
   // ✅ Use GPIO6 for SDA and GPIO7 for SCL
-  myI2C.begin(6, 7, 100000);
+  myI2C.begin(6, 7, 20000);
 
   // Retry MCP startup to survive first-boot rail/I2C bring-up timing.
   const int maxAttempts = 20;
@@ -3608,6 +3608,7 @@ void loop() {
     if (millis() - eepromWakeAlertStartMillis < EEPROM_WAKE_ALERT_MS) {
       // Show latched EEPROM error indicator while holding controls for user awareness.
       maintainEEPROMErrorIndicator();
+      delay(1);  // Cap loop rate ~1 kHz (same as main path)
       return;
     }
     eepromWakeAlertActive = false;
@@ -4012,6 +4013,7 @@ void loop() {
     }
   }
   maintainEEPROMErrorIndicator();
+  delay(1);  // Cap main-loop polling at ~1 kHz max
 }
 
 void flushSequence() {
