@@ -315,6 +315,8 @@ void initHeaterPwm();
 void applyHeaterPwmDuty(int duty);
 void updateHeaterPID();
 void heaterOff();
+void prepareFanPinsForDeepSleep();
+void releaseFanPinsFromDeepSleepHold();
 void initHeaterPidController();
 void initCorePlatformServices();
 void LEDErrorCode(int errorCode);
@@ -4097,6 +4099,7 @@ void setup() {
   esp_sleep_wakeup_cause_t wakeCause = esp_sleep_get_wakeup_cause();
   bool wokeFromDeepSleep = (wakeCause == ESP_SLEEP_WAKEUP_EXT0);
 
+  releaseFanPinsFromDeepSleepHold();
   pinMode(sealerFanPwr, OUTPUT);
   pinMode(sealerFanReverse, OUTPUT);
   ledcAttach(sealerFanPWM, FAN_PWM_FREQ, FAN_PWM_RESOLUTION);
@@ -4650,39 +4653,32 @@ void loop() {
   button1WasPressed = button1Pressed;
   button2WasPressed = button2Pressed;
 
-  // Inactivity light sleep: 20 seconds with no activity, wake on GPIO2 (controlPanelWake)
+  // Inactivity deep sleep: 20 seconds with no activity, wake on GPIO2 (controlPanelWake)
   // Only enter when wake button is released (HIGH) so pin does not trigger immediate wake.
-  // Light sleep keeps GPIO state so fan pins stay LOW (fan off) without hold logic.
+  // Fan pins are held LOW for legacy boards where fan power may be bypassed.
   if (!devModeEnabled && !otaEnabled && !batteryDisplayMode && !isFlushing && !motorHomingActive &&
       !mechanismMotorRunning && !fanRunning &&
       (millis() - lastActivityMillis >= INACTIVITY_SLEEP_MS) &&
       (digitalRead(controlPanelWake) == HIGH)) {
-    motors.setM2Speed(0);
-    setFanSpeed(0);
-    motors.setM1Speed(0);
     heaterOff();
-    // RTC GPIO pull-up so pin stays HIGH in sleep and only wakes when button pulls LOW
+    unsigned long settleStart = millis();
+    while (millis() - settleStart < 5000) {
+      setFanSpeed(0);
+      motors.setM1Speed(0);
+      motors.setM2Speed(0);
+      applyHeaterPwmDuty(0);
+      feedTaskWatchdog();
+      delay(10);
+    }
+
+    // Deep sleep uses RTC EXT0 wake. GPIO2 is held HIGH by pull-up and wakes when pulled LOW.
     rtc_gpio_init((gpio_num_t)controlPanelWake);
     rtc_gpio_pullup_en((gpio_num_t)controlPanelWake);
     rtc_gpio_pulldown_dis((gpio_num_t)controlPanelWake);
-    esp_sleep_enable_ext0_wakeup((gpio_num_t)controlPanelWake, 0);  // LOW = button pressed
-    logWdtBreadcrumb("light_sleep_enter");
-    esp_light_sleep_start();
-    logWdtBreadcrumb("light_sleep_wake");
-    recoverControlPanelAfterLightSleep();
-    // Light sleep resumes here; do not re-run server_setup()/BLEDevice::init() on wake.
-    circleLeds();
-    traceLightSleepWake("light_sleep_wake_circle_LEDs");
-    wdtCheckpoint();
-    traceLightSleepWake("light_sleep_wake_checkpiont1");
-    startEEPROMWakeAlert();
-    traceLightSleepWake("light_sleep_wake_startEEPROM");
-    maintainEEPROMErrorIndicator();
-    traceLightSleepWake("light_sleep_wake_maintainEEPROM");
-    lightSleepWakeTraceLoopsRemaining = 2;
-    lightSleepPanelSettleUntilMs = millis() + LIGHT_SLEEP_PANEL_SETTLE_MS;
-    logWdtBreadcrumb("light_sleep_wake_ready");
-    lastActivityMillis = millis();
+    esp_sleep_enable_ext0_wakeup((gpio_num_t)controlPanelWake, 0);
+    prepareFanPinsForDeepSleep();
+    esp_task_wdt_reset();
+    esp_deep_sleep_start();
   }
 
   if (lightSleepWakeTraceLoopsRemaining > 0) {
@@ -5345,7 +5341,9 @@ void circleLeds() {
   for (int i = 0; i < totalLeds; i++) {
     mcp_digitalWrite(getLedPin(i), HIGH);
     delay(duration);
+    feedTaskWatchdog();
     mcp_digitalWrite(getLedPin(i), LOW);
+    feedTaskWatchdog();
   }
 }
 
@@ -5978,6 +5976,7 @@ void cutModeLEDAnimation() {
         mcp_digitalWrite(getLedPin(rightLEDs[i]), HIGH);
       }
       delay(animationDelay);
+      feedTaskWatchdog();
     }
     
     // Turn off LEDs from right to left
@@ -5987,11 +5986,13 @@ void cutModeLEDAnimation() {
         mcp_digitalWrite(getLedPin(rightLEDs[i]), LOW);
       }
       delay(animationDelay);
+      feedTaskWatchdog();
     }
   }
   
   // 200ms delay before flush sequence starts
   delay(200);
+  feedTaskWatchdog();
 }
 
 
@@ -6544,6 +6545,32 @@ void heaterOff() {
 }
 
 // Motor 3 control functions (PWM fan)
+void prepareFanPinsForDeepSleep() {
+  setFanSpeed(0);
+
+  pinMode(sealerFanPwr, OUTPUT);
+  pinMode(sealerFanReverse, OUTPUT);
+  pinMode(sealerFanPWM, OUTPUT);
+  digitalWrite(sealerFanPwr, LOW);
+  digitalWrite(sealerFanReverse, LOW);
+  digitalWrite(sealerFanPWM, LOW);
+  gpio_set_level((gpio_num_t)sealerFanPwr, 0);
+  gpio_set_level((gpio_num_t)sealerFanReverse, 0);
+  gpio_set_level((gpio_num_t)sealerFanPWM, 0);
+
+  gpio_hold_en((gpio_num_t)sealerFanPwr);
+  gpio_hold_en((gpio_num_t)sealerFanReverse);
+  gpio_hold_en((gpio_num_t)sealerFanPWM);
+  gpio_deep_sleep_hold_en();
+}
+
+void releaseFanPinsFromDeepSleepHold() {
+  gpio_deep_sleep_hold_dis();
+  gpio_hold_dis((gpio_num_t)sealerFanPwr);
+  gpio_hold_dis((gpio_num_t)sealerFanReverse);
+  gpio_hold_dis((gpio_num_t)sealerFanPWM);
+}
+
 void setFanSpeed(int speed) {
   if (speed > 0) {
     lastFanState = 1;
