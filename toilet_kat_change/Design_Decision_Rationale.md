@@ -57,6 +57,45 @@ Rationale:
 - Keep overheat logic proportional to the intended process temperature, rather than using a fixed absolute threshold.
 - Maintain process continuity in cut mode by preventing premature shutdown at temperatures that are expected for `CUT_MODE_TEMP`, while preserving a clear safety boundary.
 
+## Heater fail-safe firmware (crash and runaway monitoring)
+
+![Heater fail-safe boot and main-loop flow](docs/heater_failsafe_flow.png)
+
+Behavior:
+
+- Early GPIO17 LOW in `setup()` before any intentional heater test (`initHeaterGpioSafe()`).
+- Cold-boot reorder: heater safety (boot check, 5 s TWDT, current test) before BLE and LED startup animation.
+- TWDT (5 s) with loop feeding (~5 ms typical iteration); reset releases GPIO to hardware pull-down (R35).
+- Shutdown handler forces heater off on orderly restart (`esp_restart()`).
+- RTC memory records whether heater was on across resets for post-crash forensics.
+- Boot check: abnormal reset + (RTC flag or HS_OUT current) → `ERROR_CODE 8`.
+- Boot check: current with GPIO off → MOSFET short suspicion.
+- Runtime: sustained current with GPIO off; absolute 20 min output cap.
+- Case 6 motor cuts and cold-boot motor homing are non-blocking so safety checks and TWDT feeding continue.
+- Flush blocked until `motorHomingActive` is false.
+- Light sleep: explicit `heaterOff()` before sleep.
+- `testHeaterCurrent()` skipped when boot safety already latched an error.
+
+Abnormal-reset persistent logging:
+
+- After pin init, all abnormal reboots (task_wdt, wdt, panic, brownout, SDIO, int_wdt) append two SPIFFS lines: `reset` (reason/code/boot_ms) and `reset_forensics` (prior session heater snapshot + post-boot ADC/temp).
+- Task TWDT resets report as `task_wdt` (code 6); `trigger_panic` may instead appear as `panic`.
+- RTC memory stores pre-crash snapshot: uptime, heater temp (x10), PWM duty, flush step, cut-bag flag. Uses `RTC_NOINIT_ATTR` so data survives task-WDT reset on ESP32-S3 (plain `RTC_DATA_ATTR` is zeroed on software reset).
+- Task WDT with `trigger_panic` typically appears as `panic` in the reset reason; the forensics line captures prior heater state regardless.
+- Retrieve logs over BLE with `GET_LOGS` or paginated `GET_LOGS:<offset>` (existing command handler).
+
+Rationale:
+
+- Software complements hardware R35 pull-down (safe on reset) but cannot fix GPIO stuck HIGH during hang — 5 s TWDT bounds that window.
+- Setup reorder minimizes the window where TWDT is disabled; heater test runs before long BLE init.
+- Non-blocking motor cuts and homing avoid a class of bug where `delay()` disables over-temp and watchdog feeding.
+- 5 s TWDT chosen because typical `loop()` is ~5 ms; non-blocking homing/flush means feed runs every iteration without special cases.
+- HS_OUT provides independent confirmation of actual current, not just GPIO belief.
+- RTC forensics distinguish "crashed while heating" from benign resets.
+- Forensics logging runs after pins are ready so post-reset ADC/temp are meaningful; `initErrorLog()` only mounts SPIFFS.
+- Absolute on-time is a backstop independent of flush state machine / PID.
+- Software-only protection is not a substitute for a thermal fuse or hardware watchdog on the heater power path.
+
 ## BLE timeout behavior when clients stay connected
 
 BLE auto-shutdown now uses an idle timer that respects serial streaming state:
@@ -81,8 +120,8 @@ During the post-cooling open phase, firmware uses `openSwitchLatched` to record 
 
 - Latch is cleared when the open phase starts (case 7), on `stopEverything()`, and when advancing from case 10 to case 11.
 - Latch is set on first LOW read in case 8 or case 10; M1 is stopped at that point.
-- Once latched, backup → fan → feed steps run on timers (`backupTimeAfterReopen`, `postCoolingFanDuration`) without requiring the switch to stay LOW.
-- Open-phase timeout uses `motorStartMillis` from case 7 and `maxOpeningTime`; it does not depend on `mechanismMotorRunning` remaining true.
+- Once latched, backup → fan → feed steps run on timers (`backupTimeAfterReopen`, `postCoolingFanDuration`, `continueFeeder`) without requiring the switch to stay LOW.
+- Open-phase timeout uses `motorStartMillis` from case 7 and `maxOpeningTime`, but only while `!openSwitchLatched` (waiting for first LOW read). After latch, post-open steps use their own timers and are not subject to `maxOpeningTime`.
 - `sw10` debug output is logged only on state change to avoid BLE spam.
 
 **Rationale**:
@@ -90,7 +129,7 @@ During the post-cooling open phase, firmware uses `openSwitchLatched` to record 
 - The open switch is a momentary end-of-travel indicator, not a “held closed” interlock. Requiring LOW for the entire backup/fan/feed chain is incorrect for this hardware.
 - Switch bounce, mechanical overshoot, or brief release after trigger can cause LOW → HIGH transitions in production (not only during manual bench testing). Without a latch, M2 backup can start and then stall with no path to advance, leaving motors running indefinitely.
 - Latch-on-first-detection matches the intended process: “open complete” is an event; subsequent steps are time-based.
-- `maxOpeningTime` still protects the case where the switch never latches.
+- `maxOpeningTime` protects only the unlatched open-wait phase; if the switch never latches within that window, ERROR_CODE 1 is raised.
 
 **Close side (case 5) — latch intentionally not used**:
 
@@ -126,7 +165,7 @@ The firmware persists error codes, crashes, brownouts, and runtime faults to a f
 
 **Context for runtime errors**: Each runtime error log includes flush/feed state (`step`, `cut`, `feed`), sensor values (`bat`, `temp`, `m1A`, `heaterA`), and fan status (`off`, `forward`, `reverse`) to aid diagnostics.
 
-**Storage**: SPIFFS file `/logs/errors.txt`. Max 8 KB; when full, oldest entries are dropped. Line length capped at 60 chars for messages.
+**Storage**: SPIFFS file `/errors.txt`. Max 8 KB; when full, oldest entries are dropped. Line length capped at 200 chars.
 
 **Retrieval**: BLE command `GET_LOGS` or `GET_LOGS:<offset>`. Response `LOGS:<offset>:<length>:<data>` (chunked, ~450 bytes per chunk) or `LOGS_END`. No trust handshake required so diagnostics work even when the user cannot complete trust (e.g. broken flush button).
 

@@ -4,6 +4,7 @@
 #include <Wire.h>
 #include <Adafruit_MCP23X17.h>
 #include <DualMAX14870MotorShield.h> // Include the motor driver library
+#include <PID_v1_bc.h>               // Heater temperature PID
 #include <EEPROM.h>     // Include EEPROM library for parameter persistence
 #include <esp_ota_ops.h>  // Include OTA operations for updates
 #include <nvs_flash.h>   // Include NVS for rollback state storage
@@ -12,18 +13,26 @@
 #include <esp_sleep.h>    // Include for deep sleep and wake
 #include <driver/rtc_io.h> // RTC GPIO for wake pin pull-up in deep sleep
 #include <driver/gpio.h>   // GPIO hold during deep sleep (fan PWM pin)
+#include <esp_task_wdt.h>
 #include <mbedtls/md5.h> // Include for MD5 validation
 #include <SPIFFS.h>
 #define LED_PHASE_COUNT 5
 
 // Error log (SPIFFS, bounded, BLE-retrievable)
-#define LOG_FILE "/logs/errors.txt"
+#define LOG_FILE "/errors.txt"
+#define SPIFFS_PARTITION_LABEL "storage"
 #define MAX_LOG_SIZE 8192
 #define LOG_CHUNK_SIZE 450
 #define LOG_LINE_MAX_LEN 200
+
 //########################################################################
-///THIS IS IN THE BLE UPDATED FOLDER FROM FIVERR
+// Uncomment to test heater fail-safe WDT recovery: stops TWDT feed during flush while heater is on.
+// Expect task-WDT reset within 5 s of heating phase, forensics on Serial/SPIFFS after reboot.
+//#define SIMULATE_WDT_HANG
 //########################################################################
+
+
+
 // Pin and component definitions
 const int heaterPin = 17;        // GPIO17 (HEATER)
 
@@ -274,6 +283,31 @@ float readMainThermistorResistanceOhms();
 bool isHardwareLikelyDisconnectedForUserAction();
 void playHardwareNotConnectedAlert();
 bool enforceHeaterToleranceGap(const char* sourceTag, bool notifyBle = true);
+void initHeaterGpioSafe();
+void clearHeaterRtcOnFlag();
+void configureMotorAndSensorPins();
+void checkHeaterBootSafety();
+void initTaskWatchdog();
+void feedTaskWatchdog();
+void wdtSafeDelay(unsigned long ms);
+void updateHeaterSessionRtc();
+void checkHeaterRuntimeSafety();
+void startMotorHoming();
+void updateMotorHoming();
+void runHeaterSafetyBootSequence();
+int readHeaterCurrentAdc();
+void logAbnormalResetForensics();
+void logBootStatus();
+void testHeaterCurrent();
+void initHeaterPwm();
+void applyHeaterPwmDuty(int duty);
+void updateHeaterPID();
+void heaterOff();
+void initHeaterPidController();
+void initCorePlatformServices();
+void LEDErrorCode(int errorCode);
+void stopEverything();
+void flashLeds();
 
 // Macros to automatically forward Serial output to BLE when streaming is enabled
 #define SerialBLE_print(x) do { Serial.print(x); if(serial_streaming_enabled) sendSerialToBLEImpl(x); } while(0)
@@ -376,6 +410,10 @@ int flushStep = 0;
 bool case5FeedExecuted = false; // Flag to prevent multiple M2 activations in case 5
 bool case1FeedStarted = false; // Flag to track if M2 has started in case 1
 bool case6CutMotorRun = false;  // Flag: cut motor run after H (in cut mode); then heat continues for CUT_MODE_HEAT_TIME
+bool case6CutMotorRunning = false;
+unsigned long case6CutMotorStartMillis = 0;
+bool case6PrecoolCutRunning = false;
+unsigned long case6PrecoolCutStartMillis = 0;
 bool button2FeedStarted = false; // Flag to track if M2 has started when button 2 is pressed
 unsigned long button2FanStartTime = 0; // Timestamp when fan starts for button 2
 bool case10FanStarted = false; // Flag to track if fan has started in case 10
@@ -547,7 +585,43 @@ int ERROR_CODE = 0;
 //ERROR_CODE = 5 ==> Heater current detection failure
 //ERROR_CODE = 6 ==> Heater max wall time - time above K not reached
 //ERROR_CODE = 7 ==> EEPROM invalid (reflash/parameter recovery required)
+//ERROR_CODE = 8 ==> Heater fail-safe fault (crash recovery, MOSFET short, absolute max on-time)
 const int EEPROM_INVALID_ERROR_CODE = 7;
+const int HEATER_FAILSAFE_ERROR_CODE = 8;
+const int HEATER_CURRENT_ADC_THRESHOLD = 200;
+const unsigned long HEATER_ABSOLUTE_MAX_ON_MS = 20UL * 60UL * 1000UL;
+const unsigned long TASK_WDT_TIMEOUT_MS = 5000UL;
+const uint32_t HEATER_RTC_MAGIC = 0x4854A101UL;
+
+struct HeaterSessionRtc {
+  uint32_t magic;
+  uint8_t heaterWasOn;
+  uint8_t pendingResetReason;
+  uint32_t lastSessionMillis;
+  int16_t lastHeaterTempCx10;
+  uint8_t lastHeaterPwm;
+  int8_t lastFlushStep;
+  uint8_t lastCutBag;
+};
+
+RTC_NOINIT_ATTR static HeaterSessionRtc heaterRtc;
+bool taskWatchdogInitialized = false;
+unsigned long heaterOutputOnSinceMs = 0;
+unsigned long heaterRuntimeMismatchLastCheckMs = 0;
+int heaterRuntimeMismatchStrikes = 0;
+
+enum MotorHomingPhase : uint8_t {
+  HOMING_IDLE = 0,
+  HOMING_INIT = 1,
+  HOMING_PARTIAL_CLOSE = 2,
+  HOMING_CLOSE_EXTRA = 3,
+  HOMING_OPEN_FULL = 4
+};
+
+bool motorHomingActive = false;
+uint8_t motorHomingPhase = HOMING_IDLE;
+unsigned long motorHomingPhaseStartMillis = 0;
+bool motorHomingStartOpenSwitchClosed = false;
 const uint16_t VIRGIN_EEPROM_MAGIC = 0xFFFF;
 bool eepromErrorState = false;
 bool lastEEPROMWriteVerified = false;
@@ -598,8 +672,23 @@ const int sealerFanReverse = 21;   // HIGH = reverse
 const int FAN_PWM_FREQ = 25000;
 const int FAN_PWM_RESOLUTION = 8;
 
+// Heater PWM (restored PID output path)
+const int HEATER_PWM_FREQ = 1000;
+const int HEATER_PWM_RESOLUTION = 8;
+const int HEATER_PWM_MAX = 255;
+bool heaterPwmAttached = false;
+
 // Motor shield instance - M1&M2 only
 DualMAX14870MotorShield motors(M1DIR_PIN, M1PWM_PIN, M2DIR_PIN, M2PWM_PIN, M2NEN_PIN, M2NFAULT_PIN);
+
+// Heater PID (Kp=65, Ki=0.005, Kd=5.0, sample=250ms)
+double heaterSetpoint = 150.0;
+double heaterInput = 0.0;
+double heaterOutput = 0.0;
+double heaterKp = 65.0;
+double heaterKi = 0.005;
+double heaterKd = 5.0;
+PID heaterPid(&heaterInput, &heaterOutput, &heaterSetpoint, heaterKp, heaterKi, heaterKd, DIRECT);
 
 bool enforceHeaterToleranceGap(const char* sourceTag, bool notifyBle) {
   if ((heaterLowerToleranceC != heaterLowerToleranceC) || (heaterUpperToleranceC != heaterUpperToleranceC)) {
@@ -1428,23 +1517,24 @@ void saveParametersToEEPROM() {
 }
 
 void initErrorLog() {
-  if (!SPIFFS.begin(true)) {
+  bool mounted = SPIFFS.begin(true, "/spiffs", 10, SPIFFS_PARTITION_LABEL);
+  if (!mounted) {
+    Serial.println("WARN: SPIFFS begin(storage) failed, trying default partition");
+    mounted = SPIFFS.begin(true);
+  }
+  if (!mounted) {
     Serial.println("WARN: SPIFFS init failed, error log disabled");
     return;
   }
-  errorLogInitialized = true;
-  esp_reset_reason_t r = esp_reset_reason();
-  if (r == ESP_RST_PANIC || r == ESP_RST_WDT || r == ESP_RST_BROWNOUT || r == ESP_RST_SDIO) {
-    const char* reasonStr = "unknown";
-    switch (r) {
-      case ESP_RST_PANIC:   reasonStr = "panic"; break;
-      case ESP_RST_WDT:     reasonStr = "wdt"; break;
-      case ESP_RST_BROWNOUT: reasonStr = "brownout"; break;
-      case ESP_RST_SDIO:    reasonStr = "sdio"; break;
-      default: break;
-    }
-    logError("reset", (int)r, reasonStr, false);
+  File probe = SPIFFS.open(LOG_FILE, "a");
+  if (!probe) {
+    Serial.println("WARN: SPIFFS log file not writable, error log disabled");
+    return;
   }
+  probe.close();
+  errorLogInitialized = true;
+  Serial.printf("SPIFFS mounted: total=%u used=%u bytes, log=%s\n",
+                (unsigned)SPIFFS.totalBytes(), (unsigned)SPIFFS.usedBytes(), LOG_FILE);
 }
 
 static String getCurrentContextString() {
@@ -1471,7 +1561,14 @@ void logError(const char* type, int code, const char* msg, bool includeContext) 
   if (line.length() > LOG_LINE_MAX_LEN) line = line.substring(0, LOG_LINE_MAX_LEN);
   line += "\n";
   File f = SPIFFS.open(LOG_FILE, "a");
-  if (!f) return;
+  if (!f) {
+    static bool logOpenFailedWarned = false;
+    if (!logOpenFailedWarned) {
+      logOpenFailedWarned = true;
+      Serial.printf("WARN: logError open failed type=%s code=%d\n", type, code);
+    }
+    return;
+  }
   f.print(line);
   size_t sz = f.size();
   f.close();
@@ -1491,7 +1588,7 @@ void logError(const char* type, int code, const char* msg, bool includeContext) 
 }
 
 String readLogChunk(size_t offset) {
-  if (!errorLogInitialized) return "LOGS_END";
+  if (!errorLogInitialized) return "LOGS_ERR:NOT_MOUNTED";
   File f = SPIFFS.open(LOG_FILE, "r");
   if (!f) return "LOGS_END";
   size_t total = f.size();
@@ -3276,14 +3373,361 @@ void handleOTAChunk(uint8_t* data, size_t length) {
   }
 }
 
+void heaterEmergencyShutdown() {
+  if (heaterOn || heaterOutputOn) {
+    updateHeaterSessionRtc();
+  }
+  if (heaterPwmAttached) {
+    ledcWrite(heaterPin, 0);
+  } else {
+    gpio_set_level((gpio_num_t)heaterPin, 0);
+  }
+  heaterOutputOn = false;
+  heaterOutputOnSinceMs = 0;
+}
+
+void initHeaterGpioSafe() {
+  pinMode(heaterPin, OUTPUT);
+  digitalWrite(heaterPin, LOW);
+  heaterOutputOn = false;
+  heaterOutputOnSinceMs = 0;
+}
+
+void initHeaterPwm() {
+  if (!heaterPwmAttached) {
+    ledcAttach(heaterPin, HEATER_PWM_FREQ, HEATER_PWM_RESOLUTION);
+    ledcWrite(heaterPin, 0);
+    heaterPwmAttached = true;
+  }
+}
+
+void applyHeaterPwmDuty(int duty) {
+  if (duty < 0) {
+    duty = 0;
+  }
+  if (duty > HEATER_PWM_MAX) {
+    duty = HEATER_PWM_MAX;
+  }
+  initHeaterPwm();
+  ledcWrite(heaterPin, duty);
+
+  unsigned long now = millis();
+  bool nextOutputOn = duty > 0;
+  if (nextOutputOn != heaterOutputOn) {
+    heaterOutputOn = nextOutputOn;
+    if (heaterOutputOn) {
+      heaterOutputOnSinceMs = now;
+    } else {
+      heaterOutputOnSinceMs = 0;
+      clearHeaterRtcOnFlag();
+    }
+  }
+}
+
+void initHeaterPidController() {
+  heaterSetpoint = heaterTargetTemp;
+  heaterPid.SetMode(AUTOMATIC);
+  heaterPid.SetSampleTime(250);
+  heaterPid.SetOutputLimits(0, HEATER_PWM_MAX);
+}
+
+void configureMotorAndSensorPins() {
+  pinMode(buzzerPin, OUTPUT);
+  pinMode(microswitchClosePin, INPUT_PULLUP);
+  pinMode(microswitchOpenPin, INPUT_PULLUP);
+  pinMode(controlPanelWake, INPUT_PULLUP);
+  pinMode(M1NFAULT_PIN, INPUT);
+  pinMode(M2NFAULT_PIN, INPUT);
+  pinMode(M1NEN_PIN, OUTPUT);
+  pinMode(M2NEN_PIN, OUTPUT);
+  pinMode(M1DIR_PIN, OUTPUT);
+  pinMode(M2DIR_PIN, OUTPUT);
+  pinMode(M1PWM_PIN, OUTPUT);
+  pinMode(M2PWM_PIN, OUTPUT);
+  pinMode(m1CurrentPin, INPUT);
+  pinMode(heaterCurrentPin, INPUT);
+  pinMode(batteryVoltagePin, INPUT);
+  pinMode(batteryTempPin, INPUT);
+}
+
+void clearHeaterRtcSession() {
+  heaterRtc.magic = 0;
+  heaterRtc.heaterWasOn = 0;
+  heaterRtc.pendingResetReason = 0;
+  heaterRtc.lastSessionMillis = 0;
+  heaterRtc.lastHeaterTempCx10 = 0;
+  heaterRtc.lastHeaterPwm = 0;
+  heaterRtc.lastFlushStep = 0;
+  heaterRtc.lastCutBag = 0;
+}
+
+void clearHeaterRtcOnFlag() {
+  heaterRtc.heaterWasOn = 0;
+}
+
+int readHeaterCurrentAdc() {
+  return analogRead(heaterCurrentPin);
+}
+
+static bool isAbnormalResetReason(esp_reset_reason_t reason) {
+  return reason == ESP_RST_WDT || reason == ESP_RST_TASK_WDT || reason == ESP_RST_PANIC ||
+         reason == ESP_RST_BROWNOUT || reason == ESP_RST_SDIO || reason == ESP_RST_INT_WDT;
+}
+
+static const char* resetReasonToString(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_POWERON: return "poweron";
+    case ESP_RST_SW: return "sw";
+    case ESP_RST_PANIC: return "panic";
+    case ESP_RST_WDT: return "wdt";
+    case ESP_RST_TASK_WDT: return "task_wdt";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_SDIO: return "sdio";
+    case ESP_RST_INT_WDT: return "int_wdt";
+    case ESP_RST_DEEPSLEEP: return "deepsleep";
+    case ESP_RST_USB: return "usb";
+    default: return "unknown";
+  }
+}
+
+static size_t getErrorLogFileSize() {
+  if (!errorLogInitialized) {
+    return 0;
+  }
+  File f = SPIFFS.open(LOG_FILE, "r");
+  if (!f) {
+    return 0;
+  }
+  size_t sz = f.size();
+  f.close();
+  return sz;
+}
+
+void logBootStatus() {
+  esp_reset_reason_t resetReason = esp_reset_reason();
+  const char* reasonStr = resetReasonToString(resetReason);
+  char msg[64];
+  snprintf(msg, sizeof(msg), "reason=%s,code=%d", reasonStr, (int)resetReason);
+  Serial.printf("Boot status: reset=%s (%d), spiffs=%s, log_bytes=%u\n",
+                reasonStr, (int)resetReason,
+                errorLogInitialized ? "ok" : "off",
+                (unsigned)getErrorLogFileSize());
+  if (errorLogInitialized) {
+    logError("boot_status", (int)resetReason, msg, false);
+  }
+}
+
+void logAbnormalResetForensics() {
+  esp_reset_reason_t resetReason = esp_reset_reason();
+  if (!isAbnormalResetReason(resetReason)) {
+    return;
+  }
+
+  const char* reasonStr = resetReasonToString(resetReason);
+  char resetMsg[96];
+  snprintf(resetMsg, sizeof(resetMsg), "reason=%s,code=%d,boot_ms=%lu",
+           reasonStr, (int)resetReason, millis());
+
+  uint8_t priorHeater = (heaterRtc.magic == HEATER_RTC_MAGIC) ? heaterRtc.heaterWasOn : 0;
+  int postAdc = readHeaterCurrentAdc();
+  float postTemp = readTemperature();
+  char forensicsMsg[160];
+  snprintf(forensicsMsg, sizeof(forensicsMsg),
+           "prior_ms=%lu,prior_heater=%u,prior_temp=%d,prior_pwm=%u,prior_step=%d,prior_cut=%u,post_adc=%d,post_temp=%.1f,rtc_magic=0x%08lX",
+           (unsigned long)heaterRtc.lastSessionMillis,
+           priorHeater,
+           (int)heaterRtc.lastHeaterTempCx10,
+           (unsigned)heaterRtc.lastHeaterPwm,
+           (int)heaterRtc.lastFlushStep,
+           (unsigned)heaterRtc.lastCutBag,
+           postAdc,
+           postTemp,
+           (unsigned long)heaterRtc.magic);
+
+  Serial.printf("Abnormal reset logged: %s\n", resetMsg);
+  Serial.printf("Reset forensics: %s\n", forensicsMsg);
+
+  if (errorLogInitialized) {
+    logError("reset", (int)resetReason, resetMsg, false);
+    logError("reset_forensics", (int)resetReason, forensicsMsg, false);
+    Serial.printf("SPIFFS log size after forensics: %u bytes\n",
+                  (unsigned)getErrorLogFileSize());
+  }
+}
+
+void feedTaskWatchdog() {
+#if defined(SIMULATE_WDT_HANG)
+  if (isFlushing && (heaterOn || heaterOutputOn)) {
+    updateHeaterSessionRtc();
+    return;
+  }
+#endif
+  if (taskWatchdogInitialized) {
+    esp_task_wdt_reset();
+  }
+}
+
+void wdtSafeDelay(unsigned long ms) {
+  unsigned long remaining = ms;
+  while (remaining > 0) {
+    unsigned long chunk = remaining > 500UL ? 500UL : remaining;
+    delay(chunk);
+    feedTaskWatchdog();
+    remaining -= chunk;
+  }
+}
+
+void initTaskWatchdog() {
+  if (taskWatchdogInitialized) {
+    return;
+  }
+
+  esp_task_wdt_config_t wdtConfig = {};
+  wdtConfig.timeout_ms = TASK_WDT_TIMEOUT_MS;
+  wdtConfig.idle_core_mask = 0;
+  wdtConfig.trigger_panic = true;
+
+  esp_err_t err = esp_task_wdt_init(&wdtConfig);
+  if (err == ESP_ERR_INVALID_STATE) {
+    err = esp_task_wdt_reconfigure(&wdtConfig);
+  }
+  if (err != ESP_OK) {
+    Serial.printf("WARNING: TWDT init failed: %d\n", (int)err);
+    return;
+  }
+
+  esp_task_wdt_add(NULL);
+  esp_register_shutdown_handler(heaterEmergencyShutdown);
+  taskWatchdogInitialized = true;
+  Serial.printf("Task watchdog enabled (%lu ms timeout)\n", TASK_WDT_TIMEOUT_MS);
+}
+
+void latchHeaterFailsafeError(const char* msg) {
+  if (ERROR_CODE == 0) {
+    ERROR_CODE = HEATER_FAILSAFE_ERROR_CODE;
+  }
+  logError("boot", HEATER_FAILSAFE_ERROR_CODE, msg, true);
+  LEDErrorCode(HEATER_FAILSAFE_ERROR_CODE);
+}
+
+void checkHeaterBootSafety() {
+  esp_reset_reason_t resetReason = esp_reset_reason();
+  uint8_t priorHeaterWasOn = 0;
+  if (heaterRtc.magic == HEATER_RTC_MAGIC) {
+    priorHeaterWasOn = heaterRtc.heaterWasOn;
+  }
+
+  if (resetReason == ESP_RST_POWERON) {
+    clearHeaterRtcSession();
+  } else if (heaterRtc.magic != HEATER_RTC_MAGIC) {
+    clearHeaterRtcSession();
+  } else {
+    heaterRtc.pendingResetReason = (uint8_t)resetReason;
+  }
+
+  int adc = readHeaterCurrentAdc();
+  bool abnormalReset = isAbnormalResetReason(resetReason);
+
+  if (abnormalReset && (priorHeaterWasOn || adc > HEATER_CURRENT_ADC_THRESHOLD)) {
+    Serial.printf("Heater boot safety: abnormal reset (reason=%d, priorHeaterOn=%u, adc=%d)\n",
+                  (int)resetReason, priorHeaterWasOn, adc);
+    latchHeaterFailsafeError("heater_anomaly_after_reset");
+  } else if (adc > HEATER_CURRENT_ADC_THRESHOLD) {
+    Serial.printf("Heater boot safety: current with GPIO off (adc=%d)\n", adc);
+    latchHeaterFailsafeError("heater_current_with_gpio_off");
+  }
+}
+
+void updateHeaterSessionRtc() {
+  if (isFlushing && (heaterOn || heaterOutputOn)) {
+    heaterRtc.magic = HEATER_RTC_MAGIC;
+    heaterRtc.heaterWasOn = 1;
+    heaterRtc.lastSessionMillis = millis();
+    heaterRtc.lastHeaterTempCx10 = (int16_t)(heaterInput * 10.0);
+    heaterRtc.lastHeaterPwm = (uint8_t)heaterOutput;
+    heaterRtc.lastFlushStep = (int8_t)flushStep;
+    heaterRtc.lastCutBag = cutBag ? 1 : 0;
+  }
+}
+
+void checkHeaterRuntimeSafety() {
+  if (ERROR_CODE != 0) {
+    return;
+  }
+
+  unsigned long now = millis();
+
+  if (!heaterOutputOn) {
+    if (now - heaterRuntimeMismatchLastCheckMs >= 500UL) {
+      heaterRuntimeMismatchLastCheckMs = now;
+      if (readHeaterCurrentAdc() > HEATER_CURRENT_ADC_THRESHOLD) {
+        heaterRuntimeMismatchStrikes++;
+      } else {
+        heaterRuntimeMismatchStrikes = 0;
+      }
+      if (heaterRuntimeMismatchStrikes >= 2) {
+        Serial.println("Heater runtime safety: current detected with GPIO off");
+        logError("runtime", HEATER_FAILSAFE_ERROR_CODE, "heater_current_gpio_off", true);
+        ERROR_CODE = HEATER_FAILSAFE_ERROR_CODE;
+        stopEverything();
+        LEDErrorCode(HEATER_FAILSAFE_ERROR_CODE);
+      }
+    }
+    return;
+  }
+
+  heaterRuntimeMismatchStrikes = 0;
+
+  if ((heaterOn || heaterOutputOn) && heaterOutputOnSinceMs != 0 &&
+      (now - heaterOutputOnSinceMs >= HEATER_ABSOLUTE_MAX_ON_MS)) {
+    Serial.println("Heater runtime safety: absolute max on-time exceeded");
+    logError("runtime", HEATER_FAILSAFE_ERROR_CODE, "heater_absolute_max_on", true);
+    ERROR_CODE = HEATER_FAILSAFE_ERROR_CODE;
+    stopEverything();
+    LEDErrorCode(HEATER_FAILSAFE_ERROR_CODE);
+  }
+}
+
+void runHeaterSafetyBootSequence() {
+  logBootStatus();
+  logAbnormalResetForensics();
+  checkHeaterBootSafety();
+  initTaskWatchdog();
+  if (ERROR_CODE == 0) {
+    testHeaterCurrent();
+  } else {
+    Serial.println("Skipping heater current test due to latched error");
+    SerialBLE_println("Skipping heater current test due to latched error");
+  }
+}
+
+void initCorePlatformServices() {
+  esp_err_t err = nvs_flash_init();
+  if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    ESP_ERROR_CHECK(nvs_flash_erase());
+    err = nvs_flash_init();
+  }
+  ESP_ERROR_CHECK(err);
+  initErrorLog();
+  loadDevModeSetting();
+  initializeHardwareMatrix();
+  if (!initializeHWCFGStore()) {
+    Serial.println("WARNING: HWCFG store failed to initialize");
+    SerialBLE_println("WARNING: HWCFG store init failed");
+  }
+  if (ignoreM12Faults) {
+    Serial.println("WARNING: M1/M2 motor faults are LOG-ONLY (ignoreM12Faults=true)");
+    SerialBLE_println("WARNING: M1/M2 motor faults are LOG-ONLY");
+  }
+}
+
 // Test heater current detection at startup
 void testHeaterCurrent() {
   Serial.println("Starting heater current detection test...");
   SerialBLE_println("Starting heater current detection test...");
   
   // Set heater fully ON for current detection.
-  digitalWrite(heaterPin, HIGH);
-  heaterOutputOn = true;
+  applyHeaterPwmDuty(HEATER_PWM_MAX);
   Serial.println("Heater set to ON for startup current test");
   SerialBLE_println("Heater set to ON for startup current test");
   
@@ -3293,14 +3737,24 @@ void testHeaterCurrent() {
   const unsigned long checkInterval = 50; // Check every 50ms
   const int threshold = 200; // ADC threshold for current detection
   bool currentDetected = false;
+  const unsigned long testHardCapMs = testDuration + 1000UL;
   unsigned long lastCheckTime = 0;
   
   while ((millis() - testStartTime) < testDuration) {
-    // Check every 50ms
+    if ((millis() - testStartTime) >= testHardCapMs) {
+      Serial.println("ERROR: Heater current test hard cap exceeded");
+      heaterOff();
+      if (ERROR_CODE == 0) {
+        ERROR_CODE = 5;
+        LEDErrorCode(ERROR_CODE);
+      }
+      return;
+    }
+
     if ((millis() - lastCheckTime) >= checkInterval) {
       lastCheckTime = millis();
       
-      int adcReading = analogRead(heaterCurrentPin);
+      int adcReading = readHeaterCurrentAdc();
       Serial.printf("Heater current ADC reading: %d\n", adcReading);
       SerialBLE_print("Heater current ADC: ");
       SerialBLE_println(adcReading);
@@ -3309,16 +3763,13 @@ void testHeaterCurrent() {
         currentDetected = true;
         Serial.println("Heater current detected - test PASSED");
         SerialBLE_println("Heater current detected - test PASSED");
-        break; // Exit loop early if current detected
+        break;
       }
     }
-    delay(10); // Small delay to prevent tight loop
+    wdtSafeDelay(10);
   }
   
-  // Turn off heater
-  digitalWrite(heaterPin, LOW);
-  heaterOutputOn = false;
-  Serial.println("Heater turned off after test");
+  heaterOff();
   
   // Check result
   if (!currentDetected) {
@@ -3337,112 +3788,68 @@ void testHeaterCurrent() {
 }
 
 void setup() {
-  Serial.begin(115200); // Increased baud rate for faster output
-  delay(500); // Longer delay to ensure Serial is ready
-  if (ignoreM12Faults) {
-    Serial.println("WARNING: M1/M2 motor faults are set to LOG-ONLY (ignoreM12Faults=true)");
-  }
+  Serial.begin(115200);
+  delay(100);
 
   esp_sleep_wakeup_cause_t wakeCause = esp_sleep_get_wakeup_cause();
   bool wokeFromDeepSleep = (wakeCause == ESP_SLEEP_WAKEUP_EXT0);
 
-  // PWM fan pins - configure early to ensure fan is off before BLE (hardware requirement)
   pinMode(sealerFanPwr, OUTPUT);
   pinMode(sealerFanReverse, OUTPUT);
   ledcAttach(sealerFanPWM, FAN_PWM_FREQ, FAN_PWM_RESOLUTION);
-  setFanSpeed(0);  // Ensure fan is off at startup
+  setFanSpeed(0);
+  initHeaterGpioSafe();
+  initHeaterPwm();
 
   if (wokeFromDeepSleep) {
-    // Fast wake path: no checkBootFailure, no BLE, no locateMotorPos
     bleEnabled = false;
     Serial.println("\n\n=== WOKE FROM DEEP SLEEP (GPIO2) ===");
-
-    // Release GPIO2 from RTC IO so it can be used as normal digital input again
     rtc_gpio_deinit((gpio_num_t)controlPanelWake);
 
-    esp_err_t err = nvs_flash_init();
-    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-      ESP_ERROR_CHECK(nvs_flash_erase());
-      err = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(err);
-    initErrorLog();
-    loadDevModeSetting();
-    initializeHardwareMatrix();
-    if (!initializeHWCFGStore()) {
-      Serial.println("WARNING: HWCFG store failed to initialize on wake path");
-      SerialBLE_println("WARNING: HWCFG store init failed");
-    }
-    if (ignoreM12Faults) {
-      SerialBLE_println("WARNING: M1/M2 motor faults are LOG-ONLY");
-    }
-
+    initCorePlatformServices();
     mcp_setup();
     Serial.println("MCP23017 Initialized");
     logControlPanelPinout();
-    circleLeds();
 
     loadParametersFromEEPROM();
     loadFlushCountFromEEPROM();
     knownResistor = thermistorResistance;
     heaterTargetTemp = K;
+    initHeaterPidController();
     startEEPROMWakeAlert();
     maintainEEPROMErrorIndicator();
 
-    pinMode(heaterPin, OUTPUT);
-    pinMode(buzzerPin, OUTPUT);
-    pinMode(microswitchClosePin, INPUT_PULLUP);
-    pinMode(microswitchOpenPin, INPUT_PULLUP);
-    pinMode(controlPanelWake, INPUT_PULLUP);
-    pinMode(M1NFAULT_PIN, INPUT);
-    pinMode(M2NFAULT_PIN, INPUT);
-    pinMode(M1NEN_PIN, OUTPUT);
-    pinMode(M2NEN_PIN, OUTPUT);
-    pinMode(M1DIR_PIN, OUTPUT);
-    pinMode(M2DIR_PIN, OUTPUT);
-    pinMode(M1PWM_PIN, OUTPUT);
-    pinMode(M2PWM_PIN, OUTPUT);
-    pinMode(m1CurrentPin, INPUT);
-    pinMode(heaterCurrentPin, INPUT);
-    pinMode(batteryVoltagePin, INPUT);
-    pinMode(batteryTempPin, INPUT);
+    configureMotorAndSensorPins();
+    runHeaterSafetyBootSequence();
+    circleLeds();
 
-    testHeaterCurrent();
     motors.enableDrivers();
-    // Skip locateMotorPos() on wake - mechanism has not moved
     return;
   }
 
-  // Cold boot: full startup with BLE and motor homing
   Serial.println("\n\n=== SETUP STARTING ===");
   Serial.printf("Free heap at startup: %d bytes\n", ESP.getFreeHeap());
   Serial.printf("Largest free block: %d bytes\n", ESP.getMaxAllocHeap());
   Serial.println("Beginning Setup");
 
-  esp_err_t err = nvs_flash_init();
-  if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-    ESP_ERROR_CHECK(nvs_flash_erase());
-    err = nvs_flash_init();
-  }
-  ESP_ERROR_CHECK(err);
-  initErrorLog();
-  loadDevModeSetting();
-  initializeHardwareMatrix();
-  if (!initializeHWCFGStore()) {
-    Serial.println("WARNING: HWCFG store failed to initialize on cold boot");
-    SerialBLE_println("WARNING: HWCFG store init failed");
-  }
-  if (ignoreM12Faults) {
-    SerialBLE_println("WARNING: M1/M2 motor faults are LOG-ONLY");
-  }
-
-  checkBootFailure();
+  initCorePlatformServices();
 
   mcp_setup();
   Serial.println("MCP23017 Initialized");
   logControlPanelPinout();
-  circleLeds();
 
+  loadParametersFromEEPROM();
+  loadFlushCountFromEEPROM();
+  knownResistor = thermistorResistance;
+  heaterTargetTemp = K;
+  initHeaterPidController();
+  maintainEEPROMErrorIndicator();
+
+  configureMotorAndSensorPins();
+  runHeaterSafetyBootSequence();
+
+  checkBootFailure();
+  circleLeds();
   Serial.println("LED startup test complete");
 
   bleStartupTime = millis();
@@ -3452,7 +3859,7 @@ void setup() {
   Serial.printf("Largest free block: %d bytes\n", ESP.getMaxAllocHeap());
   Serial.printf("Min free heap ever: %d bytes\n", ESP.getMinFreeHeap());
 
-  server_setup(false); // Initialize the Bluetooth Low Energy Server without OTA
+  server_setup(false);
 
   Serial.println("=== MEMORY AFTER BLE SERVER SETUP ===");
   Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
@@ -3472,45 +3879,12 @@ void setup() {
     Serial.println("DEV mode is OFF: BLE timeout and inactivity sleep are active.");
   }
 
-  Serial.println("DEBUG: About to load parameters from EEPROM");
-  loadParametersFromEEPROM();
-  loadFlushCountFromEEPROM();
-  knownResistor = thermistorResistance;
-  Serial.printf("DEBUG: After EEPROM load - H=%ld, K=%.1f\n", H, K);
-  SerialBLE_println("DEBUG: About to load parameters from EEPROM");
-  SerialBLE_print("DEBUG: After EEPROM load - H=");
-  SerialBLE_print((int)H);
-  SerialBLE_print(", K=");
-  SerialBLE_print(K);
-  SerialBLE_println();
-  maintainEEPROMErrorIndicator();
-
-  heaterTargetTemp = K;
-
-  pinMode(heaterPin, OUTPUT);
-  pinMode(buzzerPin, OUTPUT);
-  pinMode(microswitchClosePin, INPUT_PULLUP);
-  pinMode(microswitchOpenPin, INPUT_PULLUP);
-  pinMode(controlPanelWake, INPUT_PULLUP);
-  pinMode(M1NFAULT_PIN, INPUT);
-  pinMode(M2NFAULT_PIN, INPUT);
-  pinMode(M1NEN_PIN, OUTPUT);
-  pinMode(M2NEN_PIN, OUTPUT);
-  pinMode(M1DIR_PIN, OUTPUT);
-  pinMode(M2DIR_PIN, OUTPUT);
-  pinMode(M1PWM_PIN, OUTPUT);
-  pinMode(M2PWM_PIN, OUTPUT);
-  pinMode(m1CurrentPin, INPUT);
-  pinMode(heaterCurrentPin, INPUT);
-  pinMode(batteryVoltagePin, INPUT);
-  pinMode(batteryTempPin, INPUT);
-
-  testHeaterCurrent();
   motors.enableDrivers();
-  locateMotorPos();
+  startMotorHoming();
 }
 
 void loop() {
+  
   if (lastActivityMillis == 0) {
     lastActivityMillis = millis();
   }
@@ -3607,15 +3981,19 @@ void loop() {
 
   if (eepromWakeAlertActive) {
     if (millis() - eepromWakeAlertStartMillis < EEPROM_WAKE_ALERT_MS) {
-      // Show latched EEPROM error indicator while holding controls for user awareness.
       maintainEEPROMErrorIndicator();
-      delay(1);  // Cap loop rate ~1 kHz (same as main path)
+      feedTaskWatchdog();
+      delay(1);
       return;
     }
     eepromWakeAlertActive = false;
     Serial.println("EEPROM wake alert ended. Normal operation resumed.");
     sendSerialToBLE("EEPROM wake alert ended. Normal operation resumed");
   }
+
+  updateMotorHoming();
+  updateHeaterSessionRtc();
+  checkHeaterRuntimeSafety();
   
   // OTA update handling is now done via update_characteristic_callbacks class
   // Read button states
@@ -3752,7 +4130,7 @@ void loop() {
       // Don't start flush sequence immediately - wait to see if it's a hold
     } else if (button1Pressed && button1Held && (millis() - button1HoldStartTime >= BUTTON_HOLD_TIME)) {
       // Button 1 held for 1.5 seconds - enable cutBag and start flush sequence
-      if (!isFlushing) {  // Only start if not already flushing
+      if (!isFlushing && !motorHomingActive) {  // Only start if not already flushing
         if (isHardwareLikelyDisconnectedForUserAction()) {
           if (!button1DisconnectAlertedForCurrentPress) {
             SerialBLE_println("Hardware not connected (thermistor open) - flush blocked");
@@ -3901,12 +4279,14 @@ void loop() {
   // Inactivity light sleep: 2 min with no activity, wake on GPIO2 (controlPanelWake)
   // Only enter when wake button is released (HIGH) so pin does not trigger immediate wake.
   // Light sleep keeps GPIO state so fan pins stay LOW (fan off) without hold logic.
-  if (!devModeEnabled && !otaEnabled && !batteryDisplayMode && !isFlushing && !mechanismMotorRunning && !fanRunning &&
+  if (!devModeEnabled && !otaEnabled && !batteryDisplayMode && !isFlushing && !motorHomingActive &&
+      !mechanismMotorRunning && !fanRunning &&
       (millis() - lastActivityMillis >= INACTIVITY_SLEEP_MS) &&
       (digitalRead(controlPanelWake) == HIGH)) {
     motors.setM2Speed(0);
     setFanSpeed(0);
     motors.setM1Speed(0);
+    heaterOff();
     // RTC GPIO pull-up so pin stays HIGH in sleep and only wakes when button pulls LOW
     rtc_gpio_init((gpio_num_t)controlPanelWake);
     rtc_gpio_pullup_en((gpio_num_t)controlPanelWake);
@@ -3920,8 +4300,8 @@ void loop() {
   }
 
   if (heaterOn) {
-    float heaterTemp = readTemperature();
-    updateHeaterControl(heaterTemp);
+    updateHeaterPID();
+    float heaterTemp = (float)heaterInput;
     unsigned long now = millis();
     if (heaterTemp > K) {
       timeAboveSetpointMillis += (now - lastHeaterCheckMillis);
@@ -3974,7 +4354,8 @@ void loop() {
     }
   }
   maintainEEPROMErrorIndicator();
-  delay(1);  // Cap main-loop polling at ~1 kHz max
+  feedTaskWatchdog();
+  delay(1);
 }
 
 void flushSequence() {
@@ -4084,7 +4465,7 @@ void flushSequence() {
       timeAboveSetpointMillis = 0;
       lastHeaterCheckMillis = currentMillis;
       lastHeaterControlLogMillis = 0;  // Force immediate first heater control log for this heating phase
-      updateHeaterControl(readTemperature());
+      updateHeaterPID();
       
       // Check if it's time to start M3 reverse (based on fanReverseStartTime percentage of typicalOpeningTime)
       if (!m3ReverseActive && !m3ReverseCompleted && m1CloseStartTime > 0) {
@@ -4219,20 +4600,47 @@ void flushSequence() {
     }
 
     case 6: {
-      // Cut mode: run cut motor after H (time above K), while still heating; then heat for extra CUT_MODE_HEAT_TIME
+      unsigned long cutDurationMs = (unsigned long)(MOTOR_CUT_TIME * 1000.0f);
+
+      if (case6CutMotorRunning) {
+        if (millis() - case6CutMotorStartMillis >= cutDurationMs) {
+          motors.setM1Speed(0);
+          case6CutMotorRunning = false;
+          case6CutMotorRun = true;
+          timeAboveCutModeTempMillis = 0;
+          lastCutModeTempCheckMillis = millis();
+          heaterTargetTemp = CUT_MODE_TEMP;
+          SerialBLE_println("Cut motor stopped");
+          Serial.printf("DEBUG: Heater target raised to CUT_MODE_TEMP = %.1f °C\n", CUT_MODE_TEMP);
+        }
+        break;
+      }
+
+      if (case6PrecoolCutRunning) {
+        if (millis() - case6PrecoolCutStartMillis >= cutDurationMs) {
+          motors.setM1Speed(0);
+          case6PrecoolCutRunning = false;
+          SerialBLE_println("Pre-cooling cut pulse complete");
+          flushStep++;
+          SerialBLE_print("Moving to Case7 from case 6: ");
+          SerialBLE_println(millis());
+          SerialBLE_println("Heater off");
+          heaterOn = false;
+          heaterOff();
+          heaterTargetTemp = K;
+          stepStartMillis = currentMillis;
+          lastCoolingTempLogMillis = 0;
+        }
+        break;
+      }
+
       if (cutBag && !case6CutMotorRun && (timeAboveSetpointMillis >= (unsigned long)(H * 1000))) {
         SerialBLE_println("Cut bag mode: Running cut motor after H (heater stays on for extra CUT_MODE_HEAT_TIME)");
         Serial.printf("DEBUG: MOTOR_CUT_TIME = %.3f seconds\n", MOTOR_CUT_TIME);
-        Serial.printf("DEBUG: delay = %d ms\n", int(MOTOR_CUT_TIME * 1000));
-        motors.setM1Speed(400); // Full speed for cutting
-        delay(int(MOTOR_CUT_TIME * 1000)); // Run for MOTOR_CUT_TIME seconds
-        motors.setM1Speed(0); // Stop cut motor
-        SerialBLE_println("Cut motor stopped");
-        case6CutMotorRun = true;
-        timeAboveCutModeTempMillis = 0;
-        lastCutModeTempCheckMillis = millis();
-        heaterTargetTemp = CUT_MODE_TEMP;  // Switch heater target for CUT_MODE_HEAT_TIME
-        Serial.printf("DEBUG: Heater target raised to CUT_MODE_TEMP = %.1f °C\n", CUT_MODE_TEMP);
+        motors.setM1Speed(400);
+        case6CutMotorRunning = true;
+        case6CutMotorStartMillis = currentMillis;
+        break;
       }
 
       bool timeAboveKReached;
@@ -4258,10 +4666,10 @@ void flushSequence() {
 
         if (cutBag && case6CutMotorRun) {
           SerialBLE_println("Cut bag mode: Running pre-cooling cut pulse");
-          motors.setM1Speed(400); // Recut while bag is hottest, before cooling starts
-          delay(int(MOTOR_CUT_TIME * 1000));
-          motors.setM1Speed(0);
-          SerialBLE_println("Pre-cooling cut pulse complete");
+          motors.setM1Speed(400);
+          case6PrecoolCutRunning = true;
+          case6PrecoolCutStartMillis = currentMillis;
+          break;
         }
 
         flushStep++;
@@ -4271,9 +4679,9 @@ void flushSequence() {
         SerialBLE_println("Heater off");
         heaterOn = false;
         heaterOff();
-        heaterTargetTemp = K;  // Restore target for next flush
+        heaterTargetTemp = K;
         stepStartMillis = currentMillis;
-        lastCoolingTempLogMillis = 0;  // Reset cooling log timer for immediate first reading in case 7
+        lastCoolingTempLogMillis = 0;
       }
       break;
     }
@@ -4320,7 +4728,9 @@ void flushSequence() {
     }
 
     case 8: {
-      if ((currentMillis - motorStartMillis > (unsigned long)maxOpeningTime * 1000UL) && ERROR_CODE == 0) {
+      if (!openSwitchLatched &&
+          (currentMillis - motorStartMillis > (unsigned long)maxOpeningTime * 1000UL) &&
+          ERROR_CODE == 0) {
         SerialBLE_println("Mechanism open timeout in case 8");
         motors.setM1Speed(0);
         mechanismMotorRunning = false;
@@ -4356,7 +4766,9 @@ void flushSequence() {
       break;
 
     case 10: {
-      if ((currentMillis - motorStartMillis > (unsigned long)maxOpeningTime * 1000UL) && ERROR_CODE == 0) {
+      if (!openSwitchLatched &&
+          (currentMillis - motorStartMillis > (unsigned long)maxOpeningTime * 1000UL) &&
+          ERROR_CODE == 0) {
         SerialBLE_println("Mechanism open timeout in case 10");
         motors.setM1Speed(0);
         mechanismMotorRunning = false;
@@ -4368,6 +4780,9 @@ void flushSequence() {
 
       int sw10 = digitalRead(microswitchOpenPin);
       if (sw10 == LOW) {
+        if (!openSwitchLatched) {
+          SerialBLE_println("Open switch latched, open timeout cleared");
+        }
         openSwitchLatched = true;
         motors.setM1Speed(0);
         mechanismMotorRunning = false;
@@ -5078,6 +5493,15 @@ void stopEverything() {
   case1FeedStarted = false;
   case5FeedExecuted = false;
   case6CutMotorRun = false;
+  case6CutMotorRunning = false;
+  case6CutMotorStartMillis = 0;
+  case6PrecoolCutRunning = false;
+  case6PrecoolCutStartMillis = 0;
+  motorHomingActive = false;
+  motorHomingPhase = HOMING_IDLE;
+  motorHomingPhaseStartMillis = 0;
+  heaterRuntimeMismatchStrikes = 0;
+  heaterRuntimeMismatchLastCheckMs = 0;
   case10FanStarted = false;
   case10BackupStarted = false;
   openSwitchLatched = false;
@@ -5429,24 +5853,48 @@ void updateLEDs() {
 }
 
 void locateMotorPos() {
-  Serial.println("Ensuring Closing motor is at a known position...");
-  bool motorOPEN_switchClosed = (digitalRead(microswitchOpenPin) == LOW);
-  Serial.print("motor open switch closed (LOW): ");
-  Serial.println(motorOPEN_switchClosed);
+  startMotorHoming();
+  while (motorHomingActive) {
+    updateMotorHoming();
+    feedTaskWatchdog();
+    delay(1);
+  }
+}
 
-  mechanismMotorRunning = false; // Initialize motor state
-///mechanism open - partially close it
-//+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-  if (motorOPEN_switchClosed) {
-    Serial.println("Motor is OPEN (switch closed), partially closing to confirm...");
-    unsigned long motorStartMillis = millis();
-    motors.setM1Speed(400); // Start closing motor
-    mechanismMotorRunning = true;
-    Serial.print("MOTOR START TIME (closing): ");
-    Serial.println(motorStartMillis);
-    Serial.println("Partially closing mechanism...");
-    while (digitalRead(microswitchOpenPin) == LOW) {
-      if (millis() - motorStartMillis > TIMEOUT) {
+void startMotorHoming() {
+  Serial.println("Ensuring Closing motor is at a known position...");
+  motorHomingActive = true;
+  motorHomingPhase = HOMING_INIT;
+  motorHomingPhaseStartMillis = millis();
+  mechanismMotorRunning = false;
+}
+
+void updateMotorHoming() {
+  if (!motorHomingActive) {
+    return;
+  }
+
+  switch (motorHomingPhase) {
+    case HOMING_INIT: {
+      motorHomingStartOpenSwitchClosed = (digitalRead(microswitchOpenPin) == LOW);
+      Serial.print("motor open switch closed (LOW): ");
+      Serial.println(motorHomingStartOpenSwitchClosed);
+      if (motorHomingStartOpenSwitchClosed) {
+        Serial.println("Motor is OPEN (switch closed), partially closing to confirm...");
+        motors.setM1Speed(400);
+        mechanismMotorRunning = true;
+        motorHomingPhase = HOMING_PARTIAL_CLOSE;
+      } else {
+        Serial.println("Motor is NOT fully OPEN (switch open), opening fully...");
+        motors.setM1Speed(-400);
+        mechanismMotorRunning = true;
+        motorHomingPhase = HOMING_OPEN_FULL;
+      }
+      motorHomingPhaseStartMillis = millis();
+      break;
+    }
+    case HOMING_PARTIAL_CLOSE: {
+      if (millis() - motorHomingPhaseStartMillis > TIMEOUT) {
         if (ERROR_CODE == 0) {
           ERROR_CODE = 1;
           flashLeds();
@@ -5455,27 +5903,31 @@ void locateMotorPos() {
         }
         motors.setM1Speed(0);
         mechanismMotorRunning = false;
+        motorHomingActive = false;
+        motorHomingPhase = HOMING_IDLE;
         return;
       }
-      delay(10);
+      if (digitalRead(microswitchOpenPin) != LOW) {
+        Serial.println("Motor partially closed (open switch is now open).");
+        motorHomingPhase = HOMING_CLOSE_EXTRA;
+        motorHomingPhaseStartMillis = millis();
+      }
+      break;
     }
-    delay(500); // make it go a bit further
-    motors.setM1Speed(0); // Stop closing motor
-    mechanismMotorRunning = false;
-
-    Serial.println("Motor partially closed (open switch is now open).");
-  }
-    
-  // Mecahnism now partially closed
-    Serial.println("Motor is NOT fully OPEN (switch open), opening fully...");
-    unsigned long motorStartMillis = millis();
-    motors.setM1Speed(-400); // Start opening
-    mechanismMotorRunning = true;
-    Serial.print("MOTOR START TIME (opening fully): ");
-    Serial.println(motorStartMillis);
-
-    while (digitalRead(microswitchOpenPin) == HIGH) {
-      if (millis() - motorStartMillis > TIMEOUT) {
+    case HOMING_CLOSE_EXTRA: {
+      if (millis() - motorHomingPhaseStartMillis >= 500UL) {
+        motors.setM1Speed(0);
+        mechanismMotorRunning = false;
+        Serial.println("Motor is NOT fully OPEN (switch open), opening fully...");
+        motors.setM1Speed(-400);
+        mechanismMotorRunning = true;
+        motorHomingPhase = HOMING_OPEN_FULL;
+        motorHomingPhaseStartMillis = millis();
+      }
+      break;
+    }
+    case HOMING_OPEN_FULL: {
+      if (millis() - motorHomingPhaseStartMillis > TIMEOUT) {
         if (ERROR_CODE == 0) {
           ERROR_CODE = 3;
           flashLeds();
@@ -5484,15 +5936,25 @@ void locateMotorPos() {
         }
         motors.setM1Speed(0);
         mechanismMotorRunning = false;
+        motorHomingActive = false;
+        motorHomingPhase = HOMING_IDLE;
         return;
       }
-      delay(10);
+      if (digitalRead(microswitchOpenPin) == LOW) {
+        motors.setM1Speed(0);
+        mechanismMotorRunning = false;
+        motorHomingActive = false;
+        motorHomingPhase = HOMING_IDLE;
+        Serial.println("Motor opened fully and positioned (open switch closed).");
+        Serial.println("Motor positioning complete.");
+      }
+      break;
     }
-    motors.setM1Speed(0); // Stop opening
-    mechanismMotorRunning = false;
-    Serial.println("Motor opened fully and positioned (open switch closed).");
-  
-  Serial.println("Motor positioning complete.");
+    default:
+      motorHomingActive = false;
+      motorHomingPhase = HOMING_IDLE;
+      break;
+  }
 }
 
 
@@ -5503,7 +5965,8 @@ void LEDErrorCode(int errorCode) { // Modified to accept errorCode
   if (errorCode != EEPROM_INVALID_ERROR_CODE) {
     const char* msg = (errorCode == 1) ? "motor_timeout" : (errorCode == 2) ? "low_battery" :
       (errorCode == 3) ? "heater_overheat" : (errorCode == 4) ? "motor_fault" :
-      (errorCode == 5) ? "heater_current_fail" : (errorCode == 6) ? "heater_max_wall" : "unknown";
+      (errorCode == 5) ? "heater_current_fail" : (errorCode == 6) ? "heater_max_wall" :
+      (errorCode == HEATER_FAILSAFE_ERROR_CODE) ? "heater_failsafe" : "unknown";
     logError("runtime", errorCode, msg, true);
   }
   for (int j = 0; j < totalLeds; j++) {
@@ -5518,7 +5981,7 @@ void LEDErrorCode(int errorCode) { // Modified to accept errorCode
     mcp_digitalWrite(getLedPin(errorCode), HIGH);
 
     digitalWrite(buzzerPin, HIGH);
-    delay(300);
+    wdtSafeDelay(300);
     mcp_digitalWrite(getLedPin(errorCode), LOW);
     digitalWrite(buzzerPin, LOW);
   }
@@ -5533,53 +5996,30 @@ void checkMotorFaults() {
   }
 }
 
-void updateHeaterControl(float currentTemp) {
+void updateHeaterPID() {
   unsigned long now = millis();
-  float lowerTol = heaterLowerToleranceC;
-  float upperTol = heaterUpperToleranceC;
-
-  if ((lowerTol != lowerTol) || lowerTol < 0.0f) {
-    lowerTol = 0.0f;
-  }
-  if (upperTol != upperTol) {
-    upperTol = 2.0f;
-  }
-  if (upperTol <= -lowerTol) {
-    upperTol = -lowerTol + 0.1f;
-  }
-
-  float onThreshold = heaterTargetTemp;
-  float offThreshold = heaterTargetTemp + upperTol;
-  bool nextHeaterOutput = heaterOutputOn;
-
-  if (currentTemp <= onThreshold) {
-    nextHeaterOutput = true;
-  } else if (currentTemp >= offThreshold) {
-    nextHeaterOutput = false;
-  }
-
-  if (nextHeaterOutput != heaterOutputOn) {
-    heaterOutputOn = nextHeaterOutput;
-    digitalWrite(heaterPin, heaterOutputOn ? HIGH : LOW);
-  }
+  heaterSetpoint = heaterTargetTemp;
+  heaterInput = readTemperature();
+  heaterPid.Compute();
+  applyHeaterPwmDuty((int)heaterOutput);
 
   if (lastHeaterControlLogMillis == 0 || (now - lastHeaterControlLogMillis >= HEATER_CONTROL_LOG_INTERVAL_MS)) {
     SerialBLE_print("Heater temp: ");
-    SerialBLE_print(currentTemp);
+    SerialBLE_print((float)heaterInput);
     SerialBLE_print(" C, target: ");
     SerialBLE_print(heaterTargetTemp);
-    SerialBLE_print(" C, state: ");
-    SerialBLE_println(heaterOutputOn ? "ON" : "OFF");
-    Serial.printf("Heater Debug: GPIO%d state=%s, target=%.1f, temp=%.1f, on<=%.1f, off>=%.1f\n",
-                  heaterPin, heaterOutputOn ? "ON" : "OFF", heaterTargetTemp, currentTemp, onThreshold, offThreshold);
+    SerialBLE_print(" C, PWM: ");
+    SerialBLE_println((int)heaterOutput);
+    Serial.printf("Heater Debug: GPIO%d PWM=%d, setpoint=%.1f, input=%.1f\n",
+                  heaterPin, (int)heaterOutput, heaterSetpoint, heaterInput);
     lastHeaterControlLogMillis = now;
   }
 }
 
 void heaterOff() {
-  digitalWrite(heaterPin, LOW);
-  heaterOutputOn = false;
-  Serial.printf("Heater OFF: GPIO%d state=OFF\n", heaterPin);
+  heaterOutput = 0.0;
+  applyHeaterPwmDuty(0);
+  Serial.printf("Heater OFF: GPIO%d PWM=0\n", heaterPin);
   heaterOn = false;
 }
 

@@ -765,6 +765,9 @@ class ToiletSystemInterface:
                     break
                 if response == "LOGS_END":
                     break
+                if response.startswith("LOGS_ERR:"):
+                    print(f"Error log unavailable: {response}")
+                    return None
                 if response.startswith("LOGS:"):
                     parts = response.split(":", 3)
                     if len(parts) >= 4:
