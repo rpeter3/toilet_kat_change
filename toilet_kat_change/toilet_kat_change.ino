@@ -678,7 +678,8 @@ const int HEATER_PWM_RESOLUTION = 8;
 const int HEATER_PWM_MAX = 255;
 bool heaterPwmAttached = false;
 
-// Motor shield instance - M1&M2 only
+// Motor shield instance - M1&M2 speed control only. Enable/fault pins are
+// handled separately because this hardware has one MAX14870 per motor.
 DualMAX14870MotorShield motors(M1DIR_PIN, M1PWM_PIN, M2DIR_PIN, M2PWM_PIN, M2NEN_PIN, M2NFAULT_PIN);
 
 // Heater PID (Kp=65, Ki=0.005, Kd=5.0, sample=250ms)
@@ -3448,6 +3449,30 @@ void configureMotorAndSensorPins() {
   pinMode(heaterCurrentPin, INPUT);
   pinMode(batteryVoltagePin, INPUT);
   pinMode(batteryTempPin, INPUT);
+  digitalWrite(M1NEN_PIN, HIGH);  // MAX14870 nEN is active-low; start disabled.
+  digitalWrite(M2NEN_PIN, HIGH);
+}
+
+void enableM12Drivers() {
+  digitalWrite(M1NEN_PIN, LOW);
+  digitalWrite(M2NEN_PIN, LOW);
+}
+
+void disableM12Drivers() {
+  digitalWrite(M1NEN_PIN, HIGH);
+  digitalWrite(M2NEN_PIN, HIGH);
+}
+
+bool getM1Fault() {
+  return digitalRead(M1NFAULT_PIN) == LOW;
+}
+
+bool getM2Fault() {
+  return digitalRead(M2NFAULT_PIN) == LOW;
+}
+
+bool getM12Fault() {
+  return getM1Fault() || getM2Fault();
 }
 
 void clearHeaterRtcSession() {
@@ -3823,7 +3848,7 @@ void setup() {
     runHeaterSafetyBootSequence();
     circleLeds();
 
-    motors.enableDrivers();
+    enableM12Drivers();
     return;
   }
 
@@ -3879,7 +3904,7 @@ void setup() {
     Serial.println("DEV mode is OFF: BLE timeout and inactivity sleep are active.");
   }
 
-  motors.enableDrivers();
+  enableM12Drivers();
   startMotorHoming();
 }
 
@@ -5988,7 +6013,7 @@ void LEDErrorCode(int errorCode) { // Modified to accept errorCode
 }
 
 void checkMotorFaults() {
-  if (motors.getFault() && ERROR_CODE == 0) {
+  if (getM12Fault() && ERROR_CODE == 0) {
         SerialBLE_println("Motor Fault Detected!");
     ERROR_CODE = 4;
     stopEverything();
@@ -6086,12 +6111,18 @@ float readHeaterCurrent() {
 void logMotorFaultDebug(const char* context) {
   int m1NfaultRaw = digitalRead(M1NFAULT_PIN);
   int m2NfaultRaw = digitalRead(M2NFAULT_PIN);
-  bool m12Fault = motors.getFault();
+  bool m1Fault = getM1Fault();
+  bool m2Fault = getM2Fault();
+  bool m12Fault = m1Fault || m2Fault;
 
   String message = "Motor Fault Debug [";
   message += context;
   message += "]: getFault=";
   message += (m12Fault ? "1" : "0");
+  message += ", M1Fault=";
+  message += (m1Fault ? "1" : "0");
+  message += ", M2Fault=";
+  message += (m2Fault ? "1" : "0");
   message += ", M1NFAULT=";
   message += String(m1NfaultRaw);
   message += ", M2NFAULT=";
@@ -6101,11 +6132,15 @@ void logMotorFaultDebug(const char* context) {
 }
 
 String buildMotorFaultStatusSnapshot() {
-  bool m12FaultNow = motors.getFault();
+  bool m1FaultNow = getM1Fault();
+  bool m2FaultNow = getM2Fault();
+  bool m12FaultNow = m1FaultNow || m2FaultNow;
   int m1NfaultRaw = digitalRead(M1NFAULT_PIN);
   int m2NfaultRaw = digitalRead(M2NFAULT_PIN);
 
   return "M12FaultNow:" + String(m12FaultNow ? 1 : 0) +
+         ", M1FaultNow:" + String(m1FaultNow ? 1 : 0) +
+         ", M2FaultNow:" + String(m2FaultNow ? 1 : 0) +
          ", M1NFAULT:" + String(m1NfaultRaw) +
          ", M2NFAULT:" + String(m2NfaultRaw) +
          ", IgnoreM12:" + String(ignoreM12Faults ? 1 : 0) +
@@ -6124,7 +6159,7 @@ void checkAllMotorFaults() {
   }
   lastCheck = millis();
   
-  if (motors.getFault() && ERROR_CODE == 0) {
+  if (getM12Fault() && ERROR_CODE == 0) {
     unsigned long now = millis();
     hasIgnoredM12Fault = true;
     ignoredM12FaultCount++;
@@ -6178,12 +6213,12 @@ void checkAllMotorFaults() {
         String attemptMsg = "M1/M2 auto-recovery attempt " + String(attempt) + "/" + String(M12_FAULT_RECOVERY_MAX_ATTEMPTS);
         SerialBLE_println(attemptMsg);
       }
-      motors.disableDrivers();
+      disableM12Drivers();
       delay(M12_FAULT_RECOVERY_DISABLE_MS);
-      motors.enableDrivers();
+      enableM12Drivers();
       delay(M12_FAULT_RECOVERY_SETTLE_MS);
 
-      if (!motors.getFault()) {
+      if (!getM12Fault()) {
         faultRecovered = true;
         if (shouldLogNow) {
           String recoveredMsg = "M1/M2 fault recovered on attempt " + String(attempt);
