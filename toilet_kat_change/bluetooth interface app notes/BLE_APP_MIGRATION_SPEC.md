@@ -47,11 +47,11 @@ Client implementations may use payload chunking to respect BLE MTU limits when w
 
 1. **Command channel (`...fea0`)**
    - Client writes command strings only.
-   - Examples: `TRUST_START`, `TRUST_STATUS`, `TRUST_CANCEL`, `GET_DEV_MODE`, `GET_FLUSH_COUNT`, `GET_BATTERY`, `SET_DEV_MODE:<0|1>`, `ENABLE_OTA`, `GET_LOGS`, `GET_LOGS:<offset>`
+   - Examples: `TRUST_START`, `TRUST_STATUS`, `TRUST_CANCEL`, `GET_DEV_MODE`, `GET_FLUSH_COUNT`, `GET_BATTERY`, `SET_DEV_MODE:<0|1>`, `ENABLE_OTA`, `OTA_ROLLBACK_PREVIOUS`, `GET_LOGS`, `GET_LOGS:<offset>`
 
 2. **Response channel (`...fea4`)**
    - Client reads command responses only.
-   - Examples: `TRUST_WAITING`, `TRUST_CONFIRMED`, `TRUST_TIMEOUT`, `TRUST_CANCEL_ACK`, `AUTH_REQUIRED`, `DEV_MODE:0`, `FLUSH_COUNT:<n>`, `BATTERY:<n>`, `SET_DEV_MODE_ACK:1`, `LOGS:<offset>:<length>:<data>`, `LOGS_END`, etc.
+   - Examples: `TRUST_WAITING`, `TRUST_CONFIRMED`, `TRUST_TIMEOUT`, `TRUST_CANCEL_ACK`, `AUTH_REQUIRED`, `DEV_MODE:0`, `FLUSH_COUNT:<n>`, `BATTERY:<n>`, `SET_DEV_MODE_ACK:1`, `OTA_ROLLBACK_ACK:REBOOTING`, `LOGS:<offset>:<length>:<data>`, `LOGS_END`, etc.
 
 3. **Parameter read channel (`...fea5`)**
    - Client reads current parameter snapshot only.
@@ -188,11 +188,81 @@ CONTROL_PANEL, HEATING_ELEMENT, MAIN_CIRCUIT_BOARD, VACUUM_FAN, FEED_MOTOR, MECH
 
 ### CHECK_VERSION
 
-Write `CHECK_VERSION` to command channel; read response from response channel. Returns `HW:<hw_ver>|SW:<sw_ver>|Build:<date>|Desc:<desc>` (also exposed on version characteristic `...fea2`).
+`CHECK_VERSION` is handled by the OTA/update command path in current firmware, not the normal command/response path. It updates/notifies the version characteristic `...fea2` with `HW:<hw_ver>|SW:<sw_ver>|Build:<date>|Desc:<desc>`.
 
 ### Breaking change
 
 Component `FACTORY_SOFTWARE_VERSION_NUMBER` was renamed to `SOFTWARE_VERSION_NUMBER`. Apps using the old name will receive `HW_COMPONENT_ERR:UNKNOWN_COMPONENT`.
+
+---
+
+## Manual OTA Rollback
+
+Command `OTA_ROLLBACK_PREVIOUS` intentionally switches the ESP32 boot partition back to the previous OTA firmware image and reboots. This is a support/admin recovery action, not a normal app flow.
+
+This is different from `HWCFG_ROLLBACK_LAST_GOOD`:
+
+- `OTA_ROLLBACK_PREVIOUS` rolls back the firmware image to the previous OTA partition.
+- `HWCFG_ROLLBACK_LAST_GOOD` rolls back hardware/profile configuration only.
+
+### Protocol
+
+- **Command**: `OTA_ROLLBACK_PREVIOUS`
+- **Channel**: write command to `...fea0`, read response from `...fea4`
+- **Trust**: required
+- **When allowed**: device must be idle, not flushing, not homing/running mechanism motors, and not in an OTA transfer/finalize state
+
+### Responses
+
+- `OTA_ROLLBACK_ACK:REBOOTING` -> rollback boot partition was selected; device will reboot shortly
+- `OTA_ROLLBACK_ERR:AUTH_REQUIRED` -> trust handshake is not complete
+- `OTA_ROLLBACK_ERR:BUSY_OTA` -> OTA transfer/finalize is active
+- `OTA_ROLLBACK_ERR:BUSY_FLUSH` -> flush or critical motor action is active
+- `OTA_ROLLBACK_ERR:NO_ROLLBACK_INFO` -> firmware has no recorded previous partition
+- `OTA_ROLLBACK_ERR:NO_ROLLBACK_PARTITION` -> recorded previous partition could not be found
+- `OTA_ROLLBACK_ERR:SET_BOOT_FAILED` -> ESP-IDF failed to set the rollback boot partition
+- `OTA_ROLLBACK_ERR:NVS_OPEN_FAILED` -> rollback metadata namespace could not be opened
+
+Apps should show an explicit confirmation before sending this command, for example a typed confirmation in support tools. Do not automatically send this command after transient BLE failures.
+
+---
+
+## HWCFG Profile Interface
+
+HWCFG commands manage transactional hardware/profile changes. Write commands to `...fea0`, read responses from `...fea4`.
+
+### Storage
+
+Current firmware stores HWCFG active and last-known-good records in SPIFFS files, not NVS, so production units can receive this change by OTA without changing partition sizes. On first boot after update, firmware may read valid legacy NVS HWCFG records and copy them into SPIFFS. Future HWCFG writes go to SPIFFS only.
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `HWCFG_GET_CAPS` | Returns supported HWCFG capabilities |
+| `HWCFG_GET_ACTIVE_CONFIG` | Returns active component/profile state |
+| `HWCFG_GET_LAST_GOOD_CONFIG` | Returns last-known-good component/profile state |
+| `HWCFG_PROFILE_LIST` | Returns stored profile identifiers |
+| `HWCFG_PROFILE_GET:<component>|version=<ver>` | Returns profile details for a component/version |
+| `HWCFG_PROFILE_PUT:<profile_id>|component=<name>|version=<ver>|<params>` | Stores or updates a profile; trust required |
+| `HWCFG_VALIDATE_CHANGE:<component>|new_version=<ver>` | Validates whether a component can change to a version |
+| `HWCFG_APPLY_CHANGE:<component>|new_version=<ver>|install_date=<YYYY-MM-DD>|desc=<text>` | Transactionally applies a validated change; trust required |
+| `HWCFG_ROLLBACK_LAST_GOOD` | Restores last-known-good HWCFG state; trust required |
+
+### Response examples
+
+- `HWCFG_CAPS:V1|PROFILE_STORE|TXN_APPLY|ROLLBACK`
+- `HWCFG_ACTIVE:<component>=<ver>;...|profile_id=<id>|validated=1`
+- `HWCFG_LAST_GOOD:<component>=<ver>;...|profile_id=<id>`
+- `HWCFG_PROFILE:<profile_id>|component=<name>|version=<ver>|<params>`
+- `HWCFG_VALIDATE_OK:<component>|version=<ver>|profile_id=<id>`
+- `HWCFG_VALIDATE_ERR:<reason>`
+- `HWCFG_APPLY_ACK:<component>|version=<ver>`
+- `HWCFG_APPLY_ERR:<reason>`
+- `HWCFG_ROLLBACK_ACK`
+- `HWCFG_ROLLBACK_ERR:<reason>`
+
+Persistence-related failures such as `HWCFG_VALIDATE_ERR:PERSIST_FAIL`, `HWCFG_APPLY_ERR:PERSIST_FAIL`, or `HWCFG_ROLLBACK_ERR:PERSIST_FAIL` indicate firmware could not write the SPIFFS-backed HWCFG store. Apps should surface the raw response and suggest exporting logs.
 
 ---
 

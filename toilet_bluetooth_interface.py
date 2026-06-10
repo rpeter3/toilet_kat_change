@@ -969,6 +969,11 @@ class ToiletSystemInterface:
             parsed[key.strip()] = version.strip()
         return parsed
 
+    def _print_hwcfg_failure(self, action: str, response: str) -> None:
+        print(f"{action} failed: {response}")
+        if response.endswith(":PERSIST_FAIL") or response.endswith(":SAFE_FAULT"):
+            print("HWCFG persistence failed in firmware. Export logs and check SPIFFS/HWCFG storage.")
+
     async def hwcfg_get_caps(self) -> Optional[str]:
         response = await self._send_command_and_read_response("HWCFG_GET_CAPS")
         if not response or not response.startswith("HWCFG_CAPS:"):
@@ -1053,7 +1058,7 @@ class ToiletSystemInterface:
             return False
         if response.startswith("HWCFG_VALIDATE_OK:"):
             return True
-        print(f"Profile put failed: {response}")
+        self._print_hwcfg_failure("Profile put", response)
         return False
 
     async def hwcfg_validate_change(self, component: str, new_version: str) -> Optional[str]:
@@ -1064,7 +1069,7 @@ class ToiletSystemInterface:
             return None
         if response.startswith("HWCFG_VALIDATE_OK:"):
             return response
-        print(f"Validation failed: {response}")
+        self._print_hwcfg_failure("Validation", response)
         return None
 
     async def hwcfg_apply_change(self, component: str, new_version: str, install_date: str, desc: str) -> bool:
@@ -1088,7 +1093,7 @@ class ToiletSystemInterface:
         if response == "AUTH_REQUIRED":
             print("Firmware rejected: trust handshake required. Run trust handshake and retry.")
             return False
-        print(f"Apply failed: {response}")
+        self._print_hwcfg_failure("Apply", response)
         return False
 
     async def hwcfg_rollback_last_good(self) -> bool:
@@ -1105,7 +1110,28 @@ class ToiletSystemInterface:
         if response == "AUTH_REQUIRED":
             print("Firmware rejected: trust handshake required. Run trust handshake and retry.")
             return False
-        print(f"Rollback failed: {response}")
+        self._print_hwcfg_failure("Rollback", response)
+        return False
+
+    async def ota_rollback_previous(self) -> bool:
+        """Request firmware rollback to the previous OTA partition. Device reboots on success."""
+        if not self.trusted:
+            if not await self.trust_handshake():
+                print("OTA rollback aborted: trust handshake required.")
+                return False
+        response = await self._send_command_and_read_response("OTA_ROLLBACK_PREVIOUS")
+        if not response:
+            print("No response from firmware for OTA_ROLLBACK_PREVIOUS")
+            return False
+        if response == "OTA_ROLLBACK_ACK:REBOOTING":
+            print("Firmware accepted OTA rollback. Device is rebooting to previous partition.")
+            self.connected = False
+            self.trusted = False
+            return True
+        if response.startswith("OTA_ROLLBACK_ERR:"):
+            print(f"Firmware rejected OTA rollback: {response}")
+            return False
+        print(f"Unexpected OTA rollback response: {response}")
         return False
 
     async def get_hw_component(self, component: str) -> Optional[Dict[str, str]]:
@@ -1265,8 +1291,9 @@ async def main():
             print("19. Read flush count")
             print("20. Read error logs (GET_LOGS)")
             print("21. Trust handshake (press control panel button / GPIO2 wake line to confirm)")
+            print("22. Manual OTA rollback to previous firmware")
             
-            choice = input("\nEnter your choice (1-21): ").strip()
+            choice = input("\nEnter your choice (1-22): ").strip()
             
             if choice == "1":
                 print("\nReading current parameters...")
@@ -1618,8 +1645,20 @@ async def main():
                 else:
                     print("Trust handshake failed or timed out.")
 
+            elif choice == "22":
+                print("\nManual OTA rollback")
+                print("This will reboot the device to the previous firmware partition.")
+                confirm = input("Type ROLLBACK to continue: ").strip()
+                if confirm != "ROLLBACK":
+                    print("OTA rollback cancelled.")
+                    continue
+                ok = await interface.ota_rollback_previous()
+                print("OTA rollback command accepted." if ok else "OTA rollback failed.")
+                if ok:
+                    break
+
             else:
-                print("Invalid choice. Please enter 1-21.")
+                print("Invalid choice. Please enter 1-22.")
     
     except KeyboardInterrupt:
         print("\nProgram interrupted by user")

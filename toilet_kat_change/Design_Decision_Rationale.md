@@ -102,12 +102,14 @@ BLE auto-shutdown now uses an idle timer that respects serial streaming state:
 
 - If serial streaming is active, BLE remains enabled and the idle timer is continuously refreshed.
 - If serial streaming is not active, BLE can auto-shutdown after 10 minutes even if a client remains connected (to close accidental idle connections).
+- After wake from sleep, BLE is initialized and advertised again with a fresh idle timer, so maintenance tools can reconnect without requiring a power cycle.
 - When streaming stops or the client disconnects, BLE timeout behavior resumes from the idle timer and is re-evaluated continuously in the main loop.
 
 Rationale:
 
 - Preserve active diagnostics sessions: live serial monitoring should not be interrupted by a background BLE timeout.
 - Avoid accidental battery drain: a forgotten/stale BLE connection without streaming should not keep radio power on indefinitely.
+- Keep wake behavior serviceable: every wake should reopen the normal diagnostics/configuration window while retaining the 10-minute idle shutdown.
 - Match operator intent: starting serial stream is treated as explicit "keep BLE alive" activity.
 - Keep behavior predictable after session end: once streaming/disconnect transitions the link to idle, the same 10-minute idle shutdown policy applies.
 - Improve shutdown safety: BLE send paths are guarded by `bleEnabled`, and streaming/connection state is cleared before BLE deinit to avoid stale-notify behavior during shutdown.

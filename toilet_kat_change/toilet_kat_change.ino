@@ -132,6 +132,8 @@ void trustDoubleBeep();
 #define HWCFG_CONFIG_NAMESPACE "hwcfg"
 #define HWCFG_ACTIVE_KEY "active"
 #define HWCFG_LAST_GOOD_KEY "lkg"
+#define HWCFG_ACTIVE_FILE "/hwcfg_active.bin"
+#define HWCFG_LAST_GOOD_FILE "/hwcfg_lkg.bin"
 
 // Version information
 struct VersionInfo {
@@ -248,6 +250,7 @@ void logControlPanelPinout();
 bool readControlPanelButton1();
 bool readControlPanelButton2();
 bool readControlPanelWakeLine();
+bool readFlushCancelInput(bool button1Pressed, bool button2Pressed);
 bool lookupHardwareComponentId(const String& componentName, HardwareComponentId& outId);
 bool initializeHWCFGStore();
 String handleHWCFGCommand(const String& cmd);
@@ -265,6 +268,8 @@ void startEEPROMWakeAlert();
 bool prepareForOTA();
 void notifyUpdateProgress(int percentage);
 bool rollbackOTAUpdate();
+bool rollbackOTAUpdateWithReason(String* errorCode);
+String handleManualOTARollback();
 bool validateFirmware();
 void handleOTAChunk(uint8_t* data, size_t length);
 void resetOTAState();
@@ -274,6 +279,9 @@ void enableOTA();
 void disableOTA();
 void restartBLEServer();
 void slowCircleLeds();
+void startManualFeed();
+void stopManualFeed();
+void updateManualFeedRamp();
 bool loadDevModeSetting();
 bool saveDevModeSetting(bool enabled);
 bool setDevModeEnabled(bool enabled);
@@ -289,6 +297,8 @@ void configureMotorAndSensorPins();
 void checkHeaterBootSafety();
 void initTaskWatchdog();
 void feedTaskWatchdog();
+void wdtCheckpoint();
+void logWdtBreadcrumb(const char* tag);
 void wdtSafeDelay(unsigned long ms);
 void updateHeaterSessionRtc();
 void checkHeaterRuntimeSafety();
@@ -429,7 +439,7 @@ bool m3ReverseCompleted = false; // Track if M3 reverse has completed its cycle
 bool cutBag = false;
 bool button1Held = false;
 unsigned long button1HoldStartTime = 0;
-const int BUTTON_HOLD_TIME = 1500; // 1.5 seconds
+const int BUTTON_HOLD_TIME = 500; // 0.5 seconds
 const int BUTTON_DELAY = 200; // 200ms delay before acting on single button press
 unsigned long cutStartTime = 0;
 unsigned long fanStartTime = 0;  // Timer for fan duration after feed button release
@@ -448,6 +458,18 @@ bool batteryDisplayMode = false;
 unsigned long batteryDisplayStartTime = 0;
 bool button1DisconnectAlertedForCurrentPress = false;
 bool button2DisconnectAlertedForCurrentPress = false;
+bool flushCancelArmed = false;
+const int MANUAL_FEED_FULL_SPEED = -400;
+const int MANUAL_FEED_START_SPEED = MANUAL_FEED_FULL_SPEED / 5; // 20% feed speed.
+const unsigned long MANUAL_FEED_RAMP_MS = 5000;
+const unsigned long FEED_LED_INTERVAL_MS = 250;
+const int FEED_LED_WINDOW = 3;
+bool manualFeedActive = false;
+unsigned long manualFeedStartMillis = 0;
+int manualFeedLastSpeed = 0;
+bool feedLedPatternActive = false;
+unsigned long feedLedLastUpdateMillis = 0;
+int feedLedHeadIndex = 0;
 
 // BLE auto-shutdown variables
 unsigned long bleStartupTime = 0;
@@ -966,6 +988,17 @@ class command_characteristic_callbacks: public BLECharacteristicCallbacks {
       writeResponseToChannel("ENABLE_OTA_ACK");
       return;
     }
+    if (cmd == "OTA_ROLLBACK_PREVIOUS") {
+      String rollbackResponse = handleManualOTARollback();
+      writeResponseToChannel(rollbackResponse);
+      Serial.printf("Processed OTA_ROLLBACK_PREVIOUS -> %s\n", rollbackResponse.c_str());
+      sendSerialToBLE("Processed OTA_ROLLBACK_PREVIOUS");
+      if (rollbackResponse == "OTA_ROLLBACK_ACK:REBOOTING") {
+        delay(500);
+        esp_restart();
+      }
+      return;
+    }
     if (cmd == "GET_DEV_MODE") {
       String statusMessage = buildDevModeStatusMessage();
       writeResponseToChannel(statusMessage);
@@ -1360,14 +1393,22 @@ bool readControlPanelWakeLine() {
   return digitalRead(controlPanelWake) == LOW;
 }
 
+bool readFlushCancelInput(bool button1Pressed, bool button2Pressed) {
+  return button1Pressed || button2Pressed || readControlPanelWakeLine();
+}
+
 // Function to initialize the BLE Server
 void server_setup(bool includeOTA = false) {
   Serial.println("Setting up Bluetooth Low Energy.");
   // Create a BLE Device
+  logWdtBreadcrumb("ble_setup_before_init");
   BLEDevice::init("ESP32 Toilet");
+  logWdtBreadcrumb("ble_setup_after_init");
   
   // Set up the BLE Device as a server
+  wdtCheckpoint();
   blue_server = BLEDevice::createServer();
+  wdtCheckpoint();
   
   // Create a new server_callbacks() object
   blue_server->setCallbacks(new server_callbacks());
@@ -1437,9 +1478,12 @@ void server_setup(bool includeOTA = false) {
   update_service = NULL;
 
   // Starts the service on the server
+  logWdtBreadcrumb("ble_setup_before_service_start");
   blue_service->start();
+  logWdtBreadcrumb("ble_setup_after_service_start");
 
   // Starts broadcasting so any devices can now find it and connect
+  wdtCheckpoint();
   BLEAdvertising * blue_advert = blue_server->getAdvertising();
   blue_advert->addServiceUUID(SERVICE_UUID);
   blue_advert->setScanResponse(true);
@@ -1449,7 +1493,9 @@ void server_setup(bool includeOTA = false) {
 
 
   // Once the server starts advertising, the client can now see the server as it's visible to everyone
+  logWdtBreadcrumb("ble_setup_before_advertise");
   BLEDevice::startAdvertising();
+  logWdtBreadcrumb("ble_setup_after_advertise");
 
 
   Serial.print("ESP32 MAC ADDRESS: ");
@@ -2424,7 +2470,17 @@ int allocateHWCFGProfileSlot() {
   return -1;
 }
 
-bool loadHWCFGBlob(const char* key, HWCFGConfigStore& outStore) {
+const char* hwcfgFilePathForKey(const char* key) {
+  if (strcmp(key, HWCFG_ACTIVE_KEY) == 0) {
+    return HWCFG_ACTIVE_FILE;
+  }
+  if (strcmp(key, HWCFG_LAST_GOOD_KEY) == 0) {
+    return HWCFG_LAST_GOOD_FILE;
+  }
+  return NULL;
+}
+
+bool loadHWCFGBlobFromNVS(const char* key, HWCFGConfigStore& outStore) {
   nvs_handle_t nvsHandle;
   esp_err_t err = nvs_open(HWCFG_CONFIG_NAMESPACE, NVS_READONLY, &nvsHandle);
   if (err != ESP_OK) {
@@ -2441,26 +2497,90 @@ bool loadHWCFGBlob(const char* key, HWCFGConfigStore& outStore) {
   return err == ESP_OK;
 }
 
-bool saveHWCFGBlob(const HWCFGConfigStore& store, bool updateLastGood) {
-  nvs_handle_t nvsHandle;
-  esp_err_t err = nvs_open(HWCFG_CONFIG_NAMESPACE, NVS_READWRITE, &nvsHandle);
-  if (err != ESP_OK) {
-    Serial.printf("HWCFG nvs_open failed: %s\n", esp_err_to_name(err));
+bool loadHWCFGBlobFromSPIFFS(const char* path, HWCFGConfigStore& outStore) {
+  if (path == NULL) {
     return false;
   }
-  err = nvs_set_blob(nvsHandle, HWCFG_ACTIVE_KEY, &store, sizeof(HWCFGConfigStore));
-  if (err == ESP_OK && updateLastGood) {
-    err = nvs_set_blob(nvsHandle, HWCFG_LAST_GOOD_KEY, &store, sizeof(HWCFGConfigStore));
+  File f = SPIFFS.open(path, "r");
+  if (!f) {
+    return false;
   }
-  if (err == ESP_OK) {
-    err = nvs_commit(nvsHandle);
+  if (f.size() != sizeof(HWCFGConfigStore)) {
+    f.close();
+    return false;
   }
-  nvs_close(nvsHandle);
-  if (err != ESP_OK) {
-    Serial.printf("HWCFG persist failed: %s\n", esp_err_to_name(err));
+  size_t bytesRead = f.read(reinterpret_cast<uint8_t*>(&outStore), sizeof(HWCFGConfigStore));
+  f.close();
+  return bytesRead == sizeof(HWCFGConfigStore);
+}
+
+bool loadHWCFGBlob(const char* key, HWCFGConfigStore& outStore) {
+  const char* path = hwcfgFilePathForKey(key);
+  if (loadHWCFGBlobFromSPIFFS(path, outStore)) {
+    return true;
+  }
+  return loadHWCFGBlobFromNVS(key, outStore);
+}
+
+bool saveHWCFGBlobFile(const char* path, const HWCFGConfigStore& store) {
+  if (path == NULL) {
+    return false;
+  }
+  String tempPath = String(path) + ".tmp";
+  SPIFFS.remove(tempPath.c_str());
+
+  File f = SPIFFS.open(tempPath.c_str(), "w");
+  if (!f) {
+    Serial.printf("HWCFG SPIFFS open failed: %s\n", tempPath.c_str());
+    return false;
+  }
+  size_t bytesWritten = f.write(reinterpret_cast<const uint8_t*>(&store), sizeof(HWCFGConfigStore));
+  f.flush();
+  f.close();
+  if (bytesWritten != sizeof(HWCFGConfigStore)) {
+    SPIFFS.remove(tempPath.c_str());
+    Serial.printf("HWCFG SPIFFS short write: %u/%u bytes\n",
+                  (unsigned)bytesWritten, (unsigned)sizeof(HWCFGConfigStore));
+    return false;
+  }
+
+  SPIFFS.remove(path);
+  if (!SPIFFS.rename(tempPath.c_str(), path)) {
+    SPIFFS.remove(tempPath.c_str());
+    Serial.printf("HWCFG SPIFFS rename failed: %s -> %s\n", tempPath.c_str(), path);
+    return false;
+  }
+
+  HWCFGConfigStore verifyStore;
+  memset(&verifyStore, 0, sizeof(verifyStore));
+  if (!loadHWCFGBlobFromSPIFFS(path, verifyStore) || computeHWCFGCRC(verifyStore) != verifyStore.crc32) {
+    Serial.printf("HWCFG SPIFFS verify failed: %s\n", path);
     return false;
   }
   return true;
+}
+
+bool saveHWCFGBlob(const HWCFGConfigStore& store, bool updateLastGood) {
+  bool saved = saveHWCFGBlobFile(HWCFG_ACTIVE_FILE, store);
+  if (saved && updateLastGood) {
+    saved = saveHWCFGBlobFile(HWCFG_LAST_GOOD_FILE, store);
+  }
+  if (!saved) {
+    Serial.println("HWCFG persist failed: SPIFFS_WRITE_FAIL");
+  }
+  return saved;
+}
+
+bool migrateHWCFGBlobFromNVSToSPIFFS(const char* key, const HWCFGConfigStore& store) {
+  const char* path = hwcfgFilePathForKey(key);
+  if (path == NULL) {
+    return false;
+  }
+  if (saveHWCFGBlobFile(path, store)) {
+    Serial.printf("Migrated HWCFG %s record from NVS to SPIFFS\n", key);
+    return true;
+  }
+  return false;
 }
 
 bool validateHWCFGStore(const HWCFGConfigStore& store, String& errorCode) {
@@ -2530,21 +2650,40 @@ void initializeDefaultHWCFG(HWCFGConfigStore& store) {
 bool initializeHWCFGStore() {
   String err;
   memset(&hwcfgScratchActive, 0, sizeof(hwcfgScratchActive));
-  if (loadHWCFGBlob(HWCFG_ACTIVE_KEY, hwcfgScratchActive) && validateHWCFGStore(hwcfgScratchActive, err)) {
+  if (loadHWCFGBlobFromSPIFFS(HWCFG_ACTIVE_FILE, hwcfgScratchActive) && validateHWCFGStore(hwcfgScratchActive, err)) {
     hwcfgStore = hwcfgScratchActive;
     hwcfgStoreInitialized = true;
     hwcfgSafeFault = false;
     return true;
   }
+  err = "";
+  memset(&hwcfgScratchActive, 0, sizeof(hwcfgScratchActive));
+  if (loadHWCFGBlobFromNVS(HWCFG_ACTIVE_KEY, hwcfgScratchActive) && validateHWCFGStore(hwcfgScratchActive, err)) {
+    hwcfgStore = hwcfgScratchActive;
+    hwcfgStoreInitialized = true;
+    hwcfgSafeFault = !migrateHWCFGBlobFromNVSToSPIFFS(HWCFG_ACTIVE_KEY, hwcfgStore);
+    return !hwcfgSafeFault;
+  }
 
   memset(&hwcfgScratchLastGood, 0, sizeof(hwcfgScratchLastGood));
   err = "";
-  if (loadHWCFGBlob(HWCFG_LAST_GOOD_KEY, hwcfgScratchLastGood) && validateHWCFGStore(hwcfgScratchLastGood, err)) {
+  if (loadHWCFGBlobFromSPIFFS(HWCFG_LAST_GOOD_FILE, hwcfgScratchLastGood) && validateHWCFGStore(hwcfgScratchLastGood, err)) {
     hwcfgStore = hwcfgScratchLastGood;
     hwcfgStoreInitialized = true;
     hwcfgSafeFault = false;
     saveHWCFGBlob(hwcfgStore, false);
     return true;
+  }
+  err = "";
+  memset(&hwcfgScratchLastGood, 0, sizeof(hwcfgScratchLastGood));
+  if (loadHWCFGBlobFromNVS(HWCFG_LAST_GOOD_KEY, hwcfgScratchLastGood) && validateHWCFGStore(hwcfgScratchLastGood, err)) {
+    hwcfgStore = hwcfgScratchLastGood;
+    hwcfgStoreInitialized = true;
+    hwcfgSafeFault = !migrateHWCFGBlobFromNVSToSPIFFS(HWCFG_LAST_GOOD_KEY, hwcfgStore);
+    if (!hwcfgSafeFault) {
+      hwcfgSafeFault = !saveHWCFGBlob(hwcfgStore, false);
+    }
+    return !hwcfgSafeFault;
   }
 
   initializeDefaultHWCFG(hwcfgStore);
@@ -3212,13 +3351,16 @@ void checkBootFailure() {
 }
 
 // Rollback to previous partition
-bool rollbackOTAUpdate() {
+bool rollbackOTAUpdateWithReason(String* errorCode) {
   Serial.println("Attempting OTA rollback...");
   
   nvs_handle_t nvs_handle;
   esp_err_t err = nvs_open("ota", NVS_READWRITE, &nvs_handle);
   if (err != ESP_OK) {
     Serial.println("ERROR: Failed to open NVS for rollback");
+    if (errorCode != NULL) {
+      *errorCode = "NVS_OPEN_FAILED";
+    }
     return false;
   }
   
@@ -3227,6 +3369,9 @@ bool rollbackOTAUpdate() {
   if (err != ESP_OK) {
     Serial.println("ERROR: Failed to get rollback partition info");
     nvs_close(nvs_handle);
+    if (errorCode != NULL) {
+      *errorCode = "NO_ROLLBACK_INFO";
+    }
     return false;
   }
   
@@ -3243,6 +3388,9 @@ bool rollbackOTAUpdate() {
   if (rollback_partition == NULL) {
     Serial.println("ERROR: Cannot find rollback partition");
     nvs_close(nvs_handle);
+    if (errorCode != NULL) {
+      *errorCode = "NO_ROLLBACK_PARTITION";
+    }
     return false;
   }
   
@@ -3251,6 +3399,9 @@ bool rollbackOTAUpdate() {
   if (err != ESP_OK) {
     Serial.printf("ERROR: Failed to set boot partition: %s\n", esp_err_to_name(err));
     nvs_close(nvs_handle);
+    if (errorCode != NULL) {
+      *errorCode = "SET_BOOT_FAILED";
+    }
     return false;
   }
   
@@ -3261,7 +3412,39 @@ bool rollbackOTAUpdate() {
   nvs_close(nvs_handle);
   
   Serial.printf("Rollback successful to partition: %s\n", rollback_partition->label);
+  if (errorCode != NULL) {
+    *errorCode = "";
+  }
   return true;
+}
+
+bool rollbackOTAUpdate() {
+  return rollbackOTAUpdateWithReason(NULL);
+}
+
+String handleManualOTARollback() {
+  if (!isTrustedConnection()) {
+    return "OTA_ROLLBACK_ERR:AUTH_REQUIRED";
+  }
+  if (otaTransferInProgress() || updateInProgress || ota_handle != 0) {
+    return "OTA_ROLLBACK_ERR:BUSY_OTA";
+  }
+  if (isFlushing || motorHomingActive || mechanismMotorRunning || manualFeedActive) {
+    return "OTA_ROLLBACK_ERR:BUSY_FLUSH";
+  }
+
+  logError("ota", 0, "manual_rollback_requested", false);
+  String rollbackError = "";
+  if (!rollbackOTAUpdateWithReason(&rollbackError)) {
+    if (rollbackError.length() == 0) {
+      rollbackError = "FAILED";
+    }
+    logError("ota", 0, rollbackError.c_str(), false);
+    return String("OTA_ROLLBACK_ERR:") + rollbackError;
+  }
+
+  logError("ota", 0, "manual_rollback_rebooting", false);
+  return "OTA_ROLLBACK_ACK:REBOOTING";
 }
 
 // Validate firmware using MD5
@@ -3592,6 +3775,21 @@ void feedTaskWatchdog() {
   }
 }
 
+void wdtCheckpoint() {
+  feedTaskWatchdog();
+  yield();
+  feedTaskWatchdog();
+}
+
+void logWdtBreadcrumb(const char* tag) {
+  wdtCheckpoint();
+  if (tag) {
+    Serial.printf("WDT breadcrumb: %s\n", tag);
+    logError("wdt_breadcrumb", 0, tag, false);
+  }
+  wdtCheckpoint();
+}
+
 void wdtSafeDelay(unsigned long ms) {
   unsigned long remaining = ms;
   while (remaining > 0) {
@@ -3827,7 +4025,6 @@ void setup() {
   initHeaterPwm();
 
   if (wokeFromDeepSleep) {
-    bleEnabled = false;
     Serial.println("\n\n=== WOKE FROM DEEP SLEEP (GPIO2) ===");
     rtc_gpio_deinit((gpio_num_t)controlPanelWake);
 
@@ -3847,6 +4044,23 @@ void setup() {
     configureMotorAndSensorPins();
     runHeaterSafetyBootSequence();
     circleLeds();
+
+    is_device_connected = false;
+    old_device_connect = false;
+    serial_streaming_enabled = false;
+    bleEnabled = true;
+    bleStartupTime = millis();
+    bleIdleStartTime = millis();
+    Serial.println("=== MEMORY BEFORE BLE SERVER SETUP (WAKE) ===");
+    Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
+    Serial.printf("Largest free block: %d bytes\n", ESP.getMaxAllocHeap());
+    Serial.printf("Min free heap ever: %d bytes\n", ESP.getMinFreeHeap());
+
+    server_setup(false);
+
+    Serial.println("=== MEMORY AFTER BLE SERVER SETUP (WAKE) ===");
+    Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
+    Serial.printf("Largest free block: %d bytes\n", ESP.getMaxAllocHeap());
 
     enableM12Drivers();
     return;
@@ -4024,8 +4238,42 @@ void loop() {
   // Read button states
   bool button1Pressed = readControlPanelButton1();
   bool button2Pressed = readControlPanelButton2();
-  if (button1Pressed || button2Pressed) {
+  bool flushCancelInputActive = readFlushCancelInput(button1Pressed, button2Pressed);
+  if (button1Pressed || button2Pressed || flushCancelInputActive) {
     lastActivityMillis = millis();
+  }
+
+  if (isFlushing) {
+    if (!flushCancelInputActive) {
+      flushCancelArmed = true;
+    } else if (flushCancelArmed) {
+      Serial.println("Flush cancelled by control panel input");
+      SerialBLE_println("Flush cancelled by control panel input");
+      stopEverything();
+
+      // Treat currently-held cancel buttons as already handled until release.
+      button1WasPressed = button1Pressed;
+      button2WasPressed = button2Pressed;
+      button1Held = false;
+      button1DelayActive = false;
+      button2DelayActive = false;
+      button2FeedStarted = false;
+      button1DisconnectAlertedForCurrentPress = false;
+      button2DisconnectAlertedForCurrentPress = false;
+      bothButtonsPressed = button1Pressed && button2Pressed;
+      batteryMonitoringActive = false;
+      batteryDisplayMode = false;
+      feedTaskWatchdog();
+      delay(1);
+      return;
+    } else {
+      // Ignore the held start/cancel inputs until every cancel source is released once.
+      button1Pressed = false;
+      button2Pressed = false;
+      button1Held = false;
+      button1DelayActive = false;
+      button2DelayActive = false;
+    }
   }
 
   // Determine if both buttons are pressed
@@ -4154,7 +4402,7 @@ void loop() {
       Serial.printf("DEBUG: Button 1 delay passed, starting hold timer at %lu\n", button1HoldStartTime);
       // Don't start flush sequence immediately - wait to see if it's a hold
     } else if (button1Pressed && button1Held && (millis() - button1HoldStartTime >= BUTTON_HOLD_TIME)) {
-      // Button 1 held for 1.5 seconds - enable cutBag and start flush sequence
+      // Button 1 held long enough - enable cutBag and start flush sequence
       if (!isFlushing && !motorHomingActive) {  // Only start if not already flushing
         if (isHardwareLikelyDisconnectedForUserAction()) {
           if (!button1DisconnectAlertedForCurrentPress) {
@@ -4185,6 +4433,10 @@ void loop() {
           
           flushStep = 0;
           isFlushing = true;
+          flushCancelArmed = false;
+          button1Held = false;
+          button1DelayActive = false;
+          button2DelayActive = false;
           flushStartMillis = millis();
         }
       }
@@ -4192,15 +4444,15 @@ void loop() {
       unsigned long holdDuration = millis() - button1HoldStartTime;
       button1Held = false;
       if (holdDuration < BUTTON_HOLD_TIME) {
-        SerialBLE_println("Flush requires 1.5s hold");
+        SerialBLE_println("Flush requires 0.5s hold");
       }
     }
     
     // Handle button 2 (Feed Down) and motor3 (fan) - single else-if chain to prevent conflicts
     /* One sequential else-if chain handling:
     Button2 just pressed → start delay timer
-    Button2 pressed and delay passed → start M2 feed motor and M3 fan
-    Button2 pressed continuously → keep both motors running
+    Button2 pressed and delay passed → start M2 feed ramp and M3 fan
+    Button2 pressed continuously → ramp/hold M2 and animate LEDs
     Button2 just released → stop M2, start fan timer, keep M3 running
     Fan timer active (< fanDuration) → keep M3 running
     Fan timer completed (>= fanDuration) → stop M3
@@ -4213,46 +4465,41 @@ void loop() {
       SerialBLE_println("Button 2 pressed - waiting for delay before starting feed");
       // Don't change motors yet - wait for delay
     } else if (button2Pressed && button2DelayActive && (millis() - button2PressStartTime >= BUTTON_DELAY)) {
-      // Delay passed while button still pressed - start fan first
+      // Delay passed while button still pressed - start feed immediately at low speed.
       button2DelayActive = false;
-      button2FeedStarted = false;
       button2FanStartTime = millis();
-      SerialBLE_println("Feed Down Delay Passed - Starting fan, waiting before feed");
-      setFanSpeed(400);  // Start M3 fan immediately
-      fanRunning = false;  
-    } else if (button2Pressed && !button2DelayActive && !button2FeedStarted) {
-      // Button 2 pressed, delay passed, but M2 not started yet - wait for preFeedFan
-      if (millis() - button2FanStartTime >= preFeedFan * 1000) {
-        if (isHardwareLikelyDisconnectedForUserAction()) {
-          if (!button2DisconnectAlertedForCurrentPress) {
-            SerialBLE_println("Hardware not connected (thermistor open) - feed blocked");
-            playHardwareNotConnectedAlert();
-            button2DisconnectAlertedForCurrentPress = true;
-          }
-          motors.setM2Speed(0);
-          setFanSpeed(0);
-          fanRunning = false;
-          button2FeedStarted = false;
-        } else {
-          SerialBLE_println("Pre-feed fan delay complete, starting feed motor");
-          motors.setM2Speed(-400);
-          button2FeedStarted = true;
+      if (isHardwareLikelyDisconnectedForUserAction()) {
+        if (!button2DisconnectAlertedForCurrentPress) {
+          SerialBLE_println("Hardware not connected (thermistor open) - feed blocked");
+          playHardwareNotConnectedAlert();
+          button2DisconnectAlertedForCurrentPress = true;
         }
+        motors.setM2Speed(0);
+        setFanSpeed(0);
+        fanRunning = false;
+        button2FeedStarted = false;
+        stopManualFeed();
+      } else {
+        SerialBLE_println("Feed Down Delay Passed - Starting fan and feed ramp");
+        setFanSpeed(400);  // Start M3 fan immediately
+        fanRunning = false;
+        button2FeedStarted = true;
+        startManualFeed();
       }
     } else if (button2Pressed && !button2DelayActive && button2FeedStarted) {
+      updateManualFeedRamp();
       static unsigned long lastFeedKeepRunningLog = 0;
       if (millis() - lastFeedKeepRunningLog >= BLE_STATUS_LOG_INTERVAL_MS) {
-        SerialBLE_println("b2 pressed, feed running - keep motors running");
+        SerialBLE_println("b2 pressed, feed ramp running");
         lastFeedKeepRunningLog = millis();
       }
-      // Button 2 is pressed, delay has passed, and feed has started - keep motors running
-      //motors.setM2Speed(-400);  // Ensure M2 is running
-      //setFanSpeed(400);  // Continuously ensure M3 at full power
       fanRunning = false;  // Prevent fan timer from interfering
+    } else if (button2Pressed && !button2DelayActive && !button2FeedStarted) {
+      button2FanStartTime = millis();
     } else if (!button2Pressed && button2WasPressed) {
       // Button 2 just released - stop feed motor, start fan timer
       SerialBLE_println("Feed Down Released - Stopping feed, starting fan timer");
-      motors.setM2Speed(0);
+      stopManualFeed();
       button2FeedStarted = false;  // Reset flag for next button press
       button2DisconnectAlertedForCurrentPress = false;
       button2FanStartTime = 0;
@@ -4317,8 +4564,12 @@ void loop() {
     rtc_gpio_pullup_en((gpio_num_t)controlPanelWake);
     rtc_gpio_pulldown_dis((gpio_num_t)controlPanelWake);
     esp_sleep_enable_ext0_wakeup((gpio_num_t)controlPanelWake, 0);  // LOW = button pressed
+    logWdtBreadcrumb("light_sleep_enter");
     esp_light_sleep_start();
+    logWdtBreadcrumb("light_sleep_wake");
+    // Light sleep resumes here; do not re-run server_setup()/BLEDevice::init() on wake.
     circleLeds();
+    wdtCheckpoint();
     startEEPROMWakeAlert();
     maintainEEPROMErrorIndicator();
     lastActivityMillis = millis();
@@ -4895,6 +5146,7 @@ void flushSequence() {
         incrementFlushCount();
         isFlushing = false;
         flushStep = 0;
+        flushCancelArmed = false;
         cutBag = false;  // Reset cutBag for next cycle
         lastActivityMillis = millis();  // Restart inactivity/sleep timer at end of flush
         SerialBLE_println("Moving to Case0 from 13 - end of sequence:");
@@ -4934,6 +5186,76 @@ void circleLeds() {
     delay(duration);
     mcp_digitalWrite(getLedPin(i), LOW);
   }
+}
+
+void resetFeedButtonLeds() {
+  feedLedPatternActive = false;
+  feedLedLastUpdateMillis = 0;
+  feedLedHeadIndex = 0;
+  for (int i = 0; i < totalLeds; i++) {
+    mcp_digitalWrite(getLedPin(i), LOW);
+  }
+}
+
+void updateFeedButtonLeds(bool forceImmediate) {
+  unsigned long currentMillis = millis();
+  if (!feedLedPatternActive) {
+    feedLedPatternActive = true;
+    feedLedHeadIndex = 0;
+    feedLedLastUpdateMillis = currentMillis;
+    forceImmediate = true;
+  } else if (!forceImmediate && currentMillis - feedLedLastUpdateMillis < FEED_LED_INTERVAL_MS) {
+    return;
+  } else if (!forceImmediate) {
+    feedLedHeadIndex = (feedLedHeadIndex + totalLeds - 1) % totalLeds;
+    feedLedLastUpdateMillis = currentMillis;
+  }
+
+  for (int i = 0; i < totalLeds; i++) {
+    bool on = false;
+    for (int offset = 0; offset < FEED_LED_WINDOW; offset++) {
+      if (i == (feedLedHeadIndex + offset) % totalLeds) {
+        on = true;
+        break;
+      }
+    }
+    mcp_digitalWrite(getLedPin(i), on ? HIGH : LOW);
+  }
+}
+
+void startManualFeed() {
+  manualFeedActive = true;
+  manualFeedStartMillis = millis();
+  manualFeedLastSpeed = MANUAL_FEED_START_SPEED;
+  motors.setM2Speed(manualFeedLastSpeed);
+  updateFeedButtonLeds(true);
+}
+
+void stopManualFeed() {
+  manualFeedActive = false;
+  manualFeedStartMillis = 0;
+  manualFeedLastSpeed = 0;
+  motors.setM2Speed(0);
+  resetFeedButtonLeds();
+}
+
+void updateManualFeedRamp() {
+  if (!manualFeedActive) {
+    return;
+  }
+
+  unsigned long elapsedMs = millis() - manualFeedStartMillis;
+  int targetSpeed = MANUAL_FEED_FULL_SPEED;
+  if (elapsedMs < MANUAL_FEED_RAMP_MS) {
+    long speedDelta = (long)MANUAL_FEED_FULL_SPEED - (long)MANUAL_FEED_START_SPEED;
+    targetSpeed = MANUAL_FEED_START_SPEED + (int)((speedDelta * (long)elapsedMs) / (long)MANUAL_FEED_RAMP_MS);
+  }
+
+  if (targetSpeed != manualFeedLastSpeed) {
+    motors.setM2Speed(targetSpeed);
+    manualFeedLastSpeed = targetSpeed;
+  }
+  updateFeedButtonLeds(false);
 }
 
 // Slow circle LED animation for OTA mode (continuous, slow)
@@ -4990,10 +5312,13 @@ void disableOTA() {
   }
   
   Serial.println("Disabling OTA mode");
+  logWdtBreadcrumb("ble_disable_ota_begin");
   
   // Stop advertising
   if (blue_server) {
+    logWdtBreadcrumb("ble_disable_ota_before_stop");
     blue_server->getAdvertising()->stop();
+    logWdtBreadcrumb("ble_disable_ota_after_stop");
   }
   
   // Note: We can't easily remove the service, but we can stop using it
@@ -5006,6 +5331,7 @@ void disableOTA() {
   for (int i = 0; i < totalLeds; i++) {
     mcp_digitalWrite(getLedPin(i), LOW);
   }
+  wdtCheckpoint();
   
   Serial.println("OTA mode disabled");
 }
@@ -5244,17 +5570,23 @@ void checkOTATimeouts() {
 // Restart BLE server without OTA
 void restartBLEServer() {
   Serial.println("Restarting BLE server (without OTA)");
+  logWdtBreadcrumb("ble_restart_begin");
   
   disableOTA();
+  logWdtBreadcrumb("ble_restart_after_disable_ota");
   
   // Stop current advertising
   if (blue_server) {
+    logWdtBreadcrumb("ble_restart_before_stop");
     blue_server->getAdvertising()->stop();
+    logWdtBreadcrumb("ble_restart_after_stop");
   }
   
   // Restart advertising - OTA service exists but won't be advertised
   // (we can't easily remove it from advertising once added)
+  logWdtBreadcrumb("ble_restart_before_advertise");
   BLEDevice::startAdvertising();
+  logWdtBreadcrumb("ble_restart_after_advertise");
   
   bleEnabled = true;
   bleStartupTime = millis();
@@ -5508,9 +5840,11 @@ void stopEverything() {
   motors.setM1Speed(0);
   setFanSpeed(0);  // Stop M3 motor
   heaterOff();
+  stopManualFeed();
 
   isFlushing = false;
   flushStep = 0;
+  flushCancelArmed = false;
   cutBag = false;
   mechanismMotorRunning = false;
   fanRunning = false;
