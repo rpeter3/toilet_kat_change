@@ -244,6 +244,7 @@ bool setHardwareComponentByName(const String& componentName, const String& versi
 ControlPanelPinout getControlPanelPinout();
 void configureControlPanelMcpInputs();
 void configureControlPanelLedOutputs();
+void recoverControlPanelAfterLightSleep();
 const int* getActiveLedPins();
 int getLedPin(int uiIndex);
 void logControlPanelPinout();
@@ -299,6 +300,7 @@ void initTaskWatchdog();
 void feedTaskWatchdog();
 void wdtCheckpoint();
 void logWdtBreadcrumb(const char* tag);
+void traceLightSleepWake(const char* tag);
 void wdtSafeDelay(unsigned long ms);
 void updateHeaterSessionRtc();
 void checkHeaterRuntimeSafety();
@@ -475,7 +477,7 @@ int feedLedHeadIndex = 0;
 unsigned long bleStartupTime = 0;
 unsigned long bleIdleStartTime = 0;
 const unsigned long BLE_TIMEOUT = 10 * 60 * 1000; // 10 minutes in milliseconds
-const unsigned long INACTIVITY_SLEEP_MS = 2 * 60 * 1000;  // 2 minutes - then light sleep
+const unsigned long INACTIVITY_SLEEP_MS = 20 * 1000;  // 20 seconds - then light sleep
 
 // Runtime DEV mode (persisted in NVS): when enabled, BLE stays on and inactivity sleep is disabled.
 const char* DEV_MODE_NAMESPACE = "system";
@@ -504,6 +506,9 @@ unsigned long suppressedM12RecoveryCycles = 0;
 
 unsigned long lastActivityMillis = 0;
 bool bleEnabled = true;
+uint8_t lightSleepWakeTraceLoopsRemaining = 0;
+const unsigned long LIGHT_SLEEP_PANEL_SETTLE_MS = 500;
+unsigned long lightSleepPanelSettleUntilMs = 0;
 
 // OTA timing variables
 bool otaEnabled = false;
@@ -1265,17 +1270,32 @@ class param_write_characteristic_callbacks: public BLECharacteristicCallbacks {
 };
 
 ControlPanelPinout getControlPanelPinout() {
+  if (lightSleepWakeTraceLoopsRemaining > 0) {
+    traceLightSleepWake("light_sleep_pinout_enter");
+  }
   if (CONTROL_PANEL_PINOUT_OVERRIDE == 5) {
+    if (lightSleepWakeTraceLoopsRemaining > 0) {
+      traceLightSleepWake("light_sleep_pinout_v5_override");
+    }
     return CP_PINOUT_V5_LEGACY;
   }
   if (CONTROL_PANEL_PINOUT_OVERRIDE == 6) {
+    if (lightSleepWakeTraceLoopsRemaining > 0) {
+      traceLightSleepWake("light_sleep_pinout_v6_override");
+    }
     return CP_PINOUT_V6;
   }
   if (hardwareMatrixInitialized) {
     const char* ver = hardwareMatrix.components[HW_CONTROL_PANEL].current_version;
     if (ver[0] == '6' && ver[1] == '\0') {
+      if (lightSleepWakeTraceLoopsRemaining > 0) {
+        traceLightSleepWake("light_sleep_pinout_v6_matrix");
+      }
       return CP_PINOUT_V6;
     }
+  }
+  if (lightSleepWakeTraceLoopsRemaining > 0) {
+    traceLightSleepWake("light_sleep_pinout_v5_default");
   }
   return CP_PINOUT_V5_LEGACY;
 }
@@ -1319,6 +1339,7 @@ void mcp_setup() {
   delay(200);  // Allow power rail and I2C bus to settle after reset
   // ✅ Use GPIO6 for SDA and GPIO7 for SCL
   myI2C.begin(6, 7, 20000);
+  myI2C.setTimeOut(50);
 
   // Retry MCP startup to survive first-boot rail/I2C bring-up timing.
   const int maxAttempts = 20;
@@ -1344,6 +1365,28 @@ void mcp_setup() {
   configureControlPanelLedOutputs();
 }
 
+void recoverControlPanelAfterLightSleep() {
+  traceLightSleepWake("light_sleep_recover_panel_begin");
+
+  // GPIO2 was switched to RTC GPIO for EXT0 wake; restore normal GPIO reads after wake.
+  rtc_gpio_deinit((gpio_num_t)controlPanelWake);
+  pinMode(controlPanelWake, INPUT_PULLUP);
+  traceLightSleepWake("light_sleep_recover_gpio2");
+
+  myI2C.end();
+  delay(2);
+  myI2C.begin(6, 7, 20000);
+  myI2C.setTimeOut(50);
+  traceLightSleepWake("light_sleep_recover_i2c");
+
+  if (mcpInitialized) {
+    configureControlPanelMcpInputs();
+    traceLightSleepWake("light_sleep_recover_mcp_inputs");
+  }
+
+  logWdtBreadcrumb("light_sleep_recover_panel_end");
+}
+
 // Function to write a value to a specific MCP23017 pin
 void mcp_digitalWrite(int pin, int value) {
   if (!mcpInitialized) {
@@ -1362,7 +1405,18 @@ int mcp_digitalRead(int pin) {
     }
     return HIGH;
   }
-  return mcp.digitalRead(pin);
+  if (lightSleepWakeTraceLoopsRemaining > 0) {
+    char tag[48];
+    snprintf(tag, sizeof(tag), "light_sleep_mcp_read_before_pin_%d", pin);
+    traceLightSleepWake(tag);
+  }
+  int value = mcp.digitalRead(pin);
+  if (lightSleepWakeTraceLoopsRemaining > 0) {
+    char tag[48];
+    snprintf(tag, sizeof(tag), "light_sleep_mcp_read_after_pin_%d", pin);
+    traceLightSleepWake(tag);
+  }
+  return value;
 }
 
 void logControlPanelPinout() {
@@ -1376,20 +1430,37 @@ void logControlPanelPinout() {
 }
 
 bool readControlPanelButton1() {
-  if (getControlPanelPinout() == CP_PINOUT_V6) {
+  if (lightSleepWakeTraceLoopsRemaining > 0) {
+    traceLightSleepWake("light_sleep_button1_read_enter");
+  }
+  ControlPanelPinout pinout = getControlPanelPinout();
+  if (lightSleepWakeTraceLoopsRemaining > 0) {
+    traceLightSleepWake(pinout == CP_PINOUT_V6 ? "light_sleep_button1_read_v6" : "light_sleep_button1_read_v5");
+  }
+  if (pinout == CP_PINOUT_V6) {
     return mcp_digitalRead(CP_V6_BTN1_MCP) == LOW;
   }
   return digitalRead(controlPanelWake) == LOW;
 }
 
 bool readControlPanelButton2() {
-  if (getControlPanelPinout() == CP_PINOUT_V6) {
+  if (lightSleepWakeTraceLoopsRemaining > 0) {
+    traceLightSleepWake("light_sleep_button2_read_enter");
+  }
+  ControlPanelPinout pinout = getControlPanelPinout();
+  if (lightSleepWakeTraceLoopsRemaining > 0) {
+    traceLightSleepWake(pinout == CP_PINOUT_V6 ? "light_sleep_button2_read_v6" : "light_sleep_button2_read_v5");
+  }
+  if (pinout == CP_PINOUT_V6) {
     return mcp_digitalRead(CP_V6_BTN2_MCP) == LOW;
   }
   return mcp_digitalRead(CP_V5_BTN2_MCP) == LOW;
 }
 
 bool readControlPanelWakeLine() {
+  if (lightSleepWakeTraceLoopsRemaining > 0) {
+    traceLightSleepWake("light_sleep_wake_line_read");
+  }
   return digitalRead(controlPanelWake) == LOW;
 }
 
@@ -3790,6 +3861,15 @@ void logWdtBreadcrumb(const char* tag) {
   wdtCheckpoint();
 }
 
+void traceLightSleepWake(const char* tag) {
+  if (!tag) {
+    return;
+  }
+  Serial.printf("Light sleep trace: %s\n", tag);
+  feedTaskWatchdog();
+  yield();
+}
+
 void wdtSafeDelay(unsigned long ms) {
   unsigned long remaining = ms;
   while (remaining > 0) {
@@ -4230,15 +4310,37 @@ void loop() {
     sendSerialToBLE("EEPROM wake alert ended. Normal operation resumed");
   }
 
+  if (lightSleepPanelSettleUntilMs != 0) {
+    if (millis() < lightSleepPanelSettleUntilMs) {
+      traceLightSleepWake("light_sleep_panel_settle_early_loop");
+      maintainEEPROMErrorIndicator();
+      feedTaskWatchdog();
+      delay(1);
+      return;
+    }
+    lightSleepPanelSettleUntilMs = 0;
+    traceLightSleepWake("light_sleep_panel_settle_complete");
+  }
+
+  if (lightSleepWakeTraceLoopsRemaining > 0) {
+    traceLightSleepWake("light_sleep_runtime_checks_before");
+  }
   updateMotorHoming();
   updateHeaterSessionRtc();
   checkHeaterRuntimeSafety();
+  if (lightSleepWakeTraceLoopsRemaining > 0) {
+    traceLightSleepWake("light_sleep_runtime_checks_after");
+    traceLightSleepWake("light_sleep_main_button_reads_before");
+  }
   
   // OTA update handling is now done via update_characteristic_callbacks class
   // Read button states
   bool button1Pressed = readControlPanelButton1();
   bool button2Pressed = readControlPanelButton2();
   bool flushCancelInputActive = readFlushCancelInput(button1Pressed, button2Pressed);
+  if (lightSleepWakeTraceLoopsRemaining > 0) {
+    traceLightSleepWake("light_sleep_main_button_reads_after");
+  }
   if (button1Pressed || button2Pressed || flushCancelInputActive) {
     lastActivityMillis = millis();
   }
@@ -4548,7 +4650,7 @@ void loop() {
   button1WasPressed = button1Pressed;
   button2WasPressed = button2Pressed;
 
-  // Inactivity light sleep: 2 min with no activity, wake on GPIO2 (controlPanelWake)
+  // Inactivity light sleep: 20 seconds with no activity, wake on GPIO2 (controlPanelWake)
   // Only enter when wake button is released (HIGH) so pin does not trigger immediate wake.
   // Light sleep keeps GPIO state so fan pins stay LOW (fan off) without hold logic.
   if (!devModeEnabled && !otaEnabled && !batteryDisplayMode && !isFlushing && !motorHomingActive &&
@@ -4567,15 +4669,42 @@ void loop() {
     logWdtBreadcrumb("light_sleep_enter");
     esp_light_sleep_start();
     logWdtBreadcrumb("light_sleep_wake");
+    recoverControlPanelAfterLightSleep();
     // Light sleep resumes here; do not re-run server_setup()/BLEDevice::init() on wake.
     circleLeds();
+    traceLightSleepWake("light_sleep_wake_circle_LEDs");
     wdtCheckpoint();
+    traceLightSleepWake("light_sleep_wake_checkpiont1");
     startEEPROMWakeAlert();
+    traceLightSleepWake("light_sleep_wake_startEEPROM");
     maintainEEPROMErrorIndicator();
+    traceLightSleepWake("light_sleep_wake_maintainEEPROM");
+    lightSleepWakeTraceLoopsRemaining = 2;
+    lightSleepPanelSettleUntilMs = millis() + LIGHT_SLEEP_PANEL_SETTLE_MS;
+    logWdtBreadcrumb("light_sleep_wake_ready");
     lastActivityMillis = millis();
   }
 
+  if (lightSleepWakeTraceLoopsRemaining > 0) {
+    traceLightSleepWake("light_sleep_after_sleep_block");
+  }
+
+  if (lightSleepPanelSettleUntilMs != 0) {
+    if (millis() < lightSleepPanelSettleUntilMs) {
+      traceLightSleepWake("light_sleep_panel_settle_resume_loop");
+      maintainEEPROMErrorIndicator();
+      feedTaskWatchdog();
+      delay(1);
+      return;
+    }
+    lightSleepPanelSettleUntilMs = 0;
+    traceLightSleepWake("light_sleep_panel_settle_complete");
+  }
+
   if (heaterOn) {
+    if (lightSleepWakeTraceLoopsRemaining > 0) {
+      traceLightSleepWake("light_sleep_heater_block_enter");
+    }
     updateHeaterPID();
     float heaterTemp = (float)heaterInput;
     unsigned long now = millis();
@@ -4602,25 +4731,47 @@ void loop() {
       stopEverything();
       LEDErrorCode(ERROR_CODE);
     }
+    if (lightSleepWakeTraceLoopsRemaining > 0) {
+      traceLightSleepWake("light_sleep_heater_block_exit");
+    }
   }
   if (isFlushing) {
+    if (lightSleepWakeTraceLoopsRemaining > 0) {
+      traceLightSleepWake("light_sleep_flush_block_enter");
+    }
     flushSequence();
     updateLEDs();
+    if (lightSleepWakeTraceLoopsRemaining > 0) {
+      traceLightSleepWake("light_sleep_flush_block_exit");
+    }
   }
   
   // Stream serial data to BLE if enabled (only when BLE is active)
   if (bleEnabled) {
+    if (lightSleepWakeTraceLoopsRemaining > 0) {
+      traceLightSleepWake("light_sleep_stream_ble_before");
+    }
     streamSerialToBLE();
+    if (lightSleepWakeTraceLoopsRemaining > 0) {
+      traceLightSleepWake("light_sleep_stream_ble_after");
+    }
   }
   
   // Check buttons for direction change only while idle.
   // During flush, LED progress is phase-driven and monotonic.
   if (!isFlushing) {
+    if (lightSleepWakeTraceLoopsRemaining > 0) {
+      traceLightSleepWake("light_sleep_idle_button1_before");
+    }
     if (readControlPanelButton1()) {
       lastActivityMillis = millis();
       clockwise = true;
       ledIndex = 0;
       ledLastUpdateMillis = millis();
+    }
+    if (lightSleepWakeTraceLoopsRemaining > 0) {
+      traceLightSleepWake("light_sleep_idle_button1_after");
+      traceLightSleepWake("light_sleep_idle_button2_before");
     }
     if (readControlPanelButton2()) {
       lastActivityMillis = millis();
@@ -4628,10 +4779,20 @@ void loop() {
       ledIndex = 0;
       ledLastUpdateMillis = millis();
     }
+    if (lightSleepWakeTraceLoopsRemaining > 0) {
+      traceLightSleepWake("light_sleep_idle_button2_after");
+    }
   }
   maintainEEPROMErrorIndicator();
+  if (lightSleepWakeTraceLoopsRemaining > 0) {
+    traceLightSleepWake("light_sleep_loop_feed_before");
+  }
   feedTaskWatchdog();
   delay(1);
+  if (lightSleepWakeTraceLoopsRemaining > 0) {
+    traceLightSleepWake("light_sleep_loop_delay_after");
+    lightSleepWakeTraceLoopsRemaining--;
+  }
 }
 
 void flushSequence() {
