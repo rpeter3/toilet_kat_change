@@ -156,9 +156,9 @@ enum HardwareComponentId {
   HW_COMPONENT_COUNT
 };
 
-//UPDATE THIS TO 6 FOR DEV TESTING USING NEW BOARD
+// Production: 0 = use hardware matrix (CONTROL_PANEL 5/6). Dev: pass -DCONTROL_PANEL_PINOUT_OVERRIDE=6 at build.
 #ifndef CONTROL_PANEL_PINOUT_OVERRIDE
-#define CONTROL_PANEL_PINOUT_OVERRIDE 6
+#define CONTROL_PANEL_PINOUT_OVERRIDE 0
 #endif
 
 enum ControlPanelPinout : uint8_t {
@@ -210,8 +210,8 @@ struct HWCFGConfigStore {
 //set this when building the firmware
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-const char* SOFTWARE_VERSION_NUMBER = "2.5.0";
-const char* FACTORY_SOFTWARE_DATE = "2026-03-13";
+const char* SOFTWARE_VERSION_NUMBER = "4.0.0";
+const char* FACTORY_SOFTWARE_DATE = "2026-06-11";
 const char* SOFTWARE_BUILD_DATE = __DATE__ " " __TIME__;
 
 // Forward declarations
@@ -244,7 +244,6 @@ bool setHardwareComponentByName(const String& componentName, const String& versi
 ControlPanelPinout getControlPanelPinout();
 void configureControlPanelMcpInputs();
 void configureControlPanelLedOutputs();
-void recoverControlPanelAfterLightSleep();
 const int* getActiveLedPins();
 int getLedPin(int uiIndex);
 void logControlPanelPinout();
@@ -299,8 +298,6 @@ void checkHeaterBootSafety();
 void initTaskWatchdog();
 void feedTaskWatchdog();
 void wdtCheckpoint();
-void logWdtBreadcrumb(const char* tag);
-void traceLightSleepWake(const char* tag);
 void wdtSafeDelay(unsigned long ms);
 void updateHeaterSessionRtc();
 void checkHeaterRuntimeSafety();
@@ -394,7 +391,7 @@ const int typicalOpeningTime = 5; //parameters_list[12] */
 // Can't have global constant variables in C
 int batteryThreshold = 5; //parameters_list[0]
 float K = 150.0; //parameters_list[1]
-int F = 6; //parameters_list[2]
+int F = 8; //parameters_list[2]
 long T = 60; //parameters_list[3] - Estimated cooling time for LED pacing (seconds)
 float thermistorResistance = 10000.0; // constant, not in BLE
 int r2 = 2; // constant, not in BLE
@@ -479,7 +476,7 @@ int feedLedHeadIndex = 0;
 unsigned long bleStartupTime = 0;
 unsigned long bleIdleStartTime = 0;
 const unsigned long BLE_TIMEOUT = 10 * 60 * 1000; // 10 minutes in milliseconds
-const unsigned long INACTIVITY_SLEEP_MS = 20 * 1000;  // 20 seconds - then light sleep
+const unsigned long INACTIVITY_SLEEP_MS = 2 * 60 * 1000;  // 2 minutes - then deep sleep
 
 // Runtime DEV mode (persisted in NVS): when enabled, BLE stays on and inactivity sleep is disabled.
 const char* DEV_MODE_NAMESPACE = "system";
@@ -487,9 +484,9 @@ const char* DEV_MODE_KEY = "dev_mode";
 const char* HW_MATRIX_NAMESPACE = "hwmeta";
 const char* HW_MATRIX_ACTIVE_KEY = "matrix";
 const char* HW_MATRIX_LAST_GOOD_KEY = "matrix_lkg";
-bool devModeEnabled = true;
+bool devModeEnabled = false;
 // M1/M2 fault handling controls.
-bool ignoreM12Faults = true;
+bool ignoreM12Faults = false;
 bool hasIgnoredM12Fault = false;
 unsigned long ignoredM12FaultCount = 0;
 unsigned long lastIgnoredM12FaultMillis = 0;
@@ -508,20 +505,15 @@ unsigned long suppressedM12RecoveryCycles = 0;
 
 unsigned long lastActivityMillis = 0;
 bool bleEnabled = true;
-uint8_t lightSleepWakeTraceLoopsRemaining = 0;
-const unsigned long LIGHT_SLEEP_PANEL_SETTLE_MS = 500;
-unsigned long lightSleepPanelSettleUntilMs = 0;
 
 // OTA timing variables
 bool otaEnabled = false;
-unsigned long batteryMonitorStartTime = 0;
+unsigned long dualButtonHoldStartTime = 0;
 unsigned long otaWindowStartTime = 0;
-bool batteryMonitoringActive = false;
-const unsigned long BATTERY_MONITOR_DURATION = 10000; // 10 seconds
+bool dualButtonHoldActive = false;
+const unsigned long DUAL_BUTTON_DEV_HOLD_MS = 10000; // 10 seconds
 const unsigned long OTA_WINDOW_DURATION = 60000; // 1 minute
 const unsigned long OTA_MODE_MAX_DURATION = 2 * 60 * 1000; // 2 minutes - then always exit OTA and stop circle
-unsigned long lastBatteryCheckTime = 0;
-const unsigned long BATTERY_CHECK_INTERVAL = 1000; // Check battery every 1 second
 
 // Update system variables
 bool updateInProgress = false;
@@ -1022,7 +1014,8 @@ class command_characteristic_callbacks: public BLECharacteristicCallbacks {
     }
     if (cmd == "GET_BATTERY") {
       int level = getBatteryChargeLevel();
-      String batteryMessage = String("BATTERY:") + String(level);
+      float batteryVoltage = readBatteryVoltage();
+      String batteryMessage = String("BATTERY:") + String(level) + "," + String(batteryVoltage, 2) + "V";
       writeResponseToChannel(batteryMessage);
       Serial.printf("Processed GET_BATTERY, returned %s\n", batteryMessage.c_str());
       sendSerialToBLE("Processed GET_BATTERY");
@@ -1272,32 +1265,17 @@ class param_write_characteristic_callbacks: public BLECharacteristicCallbacks {
 };
 
 ControlPanelPinout getControlPanelPinout() {
-  if (lightSleepWakeTraceLoopsRemaining > 0) {
-    traceLightSleepWake("light_sleep_pinout_enter");
-  }
   if (CONTROL_PANEL_PINOUT_OVERRIDE == 5) {
-    if (lightSleepWakeTraceLoopsRemaining > 0) {
-      traceLightSleepWake("light_sleep_pinout_v5_override");
-    }
     return CP_PINOUT_V5_LEGACY;
   }
   if (CONTROL_PANEL_PINOUT_OVERRIDE == 6) {
-    if (lightSleepWakeTraceLoopsRemaining > 0) {
-      traceLightSleepWake("light_sleep_pinout_v6_override");
-    }
     return CP_PINOUT_V6;
   }
   if (hardwareMatrixInitialized) {
     const char* ver = hardwareMatrix.components[HW_CONTROL_PANEL].current_version;
     if (ver[0] == '6' && ver[1] == '\0') {
-      if (lightSleepWakeTraceLoopsRemaining > 0) {
-        traceLightSleepWake("light_sleep_pinout_v6_matrix");
-      }
       return CP_PINOUT_V6;
     }
-  }
-  if (lightSleepWakeTraceLoopsRemaining > 0) {
-    traceLightSleepWake("light_sleep_pinout_v5_default");
   }
   return CP_PINOUT_V5_LEGACY;
 }
@@ -1367,28 +1345,6 @@ void mcp_setup() {
   configureControlPanelLedOutputs();
 }
 
-void recoverControlPanelAfterLightSleep() {
-  traceLightSleepWake("light_sleep_recover_panel_begin");
-
-  // GPIO2 was switched to RTC GPIO for EXT0 wake; restore normal GPIO reads after wake.
-  rtc_gpio_deinit((gpio_num_t)controlPanelWake);
-  pinMode(controlPanelWake, INPUT_PULLUP);
-  traceLightSleepWake("light_sleep_recover_gpio2");
-
-  myI2C.end();
-  delay(2);
-  myI2C.begin(6, 7, 20000);
-  myI2C.setTimeOut(50);
-  traceLightSleepWake("light_sleep_recover_i2c");
-
-  if (mcpInitialized) {
-    configureControlPanelMcpInputs();
-    traceLightSleepWake("light_sleep_recover_mcp_inputs");
-  }
-
-  logWdtBreadcrumb("light_sleep_recover_panel_end");
-}
-
 // Function to write a value to a specific MCP23017 pin
 void mcp_digitalWrite(int pin, int value) {
   if (!mcpInitialized) {
@@ -1407,18 +1363,7 @@ int mcp_digitalRead(int pin) {
     }
     return HIGH;
   }
-  if (lightSleepWakeTraceLoopsRemaining > 0) {
-    char tag[48];
-    snprintf(tag, sizeof(tag), "light_sleep_mcp_read_before_pin_%d", pin);
-    traceLightSleepWake(tag);
-  }
-  int value = mcp.digitalRead(pin);
-  if (lightSleepWakeTraceLoopsRemaining > 0) {
-    char tag[48];
-    snprintf(tag, sizeof(tag), "light_sleep_mcp_read_after_pin_%d", pin);
-    traceLightSleepWake(tag);
-  }
-  return value;
+  return mcp.digitalRead(pin);
 }
 
 void logControlPanelPinout() {
@@ -1432,13 +1377,7 @@ void logControlPanelPinout() {
 }
 
 bool readControlPanelButton1() {
-  if (lightSleepWakeTraceLoopsRemaining > 0) {
-    traceLightSleepWake("light_sleep_button1_read_enter");
-  }
   ControlPanelPinout pinout = getControlPanelPinout();
-  if (lightSleepWakeTraceLoopsRemaining > 0) {
-    traceLightSleepWake(pinout == CP_PINOUT_V6 ? "light_sleep_button1_read_v6" : "light_sleep_button1_read_v5");
-  }
   if (pinout == CP_PINOUT_V6) {
     return mcp_digitalRead(CP_V6_BTN1_MCP) == LOW;
   }
@@ -1446,13 +1385,7 @@ bool readControlPanelButton1() {
 }
 
 bool readControlPanelButton2() {
-  if (lightSleepWakeTraceLoopsRemaining > 0) {
-    traceLightSleepWake("light_sleep_button2_read_enter");
-  }
   ControlPanelPinout pinout = getControlPanelPinout();
-  if (lightSleepWakeTraceLoopsRemaining > 0) {
-    traceLightSleepWake(pinout == CP_PINOUT_V6 ? "light_sleep_button2_read_v6" : "light_sleep_button2_read_v5");
-  }
   if (pinout == CP_PINOUT_V6) {
     return mcp_digitalRead(CP_V6_BTN2_MCP) == LOW;
   }
@@ -1460,9 +1393,6 @@ bool readControlPanelButton2() {
 }
 
 bool readControlPanelWakeLine() {
-  if (lightSleepWakeTraceLoopsRemaining > 0) {
-    traceLightSleepWake("light_sleep_wake_line_read");
-  }
   return digitalRead(controlPanelWake) == LOW;
 }
 
@@ -1474,9 +1404,7 @@ bool readFlushCancelInput(bool button1Pressed, bool button2Pressed) {
 void server_setup(bool includeOTA = false) {
   Serial.println("Setting up Bluetooth Low Energy.");
   // Create a BLE Device
-  logWdtBreadcrumb("ble_setup_before_init");
   BLEDevice::init("ESP32 Toilet");
-  logWdtBreadcrumb("ble_setup_after_init");
   
   // Set up the BLE Device as a server
   wdtCheckpoint();
@@ -1551,9 +1479,7 @@ void server_setup(bool includeOTA = false) {
   update_service = NULL;
 
   // Starts the service on the server
-  logWdtBreadcrumb("ble_setup_before_service_start");
   blue_service->start();
-  logWdtBreadcrumb("ble_setup_after_service_start");
 
   // Starts broadcasting so any devices can now find it and connect
   wdtCheckpoint();
@@ -1566,9 +1492,7 @@ void server_setup(bool includeOTA = false) {
 
 
   // Once the server starts advertising, the client can now see the server as it's visible to everyone
-  logWdtBreadcrumb("ble_setup_before_advertise");
   BLEDevice::startAdvertising();
-  logWdtBreadcrumb("ble_setup_after_advertise");
 
 
   Serial.print("ESP32 MAC ADDRESS: ");
@@ -3854,24 +3778,6 @@ void wdtCheckpoint() {
   feedTaskWatchdog();
 }
 
-void logWdtBreadcrumb(const char* tag) {
-  wdtCheckpoint();
-  if (tag) {
-    Serial.printf("WDT breadcrumb: %s\n", tag);
-    logError("wdt_breadcrumb", 0, tag, false);
-  }
-  wdtCheckpoint();
-}
-
-void traceLightSleepWake(const char* tag) {
-  if (!tag) {
-    return;
-  }
-  Serial.printf("Light sleep trace: %s\n", tag);
-  feedTaskWatchdog();
-  yield();
-}
-
 void wdtSafeDelay(unsigned long ms) {
   unsigned long remaining = ms;
   while (remaining > 0) {
@@ -4225,16 +4131,14 @@ void loop() {
         // 2 minutes reached - always exit OTA and stop circle
         Serial.println("OTA mode max duration (2 min) reached - disabling OTA and restarting BLE");
         restartBLEServer();
-        batteryMonitoringActive = false;
-        lastBatteryCheckTime = millis();
+        dualButtonHoldActive = false;
       } else if (currentMillis - otaWindowStartTime >= OTA_WINDOW_DURATION) {
         // 1 minute - expire only if no OTA connection
         bool hasOTAConnection = (is_device_connected && update_characteristic != NULL);
         if (!hasOTAConnection) {
           Serial.println("OTA window expired with no connections - disabling OTA and restarting BLE");
           restartBLEServer();
-          batteryMonitoringActive = false;
-          lastBatteryCheckTime = millis();
+          dualButtonHoldActive = false;
         } else {
           Serial.println("OTA connection active - keeping OTA mode enabled");
         }
@@ -4268,7 +4172,7 @@ void loop() {
     }
     
     bleEnabled = false;
-    batteryMonitoringActive = false; // Reset monitoring when BLE shuts down
+    dualButtonHoldActive = false; // Reset hold timer when BLE shuts down
     Serial.println("BLE disabled - manually restart device to re-enable");
     // Continue with control panel operations even when BLE is disabled
   }
@@ -4313,37 +4217,15 @@ void loop() {
     sendSerialToBLE("EEPROM wake alert ended. Normal operation resumed");
   }
 
-  if (lightSleepPanelSettleUntilMs != 0) {
-    if (millis() < lightSleepPanelSettleUntilMs) {
-      traceLightSleepWake("light_sleep_panel_settle_early_loop");
-      maintainEEPROMErrorIndicator();
-      feedTaskWatchdog();
-      delay(1);
-      return;
-    }
-    lightSleepPanelSettleUntilMs = 0;
-    traceLightSleepWake("light_sleep_panel_settle_complete");
-  }
-
-  if (lightSleepWakeTraceLoopsRemaining > 0) {
-    traceLightSleepWake("light_sleep_runtime_checks_before");
-  }
   updateMotorHoming();
   updateHeaterSessionRtc();
   checkHeaterRuntimeSafety();
-  if (lightSleepWakeTraceLoopsRemaining > 0) {
-    traceLightSleepWake("light_sleep_runtime_checks_after");
-    traceLightSleepWake("light_sleep_main_button_reads_before");
-  }
   
   // OTA update handling is now done via update_characteristic_callbacks class
   // Read button states
   bool button1Pressed = readControlPanelButton1();
   bool button2Pressed = readControlPanelButton2();
   bool flushCancelInputActive = readFlushCancelInput(button1Pressed, button2Pressed);
-  if (lightSleepWakeTraceLoopsRemaining > 0) {
-    traceLightSleepWake("light_sleep_main_button_reads_after");
-  }
   if (button1Pressed || button2Pressed || flushCancelInputActive) {
     lastActivityMillis = millis();
   }
@@ -4366,7 +4248,7 @@ void loop() {
       button1DisconnectAlertedForCurrentPress = false;
       button2DisconnectAlertedForCurrentPress = false;
       bothButtonsPressed = button1Pressed && button2Pressed;
-      batteryMonitoringActive = false;
+      dualButtonHoldActive = false;
       batteryDisplayMode = false;
       feedTaskWatchdog();
       delay(1);
@@ -4391,7 +4273,7 @@ void loop() {
       playHardwareNotConnectedAlert();
     }
     bothButtonsPressed = true;
-    batteryMonitoringActive = false;
+    dualButtonHoldActive = false;
     batteryDisplayMode = false;
   } else if (bothButtonsPressedNow && !bothButtonsPressed && !otaEnabled) {
     SerialBLE_println("Both buttons pressed - Stopping all operations and displaying battery charge level");
@@ -4405,75 +4287,35 @@ void loop() {
     button1DelayActive = false;
     button2DelayActive = false;
     
-    // Enter battery display mode and start monitoring for OTA trigger
+    // Enter battery display mode and start hold timer for DEV mode toggle
     bothButtonsPressed = true;
     batteryDisplayMode = true;
     batteryDisplayStartTime = millis();
-    batteryMonitorStartTime = millis(); // Start OTA monitoring timer
-    batteryMonitoringActive = true;
-    lastBatteryCheckTime = millis();
+    dualButtonHoldStartTime = millis();
+    dualButtonHoldActive = true;
     displayBatteryChargeLevel();
   } else if (bothButtonsPressedNow && bothButtonsPressed && !otaEnabled) {
-    // Both buttons still pressed - continue battery monitoring for OTA trigger
     unsigned long currentMillis = millis();
-    if (currentMillis - lastBatteryCheckTime >= BATTERY_CHECK_INTERVAL) {
-      lastBatteryCheckTime = currentMillis;
-      
-      // Read battery level (this is the monitoring action)
-      int batteryLevel = getBatteryChargeLevel();
-      
-      // Check if we've been monitoring for 10 seconds continuously
-      if (batteryMonitoringActive && (currentMillis - batteryMonitorStartTime >= BATTERY_MONITOR_DURATION)) {
-        Serial.println("\n\n=== BATTERY MONITORED FOR 10 SECONDS - TRIGGERING OTA MODE ===");
-        sendSerialToBLE("\n\n=== BATTERY MONITORED FOR 10 SECONDS - TRIGGERING OTA MODE ===");
-        
-        Serial.println("=== MEMORY DIAGNOSTICS BEFORE OTA ===");
-        sendSerialToBLE("=== MEMORY DIAGNOSTICS BEFORE OTA ===");
-        
-        size_t freeHeap = ESP.getFreeHeap();
-        size_t maxAlloc = ESP.getMaxAllocHeap();
-        size_t minFree = ESP.getMinFreeHeap();
-        size_t heapSize = ESP.getHeapSize();
-        
-        Serial.printf("Free heap: %d bytes\n", freeHeap);
-        sendSerialToBLE("Free heap: " + String(freeHeap) + " bytes");
-        
-        Serial.printf("Largest free block: %d bytes\n", maxAlloc);
-        sendSerialToBLE("Largest free block: " + String(maxAlloc) + " bytes");
-        
-        Serial.printf("Min free heap ever: %d bytes\n", minFree);
-        sendSerialToBLE("Min free heap ever: " + String(minFree) + " bytes");
-        
-        Serial.printf("Heap size: %d bytes\n", heapSize);
-        sendSerialToBLE("Heap size: " + String(heapSize) + " bytes");
-        
-        Serial.printf("Free PSRAM: %d bytes\n", ESP.getFreePsram());
-        sendSerialToBLE("Free PSRAM: " + String(ESP.getFreePsram()) + " bytes");
-        
-        Serial.printf("PSRAM size: %d bytes\n", ESP.getPsramSize());
-        sendSerialToBLE("PSRAM size: " + String(ESP.getPsramSize()) + " bytes");
-        
-        // Check for memory fragmentation
-        float fragmentation = ((float)(freeHeap - maxAlloc) / freeHeap) * 100.0;
-        Serial.printf("Memory fragmentation: %.1f%% (lower is better)\n", fragmentation);
-        sendSerialToBLE("Memory fragmentation: " + String(fragmentation, 1) + "% (lower is better)");
-        
-        // Check stack usage (approximate)
-        UBaseType_t stackHighWater = uxTaskGetStackHighWaterMark(NULL);
-        Serial.printf("Stack high water mark: %d words (lower = more stack used)\n", stackHighWater);
-        sendSerialToBLE("Stack high water mark: " + String(stackHighWater) + " words");
-        
-        Serial.println("=== CALLING enableOTA() ===");
-        sendSerialToBLE("=== CALLING enableOTA() ===");
-        enableOTA();
-        batteryMonitoringActive = false; // Reset monitoring state
-        batteryDisplayMode = false; // Exit battery display mode
-        bothButtonsPressed = false; // Reset button state
+    if (dualButtonHoldActive &&
+        (currentMillis - dualButtonHoldStartTime >= DUAL_BUTTON_DEV_HOLD_MS)) {
+      bool targetDevMode = !devModeEnabled;
+      if (setDevModeEnabled(targetDevMode)) {
+        Serial.printf("DEV mode toggled via hardware hold: %d\n", devModeEnabled ? 1 : 0);
+        sendSerialToBLE(String("DEV_MODE_HW_TOGGLE:") + String(devModeEnabled ? 1 : 0));
+      } else {
+        Serial.println("DEV mode hardware toggle failed: NVS persist error");
+        sendSerialToBLE("DEV_MODE_HW_TOGGLE_ERR:PERSIST_FAIL");
+      }
+      dualButtonHoldActive = false;
+      batteryDisplayMode = false;
+      bothButtonsPressed = false;
+      for (int i = 0; i < totalLeds; i++) {
+        mcp_digitalWrite(getLedPin(i), LOW);
       }
     }
   } else if (!bothButtonsPressedNow) {
     bothButtonsPressed = false;
-    batteryMonitoringActive = false; // Reset monitoring when buttons released
+    dualButtonHoldActive = false; // Reset hold timer when buttons released
     if (batteryDisplayMode && (millis() - batteryDisplayStartTime > 3000)) {
       // Turn off battery display after 3 seconds
       batteryDisplayMode = false;
@@ -4653,7 +4495,7 @@ void loop() {
   button1WasPressed = button1Pressed;
   button2WasPressed = button2Pressed;
 
-  // Inactivity deep sleep: 20 seconds with no activity, wake on GPIO2 (controlPanelWake)
+  // Inactivity deep sleep: 2 minutes with no activity, wake on GPIO2 (controlPanelWake)
   // Only enter when wake button is released (HIGH) so pin does not trigger immediate wake.
   // Fan pins are held LOW for legacy boards where fan power may be bypassed.
   if (!devModeEnabled && !otaEnabled && !batteryDisplayMode && !isFlushing && !motorHomingActive &&
@@ -4681,26 +4523,7 @@ void loop() {
     esp_deep_sleep_start();
   }
 
-  if (lightSleepWakeTraceLoopsRemaining > 0) {
-    traceLightSleepWake("light_sleep_after_sleep_block");
-  }
-
-  if (lightSleepPanelSettleUntilMs != 0) {
-    if (millis() < lightSleepPanelSettleUntilMs) {
-      traceLightSleepWake("light_sleep_panel_settle_resume_loop");
-      maintainEEPROMErrorIndicator();
-      feedTaskWatchdog();
-      delay(1);
-      return;
-    }
-    lightSleepPanelSettleUntilMs = 0;
-    traceLightSleepWake("light_sleep_panel_settle_complete");
-  }
-
   if (heaterOn) {
-    if (lightSleepWakeTraceLoopsRemaining > 0) {
-      traceLightSleepWake("light_sleep_heater_block_enter");
-    }
     updateHeaterPID();
     float heaterTemp = (float)heaterInput;
     unsigned long now = millis();
@@ -4727,47 +4550,25 @@ void loop() {
       stopEverything();
       LEDErrorCode(ERROR_CODE);
     }
-    if (lightSleepWakeTraceLoopsRemaining > 0) {
-      traceLightSleepWake("light_sleep_heater_block_exit");
-    }
   }
   if (isFlushing) {
-    if (lightSleepWakeTraceLoopsRemaining > 0) {
-      traceLightSleepWake("light_sleep_flush_block_enter");
-    }
     flushSequence();
     updateLEDs();
-    if (lightSleepWakeTraceLoopsRemaining > 0) {
-      traceLightSleepWake("light_sleep_flush_block_exit");
-    }
   }
   
   // Stream serial data to BLE if enabled (only when BLE is active)
   if (bleEnabled) {
-    if (lightSleepWakeTraceLoopsRemaining > 0) {
-      traceLightSleepWake("light_sleep_stream_ble_before");
-    }
     streamSerialToBLE();
-    if (lightSleepWakeTraceLoopsRemaining > 0) {
-      traceLightSleepWake("light_sleep_stream_ble_after");
-    }
   }
   
   // Check buttons for direction change only while idle.
   // During flush, LED progress is phase-driven and monotonic.
   if (!isFlushing) {
-    if (lightSleepWakeTraceLoopsRemaining > 0) {
-      traceLightSleepWake("light_sleep_idle_button1_before");
-    }
     if (readControlPanelButton1()) {
       lastActivityMillis = millis();
       clockwise = true;
       ledIndex = 0;
       ledLastUpdateMillis = millis();
-    }
-    if (lightSleepWakeTraceLoopsRemaining > 0) {
-      traceLightSleepWake("light_sleep_idle_button1_after");
-      traceLightSleepWake("light_sleep_idle_button2_before");
     }
     if (readControlPanelButton2()) {
       lastActivityMillis = millis();
@@ -4775,20 +4576,10 @@ void loop() {
       ledIndex = 0;
       ledLastUpdateMillis = millis();
     }
-    if (lightSleepWakeTraceLoopsRemaining > 0) {
-      traceLightSleepWake("light_sleep_idle_button2_after");
-    }
   }
   maintainEEPROMErrorIndicator();
-  if (lightSleepWakeTraceLoopsRemaining > 0) {
-    traceLightSleepWake("light_sleep_loop_feed_before");
-  }
   feedTaskWatchdog();
   delay(1);
-  if (lightSleepWakeTraceLoopsRemaining > 0) {
-    traceLightSleepWake("light_sleep_loop_delay_after");
-    lightSleepWakeTraceLoopsRemaining--;
-  }
 }
 
 void flushSequence() {
@@ -5444,7 +5235,7 @@ void enableOTA() {
   stopEverything();
   // Exit battery display so battery level LEDs don't stay lit; only slow circle will show
   batteryDisplayMode = false;
-  batteryMonitoringActive = false;
+  dualButtonHoldActive = false;
   // Turn off all LEDs immediately (clear battery level display if it was on)
   for (int i = 0; i < totalLeds; i++) {
     mcp_digitalWrite(getLedPin(i), LOW);
@@ -5471,13 +5262,10 @@ void disableOTA() {
   }
   
   Serial.println("Disabling OTA mode");
-  logWdtBreadcrumb("ble_disable_ota_begin");
   
   // Stop advertising
   if (blue_server) {
-    logWdtBreadcrumb("ble_disable_ota_before_stop");
     blue_server->getAdvertising()->stop();
-    logWdtBreadcrumb("ble_disable_ota_after_stop");
   }
   
   // Note: We can't easily remove the service, but we can stop using it
@@ -5729,23 +5517,17 @@ void checkOTATimeouts() {
 // Restart BLE server without OTA
 void restartBLEServer() {
   Serial.println("Restarting BLE server (without OTA)");
-  logWdtBreadcrumb("ble_restart_begin");
   
   disableOTA();
-  logWdtBreadcrumb("ble_restart_after_disable_ota");
   
   // Stop current advertising
   if (blue_server) {
-    logWdtBreadcrumb("ble_restart_before_stop");
     blue_server->getAdvertising()->stop();
-    logWdtBreadcrumb("ble_restart_after_stop");
   }
   
   // Restart advertising - OTA service exists but won't be advertised
   // (we can't easily remove it from advertising once added)
-  logWdtBreadcrumb("ble_restart_before_advertise");
   BLEDevice::startAdvertising();
-  logWdtBreadcrumb("ble_restart_after_advertise");
   
   bleEnabled = true;
   bleStartupTime = millis();

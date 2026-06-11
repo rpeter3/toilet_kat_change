@@ -277,6 +277,22 @@ The BLE trust handshake requires a physical button press near the device before 
 - Matches hardware wake wiring on v6 (both buttons already pull SW1 low).
 - Avoids trust failures when MCP expander reads differ from the GPIO2 wake line.
 
+## Hardware DEV mode toggle via dual-button hold
+
+Holding both control panel buttons for 10 seconds toggles persisted DEV mode on or off via `setDevModeEnabled()`. A short simultaneous dual press (without the 10-second hold) still stops active operations and displays battery charge level on the LEDs.
+
+**Behavior**:
+
+- Short dual press: show battery level; LEDs auto-clear a few seconds after release.
+- 10-second continuous dual hold: toggle DEV mode (persisted in NVS); blocked while an OTA window is active.
+- OTA firmware updates are app-only: send `ENABLE_OTA` over BLE; there is no hardware path to OTA mode.
+
+**Rationale**:
+
+- OTA entry via a hidden button sequence is redundant now that the app handles firmware updates.
+- A hardware DEV mode toggle remains useful for field debugging (BLE stays on, inactivity sleep disabled) without requiring the app.
+- Short dual press retains a quick on-device battery check without coupling it to OTA or DEV mode entry.
+
 ## BLE payload chunking in the Python client
 
 The Python BLE client (`toilet_bluetooth_interface.py`) splits large writes into chunks when sending to GATT characteristics.

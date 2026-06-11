@@ -141,9 +141,9 @@ Command `GET_BATTERY` retrieves the current battery charge level as a percentage
 ### Protocol
 
 - **Command**: `GET_BATTERY`
-- **Response**: `BATTERY:<n>` where `<n>` is 0–100 (integer percentage)
+- **Response**: `BATTERY:<n>,<v>V` where `<n>` is 0–100 (integer percentage) and `<v>` is the measured battery voltage (e.g. `BATTERY:85,12.34V`). Legacy firmware may respond with `BATTERY:<n>` only.
 - **Flow**: Client writes `GET_BATTERY` to command characteristic (`...fea0`), reads response from response channel (`...fea4`).
-- **Parsing**: Extract the integer from `BATTERY:NN` (e.g. `BATTERY:85` → 85). Regex: `^BATTERY[:_]?\s*(\d+)\s*%?$/i` or equivalent.
+- **Parsing**: Extract percentage and optional voltage from `BATTERY:NN,VVV` (e.g. `BATTERY:85,12.34V` → 85%, 12.34 V). Regex: `^BATTERY[:_]?\s*(\d+)\s*%?(?:[,;\s]+([\d.]+)\s*V?)?$/i` or equivalent.
 
 ### App use case
 

@@ -6,7 +6,7 @@ This project includes a BLE-based OTA implementation in `toilet_kat_change/toile
 
 ## Quick Summary
 
-- The device advertises a single main BLE service (`5636340f-afc7-47b1-b0a8-15bc9d7d29a5`) that includes the update characteristic from startup. When OTA mode is enabled (via `ENABLE_OTA` command over BLE or by holding both hardware buttons for the configured trigger sequence), the update characteristic accepts OTA commands. When disabled, it rejects with `OTA_DISABLED`.
+- The device advertises a single main BLE service (`5636340f-afc7-47b1-b0a8-15bc9d7d29a5`) that includes the update characteristic from startup. When OTA mode is enabled (via `ENABLE_OTA` command over BLE), the update characteristic accepts OTA commands. When disabled, it rejects with `OTA_DISABLED`.
 - `ota_update.py` (requires `bleak`) implements the client side: it scans for the device, sends `ENABLE_OTA`, prepares the device for OTA, streams the firmware in chunks, sends an MD5, and finalizes the update.
 
 ## Prerequisites
@@ -55,7 +55,7 @@ python ota_update.py ".pio\build\esp32dev\firmware.bin" --address "AA:BB:CC:DD:E
 
 ## Tips & Troubleshooting
 
-- **Enter OTA mode:** Hold both configured buttons for the OTA trigger sequence (see `toilet_kat_change/toilet_kat_change.ino` for details), **or** send `ENABLE_OTA` to the command characteristic (`c327b077-560f-46a1-8f35-b4ab0332fea0`) over BLE. The response `ENABLE_OTA_ACK` is read from the response characteristic (`c327b077-560f-46a1-8f35-b4ab0332fea4`). The device opens an OTA window (default 1 minute).
+- **Enter OTA mode:** Send `ENABLE_OTA` to the command characteristic (`c327b077-560f-46a1-8f35-b4ab0332fea0`) over BLE. The response `ENABLE_OTA_ACK` is read from the response characteristic (`c327b077-560f-46a1-8f35-b4ab0332fea4`). The device opens an OTA window (default 1 minute).
 - If the script fails to connect, run the scanner-only flow or use the `scanner.py` file in this directory:
 
 ```powershell

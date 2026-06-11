@@ -1,7 +1,7 @@
 Parameter,Description,1.5mil High Barrier Plastic,Compostable 1.5mil
 batteryThreshold,Battery voltage threshold,5,5
 K,Temperature setpoint,150,100
-F,How long to feed the bag at the START of a flush,6,6
+F,How long to feed the bag at the START of a flush,8,8
 T,Cooling Time,60,40
 backupTime,How long to back up the bag when re-opening,1,1
 fanDuration,How long to run the fan after feeding at the end of a flush,5,5
