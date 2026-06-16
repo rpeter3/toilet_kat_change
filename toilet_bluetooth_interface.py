@@ -124,7 +124,7 @@ class ToiletSystemInterface:
 
         # Parameter definitions with descriptions and units (defaults = 1.5mil High Barrier Plastic from material_parameters.csv)
         self.param_definitions = {
-            "batteryThreshold": {"description": "Battery voltage threshold", "units": "ADC", "default": 5.0},
+            "batteryThreshold": {"description": "Minimum usable battery percent before flush", "units": "%", "default": 7.0},
             "K": {"description": "Temperature setpoint", "units": "°C", "default": 150.0},
             "F": {"description": "How long to feed the bag at the START of a flush", "units": "sec", "default": 6.0},
             "T": {"description": "Cooling Time", "units": "sec", "default": 60.0},
@@ -145,13 +145,21 @@ class ToiletSystemInterface:
             "heaterLowerToleranceC": {"description": "Heater ON threshold below target (temp <= target - lower)", "units": "°C", "default": 0.0},
             "heaterUpperToleranceC": {"description": "Heater OFF threshold above target (temp >= target + upper can be negative)", "units": "°C", "default": 2.0},
             "COOL_OPEN_TEMP_C": {"description": "Open sealer when thermistor cools below this temperature", "units": "°C", "default": 80.0},
-            "MAX_COOL_WAIT_S": {"description": "Safety timeout for cooling stage before forcing open", "units": "sec", "default": 180.0}
+            "MAX_COOL_WAIT_S": {"description": "Safety timeout for cooling stage before forcing open", "units": "sec", "default": 180.0},
+            "minLoadedBatteryV": {"description": "Minimum loaded battery voltage during flush preflight heater test", "units": "V", "default": 11.2},
+            "maxBatterySagV": {"description": "Maximum allowed battery sag during flush preflight heater test", "units": "V", "default": 0.85},
+            "minIdleBatteryVFloor": {"description": "Minimum idle battery voltage floor before flush preflight", "units": "V", "default": 11.3},
+            "usableVFull": {"description": "Loaded battery voltage mapped to 100 percent usable", "units": "V", "default": 12.4},
+            "batteryAssessSettleMs": {"description": "Heater pulse settle time during battery assessment", "units": "ms", "default": 50.0},
+            "heaterCapV255": {"description": "Idle battery voltage for maximum heater PWM cap during assessment", "units": "V", "default": 11.23},
+            "heaterCapV170": {"description": "Idle battery voltage for 170 heater PWM cap during assessment", "units": "V", "default": 11.22},
+            "heaterCapV100": {"description": "Idle battery voltage for 100 heater PWM cap during assessment", "units": "V", "default": 11.21},
         }
         
         # Predefined parameter sets for different materials (match material_parameters.csv)
         self.parameter_sets = {
             "1.5mil High Barrier Plastic": {
-                "batteryThreshold": 5.0,
+                "batteryThreshold": 7.0,
                 "K": 150.0,
                 "F": 6.0,
                 "T": 60.0,
@@ -172,10 +180,18 @@ class ToiletSystemInterface:
                 "heaterLowerToleranceC": 0.0,
                 "heaterUpperToleranceC": 2.0,
                 "COOL_OPEN_TEMP_C": 80.0,
-                "MAX_COOL_WAIT_S": 180.0
+                "MAX_COOL_WAIT_S": 180.0,
+                "minLoadedBatteryV": 11.2,
+                "maxBatterySagV": 0.85,
+                "minIdleBatteryVFloor": 11.3,
+                "usableVFull": 12.4,
+                "batteryAssessSettleMs": 50.0,
+                "heaterCapV255": 11.23,
+                "heaterCapV170": 11.22,
+                "heaterCapV100": 11.21,
             },
             "Compostable 1.5mil": {
-                "batteryThreshold": 5.0,
+                "batteryThreshold": 7.0,
                 "K": 100.0,
                 "F": 6.0,
                 "T": 40.0,
@@ -196,17 +212,27 @@ class ToiletSystemInterface:
                 "heaterLowerToleranceC": 0.0,
                 "heaterUpperToleranceC": 2.0,
                 "COOL_OPEN_TEMP_C": 80.0,
-                "MAX_COOL_WAIT_S": 180.0
+                "MAX_COOL_WAIT_S": 180.0,
+                "minLoadedBatteryV": 11.2,
+                "maxBatterySagV": 0.85,
+                "minIdleBatteryVFloor": 11.3,
+                "usableVFull": 12.4,
+                "batteryAssessSettleMs": 50.0,
+                "heaterCapV255": 11.23,
+                "heaterCapV170": 11.22,
+                "heaterCapV100": 11.21,
             }
         }
         
-        # Parameter order (22 values, as expected by ESP32 BLE)
+        # Parameter order (30 values, as expected by ESP32 BLE)
         self.param_order = [
             "batteryThreshold", "K", "F", "T", "backupTime",
             "fanDuration", "H", "continueFeeder", "maxOpeningTime", "typicalOpeningTime",
             "MOTOR_CUT_TIME", "CUT_MODE_HEAT_TIME", "postCoolingFanDuration", "preFeedFan",
             "fanReverseTime", "fanReverseStartTime", "backupTimeAfterReopen", "CUT_MODE_TEMP",
-            "heaterLowerToleranceC", "heaterUpperToleranceC", "COOL_OPEN_TEMP_C", "MAX_COOL_WAIT_S"
+            "heaterLowerToleranceC", "heaterUpperToleranceC", "COOL_OPEN_TEMP_C", "MAX_COOL_WAIT_S",
+            "minLoadedBatteryV", "maxBatterySagV", "minIdleBatteryVFloor", "usableVFull",
+            "batteryAssessSettleMs", "heaterCapV255", "heaterCapV170", "heaterCapV100",
         ]
         self.min_heater_tolerance_gap_c = 2.0
         self.hardware_components: List[str] = [
@@ -401,9 +427,9 @@ class ToiletSystemInterface:
             print("Disconnected from ESP32")
 
     def _parse_param_payload(self, message: str) -> Optional[Dict[str, Any]]:
-        """Strict parser: exactly 22 comma-separated floats. Returns None on invalid."""
+        """Strict parser: exactly 30 comma-separated floats. Returns None on invalid."""
         values = [v.strip() for v in message.split(",")]
-        if len(values) != 22:
+        if len(values) != 30:
             return None
         try:
             floats = [float(v) for v in values]
@@ -427,7 +453,7 @@ class ToiletSystemInterface:
                 return {}
             params = self._parse_param_payload(message)
             if params is None:
-                print("Parameter read failed: invalid payload (expected 22 floats)")
+                print("Parameter read failed: invalid payload (expected 30 floats)")
                 return {}
             self.current_params = params
             return params

@@ -25,8 +25,8 @@ Now:
 - Command characteristic (write commands): `c327b077-560f-46a1-8f35-b4ab0332fea0`
 - Serial stream characteristic: `c327b077-560f-46a1-8f35-b4ab0332fea1`
 - Response characteristic (read command responses): `c327b077-560f-46a1-8f35-b4ab0332fea4`
-- Parameter read characteristic (read 22-float CSV): `c327b077-560f-46a1-8f35-b4ab0332fea5`
-- Parameter write characteristic (write 22-float CSV): `c327b077-560f-46a1-8f35-b4ab0332fea6`
+- Parameter read characteristic (read 30-float CSV): `c327b077-560f-46a1-8f35-b4ab0332fea5`
+- Parameter write characteristic (write 30-float CSV): `c327b077-560f-46a1-8f35-b4ab0332fea6`
 
 ---
 
@@ -36,7 +36,7 @@ This spec does **not** require framed payloads (e.g. `0x7E` + length + payload).
 
 - **Commands**: Plain strings written to `...fea0`
 - **Responses**: Plain strings read from `...fea4`
-- **Parameters**: Plain 22-value CSV on `...fea5` / `...fea6`
+- **Parameters**: Plain 30-value CSV on `...fea5` / `...fea6`
 - **Serial stream** (`...fea1`): Firmware sends raw text notifications; client writes `START_SERIAL` / `STOP_SERIAL` as plain strings (or optionally framed for compatibility with alternate implementations)
 
 Client implementations may use payload chunking to respect BLE MTU limits when writing large payloads, but the protocol itself is plain text. See Design_Decision_Rationale.md for why the Python client chunks writes.
@@ -47,7 +47,7 @@ Client implementations may use payload chunking to respect BLE MTU limits when w
 
 1. **Command channel (`...fea0`)**
    - Client writes command strings only.
-   - Examples: `TRUST_START`, `TRUST_STATUS`, `TRUST_CANCEL`, `GET_DEV_MODE`, `GET_FLUSH_COUNT`, `GET_BATTERY`, `SET_DEV_MODE:<0|1>`, `ENABLE_OTA`, `OTA_ROLLBACK_PREVIOUS`, `GET_LOGS`, `GET_LOGS:<offset>`
+   - Examples: `TRUST_START`, `TRUST_STATUS`, `TRUST_CANCEL`, `GET_DEV_MODE`, `GET_FLUSH_COUNT`, `GET_BATTERY`, `SET_DEV_MODE:<0|1>`, `ENABLE_OTA`, `OTA_ROLLBACK_PREVIOUS`, `GET_LOGS`, `GET_LOGS:<offset>`, `GET_OTA_DIAG`
 
 2. **Response channel (`...fea4`)**
    - Client reads command responses only.
@@ -55,10 +55,10 @@ Client implementations may use payload chunking to respect BLE MTU limits when w
 
 3. **Parameter read channel (`...fea5`)**
    - Client reads current parameter snapshot only.
-   - Payload format: exactly 22 comma-separated numeric values.
+   - Payload format: exactly 30 comma-separated numeric values.
 
 4. **Parameter write channel (`...fea6`)**
-   - Client writes 22-value CSV parameter payload only.
+   - Client writes 30-value CSV parameter payload only.
    - Write result is read from response channel (`...fea4`), expected `PARAM_WRITE_ACK` on success.
 
 ---
@@ -80,13 +80,13 @@ Read parameters directly from parameter read characteristic (`...fea5`).
 
 Validation rules:
 - split by comma
-- must be exactly 22 fields
+- must be exactly 30 fields
 - every field must parse to float
 - if invalid, treat as read failure (do not silently substitute defaults)
 
 ## 3) Parameter writes
 
-Write 22-value CSV to parameter write characteristic (`...fea6`), then read response from response characteristic (`...fea4`).
+Write 30-value CSV to parameter write characteristic (`...fea6`), then read response from response characteristic (`...fea4`).
 
 Expected responses:
 - `PARAM_WRITE_ACK` -> success
@@ -112,7 +112,7 @@ Command `GET_LOGS` retrieves persistent error logs for diagnostics. No trust han
 
 Each line is CSV: `type,timestamp,code,msg[,context]`
 
-- **type**: `reset` | `runtime` | `eeprom` | `ota` | `mcp`
+- **type**: `reset` | `runtime` | `eeprom` | `ota` | `ota_boot` | `ota_boot_fail` | `ota_rollback` | `ota_boot_ok` | `ota_spiffs_capture` | `mcp` | `boot_status` | `reset_forensics`
 - **timestamp**: millis at log time
 - **code**: numeric (0–7 for runtime; 0 for others)
 - **msg**: short string (e.g. `panic`, `motor_timeout`, `low_battery`, `MCP_UNAVAILABLE`)
@@ -126,28 +126,71 @@ Each line is CSV: `type,timestamp,code,msg[,context]`
 | runtime | Motor timeout (1), low battery (2), heater overheat (3), motor fault (4), heater current fail (5), heater max wall (6) |
 | eeprom  | EEPROM invalid (7) with reason string            |
 | ota     | OTA update failure with reason                   |
+| ota_boot | Every boot while running last OTA target partition |
+| ota_boot_fail | Abnormal reset while on OTA target partition  |
+| ota_rollback | Rollback triggered (auto, validation, manual) |
+| ota_boot_ok | OTA verification completed (2 consecutive good boots) |
+| ota_spiffs_capture | NVS log tail merged back into SPIFFS after rollback |
 | mcp     | MCP23017 I2C expander init failed                |
 
 ### App use case
 
-Use for "Export logs" / "Get support" flows: retrieve full log, concatenate chunks, then share as text (email, ticket, etc.).
+Use for "Export logs" / "Get support" flows: retrieve full log, concatenate chunks, then share as text (email, ticket, etc.). Also send `GET_OTA_DIAG` before `GET_LOGS` to include the NVS OTA rollback snapshot (see below).
+
+---
+
+## OTA Boot Diagnostics (GET_OTA_DIAG)
+
+Command `GET_OTA_DIAG` returns a compact NVS snapshot of the last OTA boot/rollback event. No trust handshake required.
+
+### Protocol
+
+- **Command**: `GET_OTA_DIAG`
+- **Response**: single line on response channel (`...fea4`), e.g.
+  `OTA_DIAG:V1|pending=0|attempts=0|streak=0|target=255|last_trigger=auto|from=ota_1|to=ota_0|reset=task_wdt|md5=abcd1234|size=1234567|reason=boot_attempts_exceeded|seq=12|tail_len=512|log_tail=...`
+- **Empty**: `OTA_DIAG:EMPTY` when no OTA diagnostic record exists
+- **Flow**: Client writes `GET_OTA_DIAG` to command characteristic (`...fea0`), reads one response from response channel
+
+### App use case
+
+Prepend `GET_OTA_DIAG` output to support log exports alongside chunked `GET_LOGS` data.
 
 ---
 
 ## Battery Level (GET_BATTERY)
 
-Command `GET_BATTERY` retrieves the current battery charge level as a percentage. No trust handshake required.
+Command `GET_BATTERY` retrieves the current **usable** battery charge level as a percentage. No trust handshake required.
 
 ### Protocol
 
 - **Command**: `GET_BATTERY`
-- **Response**: `BATTERY:<n>,<v>V` where `<n>` is 0–100 (integer percentage) and `<v>` is the measured battery voltage (e.g. `BATTERY:85,12.34V`). Legacy firmware may respond with `BATTERY:<n>` only.
+- **Response**: `BATTERY:<n>,<v>V` where `<n>` is 0–100 (integer **usable** percentage from load-based assessment) and `<v>` is idle VMON battery voltage for diagnostics (e.g. `BATTERY:85,12.34V`). Legacy firmware may respond with `BATTERY:<n>` only or return idle-based percentages.
+- **Assessment cache**: firmware refreshes the load-based assessment when stale (~2 min) and the device is idle; dual-button battery display and flush preflight always force a fresh assessment.
+- **During OTA transfer**: firmware returns the last cached usable reading (or idle voltage with level 0 if no cache); clients should not poll battery during OTA.
 - **Flow**: Client writes `GET_BATTERY` to command characteristic (`...fea0`), reads response from response channel (`...fea4`).
 - **Parsing**: Extract percentage and optional voltage from `BATTERY:NN,VVV` (e.g. `BATTERY:85,12.34V` → 85%, 12.34 V). Regex: `^BATTERY[:_]?\s*(\d+)\s*%?(?:[,;\s]+([\d.]+)\s*V?)?$/i` or equivalent.
 
 ### App use case
 
-Use for battery status indicator in the UI. Poll periodically (e.g. on connect and every 30–60 seconds) to display charge level or low-battery warning.
+Use for battery status indicator in the UI. Poll periodically (e.g. on connect and every 30–60 seconds) to display charge level or low-battery warning. Values ≤ `batteryThreshold` (default 7%) indicate flush is blocked on-device.
+
+### Dual-button battery assess report (serial stream)
+
+When the user presses both control-panel buttons while idle, firmware runs a load-based assessment and prints a multi-line report to USB Serial. If BLE serial streaming is enabled (`START_SERIAL` / trust path), the same lines are sent on the serial notify characteristic.
+
+Format (one line per row, MTU-safe):
+
+```
+=== BATTERY ASSESS ===
+tag=display vIdle=11.49V capDuty=100 steps=2
+step duty=64 vLoad=11.46V sag=0.03V adc=149 I=0.06A
+step duty=100 vLoad=10.83V sag=0.65V adc=175 I=0.07A
+summary vLoadWorst=10.83V sagWorst=0.65V usable=0% passed=0 flushAllowed=0
+limits vLoadMin=11.20V sagMax=0.40V threshold=7%
+=== END BATTERY ASSESS ===
+```
+
+Followed by a one-line operator summary: `Battery: idle=… usable=… vLoadWorst=… flushOK=…`.
 
 ---
 
@@ -281,7 +324,7 @@ Persistence-related failures such as `HWCFG_VALIDATE_ERR:PERSIST_FAIL`, `HWCFG_A
 2. Refactor all command APIs to write `...fea0` and read `...fea4`.
 3. Refactor parameter read API to use `...fea5` only.
 4. Refactor parameter write API to write `...fea6` + read ack from `...fea4`.
-5. Add strict parser for 22-float parameter payload.
+5. Add strict parser for 30-float parameter payload.
 6. Update reconnect flow to read current params from `...fea5` after trust confirmation.
 7. Add GET_LOGS flow for "Export logs" / "Get support": chunked retrieval, concatenate, present/share as text.
 8. Update tests for:

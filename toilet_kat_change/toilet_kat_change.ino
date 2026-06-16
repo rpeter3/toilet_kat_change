@@ -15,15 +15,25 @@
 #include <driver/gpio.h>   // GPIO hold during deep sleep (fan PWM pin)
 #include <esp_task_wdt.h>
 #include <mbedtls/md5.h> // Include for MD5 validation
+#include <mbedtls/base64.h>
 #include <SPIFFS.h>
+#include <esp_core_dump.h>
+#include <esp_partition.h>
+#include "ota_diag_types.h"
 #define LED_PHASE_COUNT 5
 
 // Error log (SPIFFS, bounded, BLE-retrievable)
 #define LOG_FILE "/errors.txt"
 #define SPIFFS_PARTITION_LABEL "storage"
-#define MAX_LOG_SIZE 8192
+#define MAX_LOG_SIZE 204800
+#define LOG_HEADROOM 25600
+#define LOG_SLEEP_TRIM_TRIGGER (MAX_LOG_SIZE - LOG_HEADROOM)
+#define LOG_TRIM_TARGET 153600
+#define LOG_TRIM_TEMP_FILE "/errors.tmp"
+#define LOG_TRIM_COPY_CHUNK 512
 #define LOG_CHUNK_SIZE 450
 #define LOG_LINE_MAX_LEN 200
+#define CORE_CHUNK_RAW 336
 
 //########################################################################
 // Uncomment to test heater fail-safe WDT recovery: stops TWDT feed during flush while heater is on.
@@ -110,6 +120,7 @@ void trustDoubleBeep();
 #define EEPROM_SIZE 512
 #define PARAM_START_ADDR 0
 #define PARAM_MAGIC_NUMBER 0x1234
+#define PARAM_COUNT 30
 #define HW_VERSION_ADDR 200
 #define HW_VERSION_MAGIC 0xFADE
 #define FLUSH_COUNT_MAGIC_ADDR 300
@@ -205,13 +216,14 @@ struct HWCFGConfigStore {
   HWCFGProfileEntry profiles[HWCFG_PROFILE_MAX];
   uint32_t crc32;
 };
+
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 //set this when building the firmware
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-const char* SOFTWARE_VERSION_NUMBER = "4.0.0";
-const char* FACTORY_SOFTWARE_DATE = "2026-06-11";
+const char* SOFTWARE_VERSION_NUMBER = "4.0.10";
+const char* FACTORY_SOFTWARE_DATE = "2026-06-13";
 const char* SOFTWARE_BUILD_DATE = __DATE__ " " __TIME__;
 
 // Forward declarations
@@ -256,10 +268,53 @@ bool initializeHWCFGStore();
 String handleHWCFGCommand(const String& cmd);
 void enterEEPROMInvalidErrorState(const char* reason);
 void initErrorLog();
+void logBootCheckpoint(const char* phase);
+void resetBootTiming();
+void logBootTiming(const char* phase);
+void captureCrashPendingRtc();
+void flushPendingCrashLog();
+void logCoredumpStatus();
+String buildBootInfoResponse();
+String readCoredumpChunk(size_t offset);
+bool clearCoredumpImage();
 void logError(const char* type, int code, const char* msg);
 void logError(const char* type, int code, const char* msg, bool includeContext);
+bool trimErrorLogToSize(size_t targetBytes);
+void logDevFlush(const char* type, int code, const char* msg, bool includeContext = true);
+void logDevFlushStatusTick();
+void setFlushStep(int newStep, bool logTransition = true);
 String readLogChunk(size_t offset);
 float readBatteryVoltage();
+float readBatteryVoltageQuiet();
+float readHeaterCurrentQuiet();
+float readBatteryTemperatureQuiet();
+bool measureBatteryUnderLoad(float* vIdle, float* vLoad, int testDuty, uint16_t settleMs, const char* testTag = nullptr);
+int getHeaterPwmCapForVoltage(float batteryV);
+int getEffectiveHeaterPwmCap(float batteryV);
+float minIdleBatteryV();
+bool assessBatteryUsable(const char* tag, bool forceRefresh, bool* outFlushAllowed = nullptr);
+void streamBatteryAssessReport(const char* tag);
+bool isBatteryOkForHeaterTest();
+bool isFlushAllowedByBattery(bool forceRefresh = false);
+void applyBatteryAssessDefaults();
+bool validateBatteryAssessParams();
+void applyBatteryAssessParamsFromCsv(const float* parameters_list, int count);
+void renderBatteryLevelLeds(int chargeLevel);
+void showBatteryLevelFeedback(int chargeLevel, bool enterDisplayMode);
+void logPowerTestEvent(const char* phase, const char* msg, bool includeContext = false);
+void latchLowBatteryStop(const char* reason);
+bool isM1MotorActive();
+bool shouldSkipBootHeaterTest(const char** skipReason);
+void initBrownoutStreak();
+void clearBrownoutStreakOnSuccessfulBoot();
+void loadMotorHomingDeferredFromNvs();
+void saveMotorHomingDeferredToNvs(const char* reason);
+void clearMotorHomingDeferredFromNvs();
+void deferMotorHoming(const char* reason);
+void clearMotorHomingDeferred();
+void applyLoadedMotorHomingDeferred();
+bool shouldDeferHomingAtBoot(const char** reason);
+void tryStartDeferredHomingIfReady();
 float readTemperature();
 float readM1Current();
 float readHeaterCurrent();
@@ -275,6 +330,15 @@ void handleOTAChunk(uint8_t* data, size_t length);
 void resetOTAState();
 void checkBootFailure();
 void saveRollbackInfo();
+void recordOtaBootAttempt();
+void logOtaBootAttemptToSpiffs();
+void incrementOtaGoodBootStreak();
+void confirmOtaBootOk();
+void mergeNvsLogTailToSpiffs();
+void markOtaPendingVerify();
+bool logOtaRollback(const char* trigger, const char* reason, String* errorCode);
+String buildOtaDiagResponse();
+bool isOnOtaTargetPartition();
 void enableOTA();
 void disableOTA();
 void restartBLEServer();
@@ -298,16 +362,17 @@ void checkHeaterBootSafety();
 void initTaskWatchdog();
 void feedTaskWatchdog();
 void wdtCheckpoint();
+void wdtCheckpoint(const char* phase);
 void wdtSafeDelay(unsigned long ms);
 void updateHeaterSessionRtc();
 void checkHeaterRuntimeSafety();
-void startMotorHoming();
+void startMotorHoming(bool batteryPreflightPassed = false);
 void updateMotorHoming();
 void runHeaterSafetyBootSequence();
 int readHeaterCurrentAdc();
 void logAbnormalResetForensics();
 void logBootStatus();
-void testHeaterCurrent();
+void testHeaterCurrent(bool lowBatteryAsError = false);
 void initHeaterPwm();
 void applyHeaterPwmDuty(int duty);
 void updateHeaterPID();
@@ -319,6 +384,15 @@ void initCorePlatformServices();
 void LEDErrorCode(int errorCode);
 void stopEverything();
 void flashLeds();
+bool mechanismNeedsHomingAfterCancel();
+void stopFlushActiveOperations();
+void clearFlushStateForCancel();
+void completeCancelRecoveryReady();
+void beginCancelRecoveryHoming();
+bool abortFlushForCancel();
+bool isDeviceIdleForDualButton();
+bool acceptFlushCancel(bool button1Pressed, bool button2Pressed);
+void maintainCancelRecoveryLeds();
 
 // Macros to automatically forward Serial output to BLE when streaming is enabled
 #define SerialBLE_print(x) do { Serial.print(x); if(serial_streaming_enabled) sendSerialToBLEImpl(x); } while(0)
@@ -389,7 +463,7 @@ const int typicalOpeningTime = 5; //parameters_list[12] */
 
 // Parameters (defaults: 1.5mil High Barrier Plastic from material_parameters.csv)
 // Can't have global constant variables in C
-int batteryThreshold = 5; //parameters_list[0]
+int batteryThreshold = 7; //parameters_list[0] minimum usable % before flush
 float K = 150.0; //parameters_list[1]
 int F = 8; //parameters_list[2]
 long T = 60; //parameters_list[3] - Estimated cooling time for LED pacing (seconds)
@@ -414,10 +488,22 @@ float heaterLowerToleranceC = 0.0; //parameters_list[18] - Turn heater ON at tar
 float heaterUpperToleranceC = 2.0; //parameters_list[19] - Turn heater OFF at target+upper (can be negative)
 float COOL_OPEN_TEMP_C = 80.0f; //parameters_list[20] - Open sealer below this thermistor temp
 long MAX_COOL_WAIT_S = 180; //parameters_list[21] - Safety fallback max cooling wait (seconds)
+float minLoadedBatteryV = 11.2f; //parameters_list[22]
+float maxBatterySagV = 0.85f; //parameters_list[23]
+float minIdleBatteryVFloor = 11.3f; //parameters_list[24]
+float usableVFull = 12.4f; //parameters_list[25]
+uint16_t batteryAssessSettleMs = 50; //parameters_list[26]
+float heaterCapV255 = 11.6f; //parameters_list[27]
+float heaterCapV170 = 11.5f; //parameters_list[28]
+float heaterCapV100 = 11.4f; //parameters_list[29]
 float heaterTargetTemp = 150.0;    // Active heater target (K or CUT_MODE_TEMP)
+
+const int FLUSH_STEP_CANCEL_COOL = 14;
 
 bool isFlushing = false;
 int flushStep = 0;
+bool cancelRecoveryHomingPending = false;
+bool flushCancelRecoveryActive = false;
 bool case5FeedExecuted = false; // Flag to prevent multiple M2 activations in case 5
 bool case1FeedStarted = false; // Flag to track if M2 has started in case 1
 bool case6CutMotorRun = false;  // Flag: cut motor run after H (in cut mode); then heat continues for CUT_MODE_HEAT_TIME
@@ -481,10 +567,16 @@ const unsigned long INACTIVITY_SLEEP_MS = 2 * 60 * 1000;  // 2 minutes - then de
 // Runtime DEV mode (persisted in NVS): when enabled, BLE stays on and inactivity sleep is disabled.
 const char* DEV_MODE_NAMESPACE = "system";
 const char* DEV_MODE_KEY = "dev_mode";
+const char* HOMING_DEFERRED_NVS_KEY = "homing_deferred";
+const char* HOMING_DEFER_REASON_NVS_KEY = "homing_defer_reason";
+const size_t HOMING_DEFER_REASON_MAX = 32;
+const unsigned long HOMING_RETRY_CHECK_INTERVAL_MS = 5000;
 const char* HW_MATRIX_NAMESPACE = "hwmeta";
 const char* HW_MATRIX_ACTIVE_KEY = "matrix";
 const char* HW_MATRIX_LAST_GOOD_KEY = "matrix_lkg";
 bool devModeEnabled = false;
+const unsigned long DEV_FLUSH_STATUS_INTERVAL_MS = 5000;  // 0.2 Hz status snapshots during flush
+unsigned long lastDevFlushStatusLogMillis = 0;
 // M1/M2 fault handling controls.
 bool ignoreM12Faults = false;
 bool hasIgnoredM12Fault = false;
@@ -512,6 +604,10 @@ unsigned long dualButtonHoldStartTime = 0;
 unsigned long otaWindowStartTime = 0;
 bool dualButtonHoldActive = false;
 const unsigned long DUAL_BUTTON_DEV_HOLD_MS = 10000; // 10 seconds
+const unsigned long DUAL_BUTTON_EDGE_GUARD_MS = 300;
+const unsigned long DUAL_BUTTON_RELEASE_DEBOUNCE_MS = 100;
+unsigned long lastDualButtonEdgeMillis = 0;
+unsigned long bothButtonsReleaseStartMillis = 0;
 const unsigned long OTA_WINDOW_DURATION = 60000; // 1 minute
 const unsigned long OTA_MODE_MAX_DURATION = 2 * 60 * 1000; // 2 minutes - then always exit OTA and stop circle
 
@@ -541,12 +637,14 @@ bool setOTAState(OTAState nextState, const char* reason);
 bool isKnownOTACommand(const String& command);
 void handleOTACommand(const String& command);
 void checkOTATimeouts();
+void abortOtaSessionAndDisconnect(const char* reasonCode);
+void disconnectBleClient();
 String last_update_status = "UPDATE_IDLE";
 unsigned long otaStateEnteredAt = 0;
 unsigned long otaLastChunkMillis = 0;
 const unsigned long OTA_PREPARE_TIMEOUT_MS = 15000;
-const unsigned long OTA_RECEIVE_INACTIVITY_TIMEOUT_MS = 20000;
-const unsigned long OTA_FINALIZE_TIMEOUT_MS = 15000;
+const unsigned long OTA_RECEIVE_INACTIVITY_TIMEOUT_MS = 60UL * 1000UL;
+const unsigned long OTA_FINALIZE_TIMEOUT_MS = 120UL * 1000UL;
 esp_ota_handle_t ota_handle = 0;
 const esp_partition_t *ota_partition = NULL;
 const esp_partition_t *running_partition = NULL;
@@ -613,6 +711,7 @@ const int HEATER_CURRENT_ADC_THRESHOLD = 200;
 const unsigned long HEATER_ABSOLUTE_MAX_ON_MS = 20UL * 60UL * 1000UL;
 const unsigned long TASK_WDT_TIMEOUT_MS = 5000UL;
 const uint32_t HEATER_RTC_MAGIC = 0x4854A101UL;
+const uint32_t CRASH_RTC_MAGIC = 0x43525348UL;
 
 struct HeaterSessionRtc {
   uint32_t magic;
@@ -625,7 +724,28 @@ struct HeaterSessionRtc {
   uint8_t lastCutBag;
 };
 
+struct CrashPendingRtc {
+  uint32_t magic;
+  uint32_t uptimeMs;
+  char lastPhase[24];
+  uint8_t flushStep;
+  uint8_t heaterOn;
+  uint8_t pendingResetReason;
+};
+
+const uint32_t BROWNOUT_RTC_MAGIC = 0x424F0054UL;
+
+struct BrownoutRtc {
+  uint32_t magic;
+  uint8_t streak;
+};
+
 RTC_NOINIT_ATTR static HeaterSessionRtc heaterRtc;
+RTC_NOINIT_ATTR static CrashPendingRtc crashRtc;
+RTC_NOINIT_ATTR static BrownoutRtc brownoutRtc;
+static const char* g_bootPhase = "start";
+static unsigned long g_bootTimingLastMs = 0;
+static size_t g_coredumpSize = 0;
 bool taskWatchdogInitialized = false;
 unsigned long heaterOutputOnSinceMs = 0;
 unsigned long heaterRuntimeMismatchLastCheckMs = 0;
@@ -643,6 +763,11 @@ bool motorHomingActive = false;
 uint8_t motorHomingPhase = HOMING_IDLE;
 unsigned long motorHomingPhaseStartMillis = 0;
 bool motorHomingStartOpenSwitchClosed = false;
+bool motorHomingDeferred = false;
+char motorHomingDeferReason[HOMING_DEFER_REASON_MAX] = "";
+unsigned long lastHomingRetryCheckMs = 0;
+static bool lastBootHeaterTestSkipped = false;
+static const char* lastBootHeaterSkipReason = nullptr;
 const uint16_t VIRGIN_EEPROM_MAGIC = 0xFFFF;
 bool eepromErrorState = false;
 bool lastEEPROMWriteVerified = false;
@@ -661,6 +786,8 @@ HardwareMatrix hardwareMatrixScratchLastGood = {};
 HWCFGConfigStore hwcfgScratchActive = {};
 HWCFGConfigStore hwcfgScratchLastGood = {};
 HWCFGConfigStore hwcfgSnapshotStore = {};
+// File-scope verify buffer (~11KB); must not live on loopTask stack in saveHWCFGBlobFile.
+HWCFGConfigStore hwcfgVerifyScratch = {};
 HardwareMatrix hwcfgSnapshotMatrix = {};
 const char* HARDWARE_COMPONENT_NAMES[HW_COMPONENT_COUNT] = {
   "CONTROL_PANEL",
@@ -697,7 +824,39 @@ const int FAN_PWM_RESOLUTION = 8;
 const int HEATER_PWM_FREQ = 1000;
 const int HEATER_PWM_RESOLUTION = 8;
 const int HEATER_PWM_MAX = 255;
+const int HEATER_TEST_START_DUTY = 64;
+const float PREFLIGHT_CAP_MARGIN_V = 0.15f;
+const unsigned long BATTERY_ASSESS_CACHE_MS = 120000UL;
+const uint8_t RUNTIME_SAG_STRIKES = 2;
+const uint8_t BROWNOUT_STREAK_LIMIT = 2;
 bool heaterPwmAttached = false;
+
+struct BatteryAssessStep {
+  int duty;
+  float vLoad;
+  float sag;
+  int heaterAdc;
+  float heaterA;
+};
+
+struct BatteryAssessment {
+  float vIdle;
+  float vLoadWorst;
+  float sagWorst;
+  int capDuty;
+  int usablePercent;
+  bool assessPassed;
+  bool flushAllowed;
+  unsigned long lastAssessMs;
+  bool valid;
+  bool inProgress;
+  uint8_t stepCount;
+  BatteryAssessStep steps[3];
+};
+
+static BatteryAssessment batteryAssessment = {0.0f, 0.0f, 0.0f, 0, 0, false, false, 0UL, false, false, 0, {}};
+static uint8_t runtimeSagStrikes = 0;
+static unsigned long runtimeSagLastStrikeMs = 0;
 
 // Motor shield instance - M1&M2 speed control only. Enable/fault pins are
 // handled separately because this hardware has one MAX14870 per motor.
@@ -853,14 +1012,18 @@ class server_callbacks: public BLEServerCallbacks {
       fanReverseStartTime = parameters_list[15];
       backupTimeAfterReopen = parameters_list[16];
       CUT_MODE_TEMP = parameters_list[17];
-      if (k >= 22) {
-        COOL_OPEN_TEMP_C = parameters_list[20];
-        MAX_COOL_WAIT_S = (long)parameters_list[21];
-      }
       if (k >= 20) {
         heaterLowerToleranceC = parameters_list[18];
         heaterUpperToleranceC = parameters_list[19];
         enforceHeaterToleranceGap("server_disconnect_write");
+      }
+      if (k >= 22) {
+        COOL_OPEN_TEMP_C = parameters_list[20];
+        MAX_COOL_WAIT_S = (long)parameters_list[21];
+      }
+      applyBatteryAssessParamsFromCsv(parameters_list, k);
+      if (!validateBatteryAssessParams()) {
+        applyBatteryAssessDefaults();
       }
       if (!(isFlushing && cutBag && case6CutMotorRun)) {
         heaterTargetTemp = K;
@@ -902,6 +1065,8 @@ class update_characteristic_callbacks: public BLECharacteristicCallbacks {
         // Handle OTA chunks
         if (otaState == OTA_RECEIVING) {
           handleOTAChunk(data, message_length);
+          // Restore readable status — BLE read otherwise returns last binary chunk.
+          publishOTAStatus(last_update_status, false);
           return;
         }
         
@@ -1013,8 +1178,10 @@ class command_characteristic_callbacks: public BLECharacteristicCallbacks {
       return;
     }
     if (cmd == "GET_BATTERY") {
-      int level = getBatteryChargeLevel();
-      float batteryVoltage = readBatteryVoltage();
+      bool flushAllowed = false;
+      assessBatteryUsable("get_battery", false, &flushAllowed);
+      int level = batteryAssessment.valid ? batteryAssessment.usablePercent : 0;
+      float batteryVoltage = batteryAssessment.valid ? batteryAssessment.vIdle : readBatteryVoltageQuiet();
       String batteryMessage = String("BATTERY:") + String(level) + "," + String(batteryVoltage, 2) + "V";
       writeResponseToChannel(batteryMessage);
       Serial.printf("Processed GET_BATTERY, returned %s\n", batteryMessage.c_str());
@@ -1128,6 +1295,38 @@ class command_characteristic_callbacks: public BLECharacteristicCallbacks {
       sendSerialToBLE("Processed GET_LOGS");
       return;
     }
+    if (cmd == "GET_BOOT_INFO") {
+      String response = buildBootInfoResponse();
+      writeResponseToChannel(response);
+      Serial.printf("Processed GET_BOOT_INFO -> %s\n", response.c_str());
+      sendSerialToBLE("Processed GET_BOOT_INFO");
+      return;
+    }
+    if (cmd == "GET_COREDUMP" || cmd.startsWith("GET_COREDUMP:")) {
+      size_t offset = 0;
+      if (cmd.startsWith("GET_COREDUMP:")) {
+        offset = (size_t)cmd.substring(13).toInt();
+      }
+      String response = readCoredumpChunk(offset);
+      writeResponseToChannel(response);
+      Serial.printf("Processed GET_COREDUMP offset=%u -> %s\n", (unsigned)offset, response.substring(0, 60).c_str());
+      sendSerialToBLE("Processed GET_COREDUMP");
+      return;
+    }
+    if (cmd == "CLEAR_COREDUMP") {
+      bool cleared = clearCoredumpImage();
+      writeResponseToChannel(cleared ? "COREDUMP_CLEARED" : "COREDUMP_CLEAR_ERR");
+      Serial.println(cleared ? "Processed CLEAR_COREDUMP" : "CLEAR_COREDUMP failed");
+      sendSerialToBLE(cleared ? "Processed CLEAR_COREDUMP" : "CLEAR_COREDUMP failed");
+      return;
+    }
+    if (cmd == "GET_OTA_DIAG") {
+      String response = buildOtaDiagResponse();
+      writeResponseToChannel(response);
+      Serial.printf("Processed GET_OTA_DIAG -> %s\n", response.substring(0, 80).c_str());
+      sendSerialToBLE("Processed GET_OTA_DIAG");
+      return;
+    }
     if (cmd.startsWith("SET_DEV_MODE:")) {
       String valueString = cmd.substring(String("SET_DEV_MODE:").length());
       valueString.trim();
@@ -1154,7 +1353,7 @@ class command_characteristic_callbacks: public BLECharacteristicCallbacks {
   }
 };
 
-// Param read channel (fea5): READ only. Returns 22-float CSV or AUTH_REQUIRED if not trusted.
+// Param read channel (fea5): READ only. Returns 30-float CSV or AUTH_REQUIRED if not trusted.
 class param_read_characteristic_callbacks: public BLECharacteristicCallbacks {
   void onRead(BLECharacteristic *pCharacteristic) {
     if (pCharacteristic->getUUID().toString() == PARAM_READ_CHARACTERISTIC_UUID) {
@@ -1169,7 +1368,7 @@ class param_read_characteristic_callbacks: public BLECharacteristicCallbacks {
   }
 };
 
-// Param write channel (fea6): WRITE only. Parses 22-float CSV, applies params, writes ack to response channel.
+// Param write channel (fea6): WRITE only. Parses 30-float CSV, applies params, writes ack to response channel.
 class param_write_characteristic_callbacks: public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *pCharacteristic) {
     if (pCharacteristic->getUUID().toString() != PARAM_WRITE_CHARACTERISTIC_UUID) return;
@@ -1205,9 +1404,9 @@ class param_write_characteristic_callbacks: public BLECharacteristicCallbacks {
       k++;
     }
     
-    if (k != 22) {
+    if (k != PARAM_COUNT) {
       writeResponseToChannel("PARAM_WRITE_ERR:BAD_FORMAT");
-      Serial.printf("Param write rejected: expected 22 values, got %d\n", k);
+      Serial.printf("Param write rejected: expected %d values, got %d\n", PARAM_COUNT, k);
       return;
     }
     
@@ -1234,6 +1433,13 @@ class param_write_characteristic_callbacks: public BLECharacteristicCallbacks {
     enforceHeaterToleranceGap("param_write");
     COOL_OPEN_TEMP_C = parameters_list[20];
     MAX_COOL_WAIT_S = (long)parameters_list[21];
+    applyBatteryAssessParamsFromCsv(parameters_list, k);
+    if (!validateBatteryAssessParams()) {
+      writeResponseToChannel("PARAM_WRITE_ERR:BAD_FORMAT");
+      Serial.println("Param write rejected: invalid battery assessment parameters");
+      loadParametersFromEEPROM();
+      return;
+    }
     if (!(isFlushing && cutBag && case6CutMotorRun)) {
       heaterTargetTemp = K;
     }
@@ -1316,7 +1522,9 @@ void configureControlPanelLedOutputs() {
 
 // Function to initialize the MCP23017 for output and input
 void mcp_setup() {
+  logBootTiming("mcp_start");
   delay(200);  // Allow power rail and I2C bus to settle after reset
+  logBootTiming("mcp_rail_settle_done");
   // ✅ Use GPIO6 for SDA and GPIO7 for SCL
   myI2C.begin(6, 7, 20000);
   myI2C.setTimeOut(50);
@@ -1326,23 +1534,36 @@ void mcp_setup() {
   const unsigned long retryDelayMs = 100;
   mcpInitialized = false;
   for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+    unsigned long attemptStart = millis();
     if (mcp.begin_I2C(0x20, &myI2C)) {
       mcpInitialized = true;
       Serial.printf("MCP23017 Initialized Successfully on attempt %d/%d.\n", attempt, maxAttempts);
+      char msg[48];
+      snprintf(msg, sizeof(msg), "mcp_ok_attempt_%d,%lums", attempt, millis() - attemptStart);
+      logBootTiming(msg);
       break;
     }
-    Serial.printf("WARNING: MCP23017 init attempt %d/%d failed.\n", attempt, maxAttempts);
+    char msg[48];
+    snprintf(msg, sizeof(msg), "mcp_fail_attempt_%d,%lums", attempt, millis() - attemptStart);
+    Serial.printf("WARNING: MCP23017 init attempt %d/%d failed (%lums).\n",
+                  attempt, maxAttempts, millis() - attemptStart);
+    logBootTiming(msg);
     delay(retryDelayMs);
   }
 
   if (!mcpInitialized) {
     Serial.println("ERROR: MCP23017 unavailable after retries - continuing without expander.");
-    logError("mcp", 0, "MCP_UNAVAILABLE", false);
+    logBootTiming("mcp_unavailable");
+    if (errorLogInitialized) {
+      logError("mcp", 0, "MCP_UNAVAILABLE", false);
+    }
     return;
   }
 
+  logBootTiming("mcp_configure_start");
   configureControlPanelMcpInputs();
   configureControlPanelLedOutputs();
+  logBootTiming("mcp_configure_done");
 }
 
 // Function to write a value to a specific MCP23017 pin
@@ -1430,7 +1651,7 @@ void server_setup(bool includeOTA = false) {
                                                             );
   response_characteristic->setValue("READY");
   
-  // Param read channel (fea5): READ only - 22-float CSV snapshot
+  // Param read channel (fea5): READ only - 30-float CSV snapshot
   param_read_characteristic = blue_service->createCharacteristic(
                                                                 PARAM_READ_CHARACTERISTIC_UUID,
                                                                 BLECharacteristic::PROPERTY_READ
@@ -1438,7 +1659,7 @@ void server_setup(bool includeOTA = false) {
   param_read_characteristic->setCallbacks(new param_read_characteristic_callbacks());
   param_read_characteristic->setValue(buildParamCSV().c_str());
   
-  // Param write channel (fea6): WRITE only - client writes 22-float CSV
+  // Param write channel (fea6): WRITE only - client writes 30-float CSV
   param_write_characteristic = blue_service->createCharacteristic(
                                                                 PARAM_WRITE_CHARACTERISTIC_UUID,
                                                                 BLECharacteristic::PROPERTY_WRITE
@@ -1503,7 +1724,10 @@ void server_setup(bool includeOTA = false) {
 
 // Function to save parameters to EEPROM
 void saveParametersToEEPROM() {
+  logBootTiming("eeprom_params_save_start");
+  unsigned long beginStart = millis();
   EEPROM.begin(EEPROM_SIZE);
+  Serial.printf("Boot timing: eeprom_params_begin,%lums\n", millis() - beginStart);
   lastEEPROMWriteVerified = false;
   
   // Write magic number to verify valid data
@@ -1536,8 +1760,21 @@ void saveParametersToEEPROM() {
   EEPROM.put(addr, heaterUpperToleranceC); addr += sizeof(heaterUpperToleranceC);
   EEPROM.put(addr, COOL_OPEN_TEMP_C); addr += sizeof(COOL_OPEN_TEMP_C);
   EEPROM.put(addr, MAX_COOL_WAIT_S); addr += sizeof(MAX_COOL_WAIT_S);
+  EEPROM.put(addr, minLoadedBatteryV); addr += sizeof(minLoadedBatteryV);
+  EEPROM.put(addr, maxBatterySagV); addr += sizeof(maxBatterySagV);
+  EEPROM.put(addr, minIdleBatteryVFloor); addr += sizeof(minIdleBatteryVFloor);
+  EEPROM.put(addr, usableVFull); addr += sizeof(usableVFull);
+  EEPROM.put(addr, batteryAssessSettleMs); addr += sizeof(batteryAssessSettleMs);
+  EEPROM.put(addr, heaterCapV255); addr += sizeof(heaterCapV255);
+  EEPROM.put(addr, heaterCapV170); addr += sizeof(heaterCapV170);
+  EEPROM.put(addr, heaterCapV100); addr += sizeof(heaterCapV100);
   
+  unsigned long commitStart = millis();
   bool commitOk = EEPROM.commit();
+  char commitMsg[64];
+  snprintf(commitMsg, sizeof(commitMsg), "eeprom_params_commit,%lums,ok=%d",
+           millis() - commitStart, commitOk ? 1 : 0);
+  logBootTiming(commitMsg);
   
   // Verify the write by reading back the magic number
   uint16_t verifyMagic;
@@ -1547,6 +1784,7 @@ void saveParametersToEEPROM() {
     lastEEPROMWriteVerified = true;
     Serial.println("Parameters saved to EEPROM - verification successful");
     SerialBLE_println("Parameters saved to EEPROM - verification successful");
+    logBootTiming("eeprom_params_save_verified");
   } else {
     Serial.printf("ERROR: EEPROM write verification failed! Commit OK: %s, Expected: 0x%04X, Read: 0x%04X\n", 
                   commitOk ? "true" : "false", PARAM_MAGIC_NUMBER, verifyMagic);
@@ -1555,37 +1793,231 @@ void saveParametersToEEPROM() {
     SerialBLE_print(", Read: 0x");
     SerialBLE_print(String(verifyMagic, HEX));
     SerialBLE_println();
+    logBootTiming("eeprom_params_save_verify_fail");
   }
   
   EEPROM.end();
+  logBootTiming("eeprom_params_save_done");
 }
 
+static bool isAbnormalResetReason(esp_reset_reason_t reason);
+static const char* resetReasonToString(esp_reset_reason_t reason);
+
 void initErrorLog() {
+  unsigned long spiffsBeginStart = millis();
   bool mounted = SPIFFS.begin(true, "/spiffs", 10, SPIFFS_PARTITION_LABEL);
+  unsigned long spiffsBeginMs = millis() - spiffsBeginStart;
   if (!mounted) {
-    Serial.println("WARN: SPIFFS begin(storage) failed, trying default partition");
+    Serial.printf("WARN: SPIFFS begin(storage) failed after %lums, trying default partition\n", spiffsBeginMs);
+    spiffsBeginStart = millis();
     mounted = SPIFFS.begin(true);
+    spiffsBeginMs = millis() - spiffsBeginStart;
   }
+  Serial.printf("Boot timing: spiffs_begin,%lums\n", spiffsBeginMs);
   if (!mounted) {
     Serial.println("WARN: SPIFFS init failed, error log disabled");
     return;
   }
+  unsigned long probeStart = millis();
   File probe = SPIFFS.open(LOG_FILE, "a");
   if (!probe) {
+    Serial.printf("Boot timing: spiffs_probe_fail,%lums\n", millis() - probeStart);
     Serial.println("WARN: SPIFFS log file not writable, error log disabled");
     return;
   }
   probe.close();
+  Serial.printf("Boot timing: spiffs_probe_ok,%lums\n", millis() - probeStart);
   errorLogInitialized = true;
   Serial.printf("SPIFFS mounted: total=%u used=%u bytes, log=%s\n",
                 (unsigned)SPIFFS.totalBytes(), (unsigned)SPIFFS.usedBytes(), LOG_FILE);
+  logError("boot_checkpoint", 0, "serial_ok", false);
+  logError("boot_checkpoint", 0, "gpio_safe", false);
+  logError("boot_checkpoint", 0, "nvs_ok", false);
+  unsigned long flushStart = millis();
+  flushPendingCrashLog();
+  logBootTiming("crash_flush_done");
+  Serial.printf("Boot timing: crash_flush,%lums\n", millis() - flushStart);
+  logBootCheckpoint("spiffs_ok");
+}
+
+void resetBootTiming() {
+  g_bootTimingLastMs = 0;
+}
+
+void logBootTiming(const char* phase) {
+  if (!phase || !phase[0]) {
+    return;
+  }
+  unsigned long now = millis();
+  unsigned long delta = (g_bootTimingLastMs == 0) ? 0UL : (now - g_bootTimingLastMs);
+  g_bootTimingLastMs = now;
+
+  char msg[96];
+  snprintf(msg, sizeof(msg), "%s,+%lums,total=%lums", phase, delta, now);
+  Serial.printf("Boot timing: %s\n", msg);
+  if (errorLogInitialized) {
+    logError("boot_timing", (int)delta, msg, false);
+  }
+}
+
+void logBootCheckpoint(const char* phase) {
+  if (!phase || !phase[0]) {
+    return;
+  }
+  g_bootPhase = phase;
+  Serial.printf("Boot checkpoint: %s\n", phase);
+  if (errorLogInitialized) {
+    logError("boot_checkpoint", 0, phase, false);
+  }
+  logBootTiming(phase);
+}
+
+void captureCrashPendingRtc() {
+  crashRtc.magic = CRASH_RTC_MAGIC;
+  crashRtc.uptimeMs = millis();
+  strncpy(crashRtc.lastPhase, g_bootPhase, sizeof(crashRtc.lastPhase) - 1);
+  crashRtc.lastPhase[sizeof(crashRtc.lastPhase) - 1] = '\0';
+  crashRtc.flushStep = (uint8_t)flushStep;
+  crashRtc.heaterOn = (heaterOn || heaterOutputOn) ? 1 : 0;
+  crashRtc.pendingResetReason =
+      (heaterRtc.magic == HEATER_RTC_MAGIC) ? heaterRtc.pendingResetReason : 0;
+}
+
+void flushPendingCrashLog() {
+  if (!errorLogInitialized || crashRtc.magic != CRASH_RTC_MAGIC) {
+    return;
+  }
+
+  char msg[128];
+  snprintf(msg, sizeof(msg), "phase=%s,uptime_ms=%lu,step=%u,heater=%u,pending_rr=%u",
+           crashRtc.lastPhase,
+           (unsigned long)crashRtc.uptimeMs,
+           (unsigned)crashRtc.flushStep,
+           (unsigned)crashRtc.heaterOn,
+           (unsigned)crashRtc.pendingResetReason);
+  logError("panic_pending", 0, msg, false);
+  crashRtc.magic = 0;
+}
+
+static bool detectCoredump(size_t* outSize) {
+  if (!outSize) {
+    return false;
+  }
+  *outSize = 0;
+
+  if (esp_core_dump_image_check() != ESP_OK) {
+    return false;
+  }
+
+  size_t imageAddr = 0;
+  size_t imageSize = 0;
+  if (esp_core_dump_image_get(&imageAddr, &imageSize) != ESP_OK || imageSize == 0) {
+    return false;
+  }
+
+  *outSize = imageSize;
+  g_coredumpSize = imageSize;
+  return true;
+}
+
+void logCoredumpStatus() {
+  if (!errorLogInitialized) {
+    return;
+  }
+
+  esp_reset_reason_t resetReason = esp_reset_reason();
+  if (!isAbnormalResetReason(resetReason)) {
+    return;
+  }
+
+  size_t imageSize = 0;
+  if (!detectCoredump(&imageSize)) {
+    return;
+  }
+
+  char msg[64];
+  snprintf(msg, sizeof(msg), "size=%u", (unsigned)imageSize);
+  logError("coredump_available", 0, msg, false);
+}
+
+static String base64EncodeBuffer(const uint8_t* data, size_t len) {
+  size_t outLen = 0;
+  int rc = mbedtls_base64_encode(nullptr, 0, &outLen, data, len);
+  if (rc != MBEDTLS_ERR_BASE64_BUFFER_TOO_SMALL || outLen == 0) {
+    return "";
+  }
+
+  char* out = new char[outLen + 1];
+  if (!out) {
+    return "";
+  }
+  rc = mbedtls_base64_encode((unsigned char*)out, outLen, &outLen, data, len);
+  if (rc != 0) {
+    delete[] out;
+    return "";
+  }
+  out[outLen] = '\0';
+  String encoded(out);
+  delete[] out;
+  return encoded;
+}
+
+String buildBootInfoResponse() {
+  esp_reset_reason_t resetReason = esp_reset_reason();
+  size_t coredumpSize = 0;
+  bool hasCoredump = detectCoredump(&coredumpSize);
+  char buf[192];
+  snprintf(buf, sizeof(buf),
+           "BOOT_INFO:reset=%s,code=%d,phase=%s,coredump=%d,coredump_size=%u",
+           resetReasonToString(resetReason),
+           (int)resetReason,
+           g_bootPhase,
+           hasCoredump ? 1 : 0,
+           (unsigned)coredumpSize);
+  return String(buf);
+}
+
+String readCoredumpChunk(size_t offset) {
+  size_t imageSize = 0;
+  if (!detectCoredump(&imageSize)) {
+    return "CORE_END";
+  }
+  if (offset >= imageSize) {
+    return "CORE_END";
+  }
+
+  const esp_partition_t* part = esp_partition_find_first(
+      ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, nullptr);
+  if (!part) {
+    return "CORE_ERR:NO_PARTITION";
+  }
+
+  size_t toRead = (imageSize - offset > CORE_CHUNK_RAW) ? CORE_CHUNK_RAW : (imageSize - offset);
+  uint8_t buf[CORE_CHUNK_RAW];
+  esp_err_t err = esp_partition_read(part, offset, buf, toRead);
+  if (err != ESP_OK) {
+    return "CORE_ERR:READ_FAIL";
+  }
+
+  String encoded = base64EncodeBuffer(buf, toRead);
+  if (encoded.length() == 0) {
+    return "CORE_ERR:ENCODE_FAIL";
+  }
+  return String("CORE:") + String((unsigned int)offset) + ":" + String((unsigned int)toRead) + ":" + encoded;
+}
+
+bool clearCoredumpImage() {
+  if (esp_core_dump_image_check() != ESP_OK) {
+    return true;
+  }
+  return esp_core_dump_image_erase() == ESP_OK;
 }
 
 static String getCurrentContextString() {
-  float bat = readBatteryVoltage();
+  float bat = readBatteryVoltageQuiet();
   float temp = readTemperature();
   float m1A = readM1Current();
-  float heaterA = readHeaterCurrent();
+  float heaterA = readHeaterCurrentQuiet();
   const char* fanStr = (lastFanState > 0) ? "forward" : (lastFanState < 0) ? "reverse" : "off";
   char buf[128];
   snprintf(buf, sizeof(buf), ",step=%d,cut=%d,feed=%d,bat=%.1f,temp=%.1f,m1A=%.2f,heaterA=%.2f,fan=%s",
@@ -1617,17 +2049,7 @@ void logError(const char* type, int code, const char* msg, bool includeContext) 
   size_t sz = f.size();
   f.close();
   if (sz > MAX_LOG_SIZE) {
-    String content;
-    f = SPIFFS.open(LOG_FILE, "r");
-    if (!f) return;
-    content = f.readString();
-    f.close();
-    size_t drop = content.indexOf('\n') + 1;
-    if (drop > 0 && drop < content.length()) {
-      content = content.substring(drop);
-      f = SPIFFS.open(LOG_FILE, "w");
-      if (f) { f.print(content); f.close(); }
-    }
+    trimErrorLogToSize(LOG_TRIM_TARGET);
   }
 }
 
@@ -1646,6 +2068,35 @@ String readLogChunk(size_t offset) {
   buf[n] = '\0';
   String chunk = String((char*)buf);
   return String("LOGS:") + String((unsigned int)offset) + ":" + String((unsigned int)n) + ":" + chunk;
+}
+
+void logDevFlush(const char* type, int code, const char* msg, bool includeContext) {
+  if (!devModeEnabled || !errorLogInitialized) {
+    return;
+  }
+  logError(type, code, msg, includeContext);
+}
+
+void logDevFlushStatusTick() {
+  if (!devModeEnabled || !isFlushing || !errorLogInitialized) {
+    return;
+  }
+  unsigned long now = millis();
+  if (lastDevFlushStatusLogMillis != 0 &&
+      (now - lastDevFlushStatusLogMillis) < DEV_FLUSH_STATUS_INTERVAL_MS) {
+    return;
+  }
+  lastDevFlushStatusLogMillis = now;
+  logError("flush_status", 0, "tick", true);
+}
+
+void setFlushStep(int newStep, bool logTransition) {
+  if (logTransition && devModeEnabled && errorLogInitialized && newStep != flushStep) {
+    char msg[24];
+    snprintf(msg, sizeof(msg), "from_%d", flushStep);
+    logError("flush_step", newStep, msg, true);
+  }
+  flushStep = newStep;
 }
 
 void enterEEPROMInvalidErrorState(const char* reason) {
@@ -1691,11 +2142,17 @@ void startEEPROMWakeAlert() {
 
 // Function to load parameters from EEPROM
 void loadParametersFromEEPROM() {
+  logBootTiming("eeprom_params_load_start");
+  unsigned long beginStart = millis();
   EEPROM.begin(EEPROM_SIZE);
+  Serial.printf("Boot timing: eeprom_params_load_begin,%lums\n", millis() - beginStart);
   
   // Check magic number
   uint16_t magic;
   EEPROM.get(PARAM_START_ADDR, magic);
+  char magicMsg[48];
+  snprintf(magicMsg, sizeof(magicMsg), "eeprom_params_magic,0x%04X", magic);
+  logBootTiming(magicMsg);
   Serial.printf("DEBUG: EEPROM magic number check - read: 0x%04X, expected: 0x%04X\n", magic, PARAM_MAGIC_NUMBER);
   SerialBLE_print("DEBUG: EEPROM magic number check - read: 0x");
   SerialBLE_print(String(magic, HEX));
@@ -1752,6 +2209,36 @@ void loadParametersFromEEPROM() {
     if (MAX_COOL_WAIT_S <= 0 || MAX_COOL_WAIT_S > 1800) {
       MAX_COOL_WAIT_S = 180;
     }
+
+    // Battery assessment parameters (may be absent in older EEPROM layouts)
+    float loadedMinLoadedBatteryV = minLoadedBatteryV;
+    float loadedMaxBatterySagV = maxBatterySagV;
+    float loadedMinIdleBatteryVFloor = minIdleBatteryVFloor;
+    float loadedUsableVFull = usableVFull;
+    uint16_t loadedBatteryAssessSettleMs = batteryAssessSettleMs;
+    float loadedHeaterCapV255 = heaterCapV255;
+    float loadedHeaterCapV170 = heaterCapV170;
+    float loadedHeaterCapV100 = heaterCapV100;
+    EEPROM.get(addr, loadedMinLoadedBatteryV); addr += sizeof(loadedMinLoadedBatteryV);
+    EEPROM.get(addr, loadedMaxBatterySagV); addr += sizeof(loadedMaxBatterySagV);
+    EEPROM.get(addr, loadedMinIdleBatteryVFloor); addr += sizeof(loadedMinIdleBatteryVFloor);
+    EEPROM.get(addr, loadedUsableVFull); addr += sizeof(loadedUsableVFull);
+    EEPROM.get(addr, loadedBatteryAssessSettleMs); addr += sizeof(loadedBatteryAssessSettleMs);
+    EEPROM.get(addr, loadedHeaterCapV255); addr += sizeof(loadedHeaterCapV255);
+    EEPROM.get(addr, loadedHeaterCapV170); addr += sizeof(loadedHeaterCapV170);
+    EEPROM.get(addr, loadedHeaterCapV100); addr += sizeof(loadedHeaterCapV100);
+    minLoadedBatteryV = loadedMinLoadedBatteryV;
+    maxBatterySagV = loadedMaxBatterySagV;
+    minIdleBatteryVFloor = loadedMinIdleBatteryVFloor;
+    usableVFull = loadedUsableVFull;
+    batteryAssessSettleMs = loadedBatteryAssessSettleMs;
+    heaterCapV255 = loadedHeaterCapV255;
+    heaterCapV170 = loadedHeaterCapV170;
+    heaterCapV100 = loadedHeaterCapV100;
+    if (!validateBatteryAssessParams()) {
+      applyBatteryAssessDefaults();
+    }
+
     heaterTargetTemp = K;
     
     Serial.println("Parameters loaded from EEPROM");
@@ -1769,6 +2256,7 @@ void loadParametersFromEEPROM() {
     SerialBLE_print(backupTime);
     SerialBLE_println();
     EEPROM.end();
+    logBootTiming("eeprom_params_load_valid_done");
     return;
   }
 
@@ -1776,6 +2264,7 @@ void loadParametersFromEEPROM() {
     Serial.println("Virgin EEPROM detected (0xFFFF). Writing default parameters.");
     SerialBLE_println("Virgin EEPROM detected (0xFFFF). Writing default parameters.");
     EEPROM.end();
+    logBootTiming("eeprom_params_virgin_init_start");
     saveParametersToEEPROM();
     if (!lastEEPROMWriteVerified) {
       enterEEPROMInvalidErrorState("failed to initialize defaults");
@@ -1783,6 +2272,7 @@ void loadParametersFromEEPROM() {
       Serial.println("Virgin EEPROM initialized with defaults.");
       SerialBLE_println("Virgin EEPROM initialized with defaults.");
     }
+    logBootTiming("eeprom_params_virgin_init_done");
     return;
   } else {
     Serial.printf("EEPROM magic invalid/corrupt (0x%04X). Entering EEPROM error state.\n", magic);
@@ -1791,6 +2281,7 @@ void loadParametersFromEEPROM() {
     SerialBLE_println();
     EEPROM.end();
     // Keep toilet operational: rewrite defaults, but latch EEPROM error until BLE update succeeds.
+    logBootTiming("eeprom_params_corrupt_rewrite_start");
     saveParametersToEEPROM();
     if (!lastEEPROMWriteVerified) {
       Serial.println("WARNING: Failed to rewrite defaults after EEPROM corruption.");
@@ -1800,15 +2291,22 @@ void loadParametersFromEEPROM() {
       SerialBLE_println("Defaults rewritten after EEPROM corruption.");
     }
     enterEEPROMInvalidErrorState("magic mismatch");
+    logBootTiming("eeprom_params_corrupt_done");
     return;
   }
 }
 
 void loadFlushCountFromEEPROM() {
+  logBootTiming("eeprom_flush_load_start");
+  unsigned long beginStart = millis();
   EEPROM.begin(EEPROM_SIZE);
+  Serial.printf("Boot timing: eeprom_flush_load_begin,%lums\n", millis() - beginStart);
 
   uint16_t magic = 0;
   EEPROM.get(FLUSH_COUNT_MAGIC_ADDR, magic);
+  char magicMsg[48];
+  snprintf(magicMsg, sizeof(magicMsg), "eeprom_flush_magic,0x%04X", magic);
+  logBootTiming(magicMsg);
 
   if (magic == FLUSH_COUNT_MAGIC) {
     EEPROM.get(FLUSH_COUNT_ADDR, lifetimeFlushCount);
@@ -1819,6 +2317,7 @@ void loadFlushCountFromEEPROM() {
     SerialBLE_print("Lifetime flush count loaded: ");
     SerialBLE_println((unsigned long)lifetimeFlushCount);
     EEPROM.end();
+    logBootTiming("eeprom_flush_load_valid_done");
     return;
   }
 
@@ -1826,6 +2325,7 @@ void loadFlushCountFromEEPROM() {
 
   // First-time initialization (or invalid data): start from 0 and create record.
   lifetimeFlushCount = 0;
+  logBootTiming("eeprom_flush_init_start");
   if (saveFlushCountToEEPROM()) {
     Serial.println("Initialized lifetime flush counter in EEPROM.");
     SerialBLE_println("Initialized lifetime flush counter in EEPROM.");
@@ -1833,13 +2333,22 @@ void loadFlushCountFromEEPROM() {
     Serial.println("WARNING: Failed to initialize lifetime flush counter in EEPROM.");
     SerialBLE_println("WARNING: Failed to initialize lifetime flush counter in EEPROM.");
   }
+  logBootTiming("eeprom_flush_init_done");
 }
 
 bool saveFlushCountToEEPROM() {
+  logBootTiming("eeprom_flush_save_start");
+  unsigned long beginStart = millis();
   EEPROM.begin(EEPROM_SIZE);
+  Serial.printf("Boot timing: eeprom_flush_save_begin,%lums\n", millis() - beginStart);
   EEPROM.put(FLUSH_COUNT_MAGIC_ADDR, (uint16_t)FLUSH_COUNT_MAGIC);
   EEPROM.put(FLUSH_COUNT_ADDR, lifetimeFlushCount);
+  unsigned long commitStart = millis();
   bool commitOk = EEPROM.commit();
+  char commitMsg[64];
+  snprintf(commitMsg, sizeof(commitMsg), "eeprom_flush_commit,%lums,ok=%d",
+           millis() - commitStart, commitOk ? 1 : 0);
+  logBootTiming(commitMsg);
 
   uint16_t verifyMagic = 0;
   uint32_t verifyCount = 0;
@@ -1852,6 +2361,9 @@ bool saveFlushCountToEEPROM() {
     Serial.printf("ERROR: Failed to persist lifetime flush counter. commit=%s magic=0x%04X count=%lu expected=%lu\n",
                   commitOk ? "true" : "false", verifyMagic, (unsigned long)verifyCount, (unsigned long)lifetimeFlushCount);
     SerialBLE_println("ERROR: Failed to persist lifetime flush counter.");
+    logBootTiming("eeprom_flush_save_verify_fail");
+  } else {
+    logBootTiming("eeprom_flush_save_verified");
   }
   return verified;
 }
@@ -2137,6 +2649,7 @@ bool initializeHardwareMatrix() {
     refreshHardwareMatrixCRC(hardwareMatrix);
     hardwareMatrixInitialized = true;
     Serial.println("Hardware matrix loaded from active NVS record");
+    logBootTiming("hw_matrix_path,active_nvs");
     return true;
   }
 
@@ -2156,12 +2669,15 @@ bool initializeHardwareMatrix() {
     hardwareMatrixInitialized = true;
     saveHardwareMatrixBlob(hardwareMatrix, false);
     Serial.println("Recovered hardware matrix from last-known-good record");
+    logBootTiming("hw_matrix_path,last_good");
     return true;
   }
 
   initializeDefaultHardwareMatrix(hardwareMatrix);
   hardwareMatrixInitialized = true;
+  logBootTiming("hw_matrix_defaults_start");
   bool saved = saveHardwareMatrixBlob(hardwareMatrix, true);
+  logBootTiming(saved ? "hw_matrix_path,defaults_saved" : "hw_matrix_path,defaults_save_fail");
   if (saved) {
     Serial.println("Initialized default hardware matrix");
   } else {
@@ -2302,7 +2818,10 @@ bool isKnownParameterKey(const String& key) {
          key == "CUT_MODE_HEAT_TIME" || key == "postCoolingFanDuration" || key == "preFeedFan" ||
          key == "fanReverseTime" || key == "fanReverseStartTime" || key == "backupTimeAfterReopen" ||
          key == "CUT_MODE_TEMP" || key == "heaterLowerToleranceC" || key == "heaterUpperToleranceC" ||
-         key == "COOL_OPEN_TEMP_C" || key == "MAX_COOL_WAIT_S";
+         key == "COOL_OPEN_TEMP_C" || key == "MAX_COOL_WAIT_S" ||
+         key == "minLoadedBatteryV" || key == "maxBatterySagV" || key == "minIdleBatteryVFloor" ||
+         key == "usableVFull" || key == "batteryAssessSettleMs" ||
+         key == "heaterCapV255" || key == "heaterCapV170" || key == "heaterCapV100";
 }
 
 bool validateParameterBlob(const String& componentName, const String& paramsBlob, String& errorCode) {
@@ -2363,6 +2882,31 @@ bool validateParameterBlob(const String& componentName, const String& paramsBlob
           errorCode = "OUT_OF_RANGE";
           return false;
         }
+      }
+      if (key == "minLoadedBatteryV" && (numericValue < 10.0f || numericValue > 12.5f)) {
+        errorCode = "OUT_OF_RANGE";
+        return false;
+      }
+      if (key == "maxBatterySagV" && (numericValue < 0.05f || numericValue > 2.0f)) {
+        errorCode = "OUT_OF_RANGE";
+        return false;
+      }
+      if (key == "minIdleBatteryVFloor" && (numericValue < 10.5f || numericValue > 13.0f)) {
+        errorCode = "OUT_OF_RANGE";
+        return false;
+      }
+      if (key == "usableVFull" && (numericValue <= 10.0f || numericValue > 13.5f)) {
+        errorCode = "OUT_OF_RANGE";
+        return false;
+      }
+      if (key == "batteryAssessSettleMs" && (numericValue < 10.0f || numericValue > 500.0f)) {
+        errorCode = "OUT_OF_RANGE";
+        return false;
+      }
+      if ((key == "heaterCapV255" || key == "heaterCapV170" || key == "heaterCapV100") &&
+          (numericValue < 10.0f || numericValue > 13.5f)) {
+        errorCode = "OUT_OF_RANGE";
+        return false;
       }
       if (key == "K") hasK = true;
       if (key == "CUT_MODE_TEMP") hasCutTemp = true;
@@ -2428,6 +2972,14 @@ bool applyParameterBlobToRuntime(const String& paramsBlob, String& errorCode) {
       else if (key == "heaterUpperToleranceC") heaterUpperToleranceC = numericValue;
       else if (key == "COOL_OPEN_TEMP_C") COOL_OPEN_TEMP_C = numericValue;
       else if (key == "MAX_COOL_WAIT_S") MAX_COOL_WAIT_S = (long)numericValue;
+      else if (key == "minLoadedBatteryV") minLoadedBatteryV = numericValue;
+      else if (key == "maxBatterySagV") maxBatterySagV = numericValue;
+      else if (key == "minIdleBatteryVFloor") minIdleBatteryVFloor = numericValue;
+      else if (key == "usableVFull") usableVFull = numericValue;
+      else if (key == "batteryAssessSettleMs") batteryAssessSettleMs = (uint16_t)numericValue;
+      else if (key == "heaterCapV255") heaterCapV255 = numericValue;
+      else if (key == "heaterCapV170") heaterCapV170 = numericValue;
+      else if (key == "heaterCapV100") heaterCapV100 = numericValue;
       else {
         errorCode = "UNKNOWN_PARAM";
         return false;
@@ -2437,6 +2989,10 @@ bool applyParameterBlobToRuntime(const String& paramsBlob, String& errorCode) {
   }
 
   enforceHeaterToleranceGap("hwcfg_apply", false);
+  if (!validateBatteryAssessParams()) {
+    errorCode = "OUT_OF_RANGE";
+    return false;
+  }
   heaterTargetTemp = K;
   saveParametersToEEPROM();
   if (!lastEEPROMWriteVerified) {
@@ -2548,9 +3104,9 @@ bool saveHWCFGBlobFile(const char* path, const HWCFGConfigStore& store) {
     return false;
   }
 
-  HWCFGConfigStore verifyStore;
-  memset(&verifyStore, 0, sizeof(verifyStore));
-  if (!loadHWCFGBlobFromSPIFFS(path, verifyStore) || computeHWCFGCRC(verifyStore) != verifyStore.crc32) {
+  memset(&hwcfgVerifyScratch, 0, sizeof(hwcfgVerifyScratch));
+  if (!loadHWCFGBlobFromSPIFFS(path, hwcfgVerifyScratch) ||
+      computeHWCFGCRC(hwcfgVerifyScratch) != hwcfgVerifyScratch.crc32) {
     Serial.printf("HWCFG SPIFFS verify failed: %s\n", path);
     return false;
   }
@@ -2651,6 +3207,7 @@ bool initializeHWCFGStore() {
     hwcfgStore = hwcfgScratchActive;
     hwcfgStoreInitialized = true;
     hwcfgSafeFault = false;
+    logBootTiming("hwcfg_path,spiffs_active");
     return true;
   }
   err = "";
@@ -2658,7 +3215,9 @@ bool initializeHWCFGStore() {
   if (loadHWCFGBlobFromNVS(HWCFG_ACTIVE_KEY, hwcfgScratchActive) && validateHWCFGStore(hwcfgScratchActive, err)) {
     hwcfgStore = hwcfgScratchActive;
     hwcfgStoreInitialized = true;
+    logBootTiming("hwcfg_migrate_start");
     hwcfgSafeFault = !migrateHWCFGBlobFromNVSToSPIFFS(HWCFG_ACTIVE_KEY, hwcfgStore);
+    logBootTiming(hwcfgSafeFault ? "hwcfg_path,nvs_active_migrate_fail" : "hwcfg_path,nvs_active_migrated");
     return !hwcfgSafeFault;
   }
 
@@ -2668,7 +3227,9 @@ bool initializeHWCFGStore() {
     hwcfgStore = hwcfgScratchLastGood;
     hwcfgStoreInitialized = true;
     hwcfgSafeFault = false;
+    logBootTiming("hwcfg_last_good_save_start");
     saveHWCFGBlob(hwcfgStore, false);
+    logBootTiming("hwcfg_path,spiffs_last_good");
     return true;
   }
   err = "";
@@ -2676,20 +3237,25 @@ bool initializeHWCFGStore() {
   if (loadHWCFGBlobFromNVS(HWCFG_LAST_GOOD_KEY, hwcfgScratchLastGood) && validateHWCFGStore(hwcfgScratchLastGood, err)) {
     hwcfgStore = hwcfgScratchLastGood;
     hwcfgStoreInitialized = true;
+    logBootTiming("hwcfg_migrate_last_good_start");
     hwcfgSafeFault = !migrateHWCFGBlobFromNVSToSPIFFS(HWCFG_LAST_GOOD_KEY, hwcfgStore);
     if (!hwcfgSafeFault) {
       hwcfgSafeFault = !saveHWCFGBlob(hwcfgStore, false);
     }
+    logBootTiming(hwcfgSafeFault ? "hwcfg_path,nvs_last_good_fail" : "hwcfg_path,nvs_last_good");
     return !hwcfgSafeFault;
   }
 
   initializeDefaultHWCFG(hwcfgStore);
   hwcfgStoreInitialized = true;
+  logBootTiming("hwcfg_defaults_save_start");
   if (!saveHWCFGBlob(hwcfgStore, true)) {
     hwcfgSafeFault = true;
+    logBootTiming("hwcfg_path,defaults_save_fail");
     return false;
   }
   hwcfgSafeFault = false;
+  logBootTiming("hwcfg_path,defaults_saved");
   return true;
 }
 
@@ -3263,8 +3829,11 @@ bool setDevModeEnabled(bool enabled) {
 
 // Reset OTA state variables
 void resetOTAState() {
+  if (ota_handle != 0) {
+    esp_ota_abort(ota_handle);
+    ota_handle = 0;
+  }
   setOTAState(OTA_IDLE, "reset");
-  ota_handle = 0;
   firmware_size = 0;
   bytes_received = 0;
   chunk_sequence = 0;
@@ -3283,68 +3852,503 @@ void resetOTAState() {
   }
 }
 
+// --- OTA boot diagnostics (NVS + SPIFFS) ---
+
+static void initDefaultOtaDiag(OtaDiagStore& diag) {
+  memset(&diag, 0, sizeof(diag));
+  diag.magic = OTA_DIAG_MAGIC;
+  diag.schema = OTA_DIAG_SCHEMA;
+  diag.ota_target_subtype = OTA_SUBTYPE_UNSET;
+  diag.session_target_subtype = OTA_SUBTYPE_UNSET;
+  diag.session_source_subtype = OTA_SUBTYPE_UNSET;
+}
+
+static void copyPartitionLabel(const esp_partition_t* part, char* buf, size_t len) {
+  if (buf == NULL || len == 0) {
+    return;
+  }
+  if (part == NULL) {
+    buf[0] = '\0';
+    return;
+  }
+  strncpy(buf, part->label, len - 1);
+  buf[len - 1] = '\0';
+}
+
+static const esp_partition_t* findPartitionBySubtype(uint8_t subtype) {
+  if (subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0) {
+    return esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0, NULL);
+  }
+  if (subtype == ESP_PARTITION_SUBTYPE_APP_OTA_1) {
+    return esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, NULL);
+  }
+  return esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
+}
+
+static const char* otaResetReasonToString(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_POWERON: return "poweron";
+    case ESP_RST_SW: return "sw";
+    case ESP_RST_PANIC: return "panic";
+    case ESP_RST_WDT: return "wdt";
+    case ESP_RST_TASK_WDT: return "task_wdt";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_SDIO: return "sdio";
+    case ESP_RST_INT_WDT: return "int_wdt";
+    case ESP_RST_DEEPSLEEP: return "deepsleep";
+    case ESP_RST_USB: return "usb";
+    default: return "unknown";
+  }
+}
+
+static bool otaIsAbnormalResetReason(esp_reset_reason_t reason) {
+  return reason == ESP_RST_WDT || reason == ESP_RST_TASK_WDT || reason == ESP_RST_PANIC ||
+         reason == ESP_RST_BROWNOUT || reason == ESP_RST_SDIO || reason == ESP_RST_INT_WDT;
+}
+
+static void loadOtaDiag(OtaDiagStore& diag) {
+  initDefaultOtaDiag(diag);
+  nvs_handle_t nvs_handle;
+  if (nvs_open("ota", NVS_READONLY, &nvs_handle) != ESP_OK) {
+    return;
+  }
+
+  size_t blobSize = sizeof(OtaDiagStore);
+  esp_err_t err = nvs_get_blob(nvs_handle, "ota_diag", &diag, &blobSize);
+  if (err != ESP_OK || diag.magic != OTA_DIAG_MAGIC || diag.schema != OTA_DIAG_SCHEMA) {
+    initDefaultOtaDiag(diag);
+  }
+
+  uint8_t rollbackSubtype = OTA_SUBTYPE_UNSET;
+  if (nvs_get_u8(nvs_handle, "rollback_subtype", &rollbackSubtype) == ESP_OK) {
+    (void)rollbackSubtype;
+  }
+
+  uint16_t tailLen = 0;
+  if (nvs_get_u16(nvs_handle, "log_tail_len", &tailLen) == ESP_OK) {
+    diag.log_tail_len = tailLen;
+  }
+  uint8_t mirrored = 0;
+  if (nvs_get_u8(nvs_handle, "log_tail_mirrored", &mirrored) == ESP_OK) {
+    diag.log_tail_mirrored = mirrored;
+  }
+
+  nvs_close(nvs_handle);
+}
+
+static bool saveOtaDiag(const OtaDiagStore& diag) {
+  nvs_handle_t nvs_handle;
+  if (nvs_open("ota", NVS_READWRITE, &nvs_handle) != ESP_OK) {
+    return false;
+  }
+
+  OtaDiagStore toWrite = diag;
+  toWrite.magic = OTA_DIAG_MAGIC;
+  toWrite.schema = OTA_DIAG_SCHEMA;
+  esp_err_t err = nvs_set_blob(nvs_handle, "ota_diag", &toWrite, sizeof(toWrite));
+  if (err == ESP_OK) {
+    err = nvs_set_u16(nvs_handle, "log_tail_len", toWrite.log_tail_len);
+  }
+  if (err == ESP_OK) {
+    err = nvs_set_u8(nvs_handle, "log_tail_mirrored", toWrite.log_tail_mirrored);
+  }
+  if (err == ESP_OK) {
+    err = nvs_commit(nvs_handle);
+  }
+  nvs_close(nvs_handle);
+  return err == ESP_OK;
+}
+
+bool isOnOtaTargetPartition() {
+  OtaDiagStore diag;
+  loadOtaDiag(diag);
+  if (diag.ota_target_subtype == OTA_SUBTYPE_UNSET) {
+    return false;
+  }
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  if (running == NULL) {
+    return false;
+  }
+  return running->subtype == diag.ota_target_subtype;
+}
+
+static bool captureSpiffsLogTailToNvs(OtaDiagStore& diag) {
+  nvs_handle_t nvs_handle;
+  if (nvs_open("ota", NVS_READWRITE, &nvs_handle) != ESP_OK) {
+    return false;
+  }
+
+  uint8_t tail[OTA_LOG_TAIL_MAX_BYTES];
+  size_t tailLen = 0;
+
+  if (errorLogInitialized) {
+    File f = SPIFFS.open(LOG_FILE, "r");
+    if (f) {
+      size_t fileSize = f.size();
+      size_t offset = (fileSize > OTA_LOG_TAIL_MAX_BYTES) ? (fileSize - OTA_LOG_TAIL_MAX_BYTES) : 0;
+      f.seek(offset, SeekSet);
+      tailLen = f.read(tail, OTA_LOG_TAIL_MAX_BYTES);
+      f.close();
+    }
+  }
+
+  diag.log_tail_len = (uint16_t)tailLen;
+  diag.log_tail_mirrored = 0;
+
+  if (tailLen > 0) {
+    nvs_set_blob(nvs_handle, "ota_log_tail", tail, tailLen);
+  } else {
+    nvs_erase_key(nvs_handle, "ota_log_tail");
+  }
+  nvs_set_u16(nvs_handle, "log_tail_len", diag.log_tail_len);
+  nvs_set_u8(nvs_handle, "log_tail_mirrored", 0);
+  nvs_commit(nvs_handle);
+  nvs_close(nvs_handle);
+  return true;
+}
+
+void mergeNvsLogTailToSpiffs() {
+  if (!errorLogInitialized) {
+    return;
+  }
+
+  OtaDiagStore diag;
+  loadOtaDiag(diag);
+  if (diag.log_tail_mirrored || diag.log_tail_len == 0) {
+    return;
+  }
+
+  nvs_handle_t nvs_handle;
+  if (nvs_open("ota", NVS_READONLY, &nvs_handle) != ESP_OK) {
+    return;
+  }
+
+  size_t blobSize = 0;
+  if (nvs_get_blob(nvs_handle, "ota_log_tail", NULL, &blobSize) != ESP_OK || blobSize == 0) {
+    nvs_close(nvs_handle);
+    return;
+  }
+
+  uint8_t tail[OTA_LOG_TAIL_MAX_BYTES];
+  if (blobSize > sizeof(tail)) {
+    blobSize = sizeof(tail);
+  }
+  if (nvs_get_blob(nvs_handle, "ota_log_tail", tail, &blobSize) != ESP_OK) {
+    nvs_close(nvs_handle);
+    return;
+  }
+  nvs_close(nvs_handle);
+
+  char header[64];
+  snprintf(header, sizeof(header), "len=%u,seq=%u", (unsigned)blobSize, (unsigned)diag.event_seq);
+  logError("ota_spiffs_capture", 0, header, false);
+
+  const char* start = (const char*)tail;
+  const char* end = start + blobSize;
+  while (start < end) {
+    const char* nl = (const char*)memchr(start, '\n', (size_t)(end - start));
+    size_t lineLen = nl ? (size_t)(nl - start) : (size_t)(end - start);
+    if (lineLen > 0) {
+      if (lineLen >= LOG_LINE_MAX_LEN - 10) {
+        lineLen = LOG_LINE_MAX_LEN - 11;
+      }
+      char wrapped[LOG_LINE_MAX_LEN + 1];
+      snprintf(wrapped, sizeof(wrapped), "captured:%.*s", (int)lineLen, start);
+      logError("ota_spiffs_capture", 0, wrapped, false);
+    }
+    start = nl ? (nl + 1) : end;
+  }
+
+  diag.log_tail_mirrored = 1;
+  saveOtaDiag(diag);
+}
+
+void recordOtaBootAttempt() {
+  OtaDiagStore diag;
+  loadOtaDiag(diag);
+  if (!diag.pending_verify) {
+    return;
+  }
+  if (diag.boot_attempts < 255) {
+    diag.boot_attempts++;
+  }
+  saveOtaDiag(diag);
+}
+
+void logOtaBootAttemptToSpiffs() {
+  if (!errorLogInitialized || !isOnOtaTargetPartition()) {
+    return;
+  }
+
+  OtaDiagStore diag;
+  loadOtaDiag(diag);
+  esp_reset_reason_t resetReason = esp_reset_reason();
+  const char* reasonStr = otaResetReasonToString(resetReason);
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  char partLabel[8] = "?";
+  copyPartitionLabel(running, partLabel, sizeof(partLabel));
+
+  char msg[128];
+  snprintf(msg, sizeof(msg), "attempt=%u,streak=%u,reset=%s,part=%s,pending=%u",
+           (unsigned)diag.boot_attempts, (unsigned)diag.good_boot_streak,
+           reasonStr, partLabel, (unsigned)diag.pending_verify);
+  logError("ota_boot", (int)resetReason, msg, false);
+
+  if (otaIsAbnormalResetReason(resetReason)) {
+    snprintf(msg, sizeof(msg), "attempt=%u,reset=%s,part=%s,streak_reset=1",
+             (unsigned)diag.boot_attempts, reasonStr, partLabel);
+    logError("ota_boot_fail", (int)resetReason, msg, false);
+    diag.good_boot_streak = 0;
+    saveOtaDiag(diag);
+  }
+}
+
+void incrementOtaGoodBootStreak() {
+  OtaDiagStore diag;
+  loadOtaDiag(diag);
+  if (!diag.pending_verify || otaIsAbnormalResetReason(esp_reset_reason())) {
+    return;
+  }
+  if (diag.good_boot_streak < 255) {
+    diag.good_boot_streak++;
+  }
+  saveOtaDiag(diag);
+}
+
+void confirmOtaBootOk() {
+  OtaDiagStore diag;
+  loadOtaDiag(diag);
+  if (!diag.pending_verify || diag.good_boot_streak < OTA_GOOD_BOOT_STREAK_REQUIRED) {
+    return;
+  }
+  diag.pending_verify = 0;
+  diag.boot_attempts = 0;
+  saveOtaDiag(diag);
+  logError("ota_boot_ok", 0, "pending_cleared", false);
+}
+
+void markOtaPendingVerify() {
+  OtaDiagStore diag;
+  loadOtaDiag(diag);
+
+  running_partition = esp_ota_get_running_partition();
+  diag.pending_verify = 1;
+  diag.boot_attempts = 0;
+  diag.good_boot_streak = 0;
+
+  if (update_partition != NULL) {
+    diag.ota_target_subtype = update_partition->subtype;
+    diag.session_target_subtype = update_partition->subtype;
+    copyPartitionLabel(update_partition, diag.failed_label, sizeof(diag.failed_label));
+  }
+  if (running_partition != NULL) {
+    diag.session_source_subtype = running_partition->subtype;
+  }
+
+  diag.session_fw_size = (uint32_t)firmware_size;
+  diag.session_md5_prefix[0] = expected_md5[0];
+  diag.session_md5_prefix[1] = expected_md5[1];
+  diag.session_md5_prefix[2] = expected_md5[2];
+  diag.session_md5_prefix[3] = expected_md5[3];
+  diag.session_finalize_ms = millis();
+  saveOtaDiag(diag);
+
+  Serial.printf("OTA pending verify: target_subtype=%u fw_size=%u\n",
+                (unsigned)diag.ota_target_subtype, (unsigned)diag.session_fw_size);
+}
+
+bool logOtaRollback(const char* trigger, const char* reason, String* errorCode) {
+  OtaDiagStore diag;
+  loadOtaDiag(diag);
+
+  running_partition = esp_ota_get_running_partition();
+  uint8_t rollback_subtype = OTA_SUBTYPE_UNSET;
+  nvs_handle_t nvs_handle;
+  if (nvs_open("ota", NVS_READONLY, &nvs_handle) != ESP_OK) {
+    if (errorCode != NULL) {
+      *errorCode = "NVS_OPEN_FAILED";
+    }
+    return false;
+  }
+  nvs_get_u8(nvs_handle, "rollback_subtype", &rollback_subtype);
+  nvs_close(nvs_handle);
+
+  const esp_partition_t* rollback_partition = findPartitionBySubtype(rollback_subtype);
+  if (rollback_partition == NULL) {
+    if (errorCode != NULL) {
+      *errorCode = "NO_ROLLBACK_PARTITION";
+    }
+    return false;
+  }
+
+  copyPartitionLabel(running_partition, diag.failed_label, sizeof(diag.failed_label));
+  copyPartitionLabel(rollback_partition, diag.good_label, sizeof(diag.good_label));
+  diag.last_reset_reason = (uint8_t)esp_reset_reason();
+
+  if (strcmp(trigger, "auto") == 0) {
+    diag.last_trigger = OTA_TRIGGER_AUTO;
+  } else if (strcmp(trigger, "validation") == 0) {
+    diag.last_trigger = OTA_TRIGGER_VALIDATION;
+  } else if (strcmp(trigger, "manual") == 0) {
+    diag.last_trigger = OTA_TRIGGER_MANUAL;
+  }
+
+  strncpy(diag.last_reason, reason != NULL ? reason : "", sizeof(diag.last_reason) - 1);
+  diag.last_reason[sizeof(diag.last_reason) - 1] = '\0';
+  if (diag.event_seq < 65535) {
+    diag.event_seq++;
+  }
+
+  char md5hex[9];
+  snprintf(md5hex, sizeof(md5hex), "%02x%02x%02x%02x",
+           diag.session_md5_prefix[0], diag.session_md5_prefix[1],
+           diag.session_md5_prefix[2], diag.session_md5_prefix[3]);
+
+  char rollMsg[180];
+  snprintf(rollMsg, sizeof(rollMsg),
+           "trigger=%s,from=%s,to=%s,attempts=%u,reset=%s,md5=%s,size=%lu,reason=%s",
+           trigger,
+           diag.failed_label,
+           diag.good_label,
+           (unsigned)diag.boot_attempts,
+           otaResetReasonToString((esp_reset_reason_t)diag.last_reset_reason),
+           md5hex,
+           (unsigned long)diag.session_fw_size,
+           diag.last_reason);
+  logError("ota_rollback", 0, rollMsg, false);
+
+  captureSpiffsLogTailToNvs(diag);
+
+  diag.pending_verify = 0;
+  diag.boot_attempts = 0;
+  diag.good_boot_streak = 0;
+  diag.ota_target_subtype = OTA_SUBTYPE_UNSET;
+  saveOtaDiag(diag);
+
+  return rollbackOTAUpdateWithReason(errorCode);
+}
+
+String buildOtaDiagResponse() {
+  OtaDiagStore diag;
+  loadOtaDiag(diag);
+
+  bool hasData = (diag.event_seq > 0 || diag.pending_verify || diag.ota_target_subtype != OTA_SUBTYPE_UNSET ||
+                  diag.log_tail_len > 0 || diag.last_trigger != OTA_TRIGGER_NONE);
+  if (!hasData) {
+    return "OTA_DIAG:EMPTY";
+  }
+
+  const char* triggerStr = "none";
+  if (diag.last_trigger == OTA_TRIGGER_AUTO) {
+    triggerStr = "auto";
+  } else if (diag.last_trigger == OTA_TRIGGER_VALIDATION) {
+    triggerStr = "validation";
+  } else if (diag.last_trigger == OTA_TRIGGER_MANUAL) {
+    triggerStr = "manual";
+  }
+
+  char md5hex[9];
+  snprintf(md5hex, sizeof(md5hex), "%02x%02x%02x%02x",
+           diag.session_md5_prefix[0], diag.session_md5_prefix[1],
+           diag.session_md5_prefix[2], diag.session_md5_prefix[3]);
+
+  String resp = String("OTA_DIAG:V1|pending=") + String((unsigned)diag.pending_verify) +
+                "|attempts=" + String((unsigned)diag.boot_attempts) +
+                "|streak=" + String((unsigned)diag.good_boot_streak) +
+                "|target=" + String((unsigned)diag.ota_target_subtype) +
+                "|last_trigger=" + triggerStr +
+                "|from=" + String(diag.failed_label) +
+                "|to=" + String(diag.good_label) +
+                "|reset=" + otaResetReasonToString((esp_reset_reason_t)diag.last_reset_reason) +
+                "|md5=" + md5hex +
+                "|size=" + String((unsigned long)diag.session_fw_size) +
+                "|reason=" + String(diag.last_reason) +
+                "|seq=" + String((unsigned)diag.event_seq) +
+                "|tail_len=" + String((unsigned)diag.log_tail_len);
+
+  if (diag.log_tail_len > 0) {
+    nvs_handle_t nvs_handle;
+    if (nvs_open("ota", NVS_READONLY, &nvs_handle) == ESP_OK) {
+      size_t blobSize = 0;
+      if (nvs_get_blob(nvs_handle, "ota_log_tail", NULL, &blobSize) == ESP_OK && blobSize > 0) {
+        uint8_t tail[OTA_LOG_TAIL_MAX_BYTES];
+        if (blobSize > sizeof(tail)) {
+          blobSize = sizeof(tail);
+        }
+        if (nvs_get_blob(nvs_handle, "ota_log_tail", tail, &blobSize) == ESP_OK) {
+          resp += "|log_tail=";
+          size_t maxAppend = 180;
+          if (blobSize > maxAppend) {
+            blobSize = maxAppend;
+          }
+          for (size_t i = 0; i < blobSize; i++) {
+            char c = (char)tail[i];
+            if (c == '|') {
+              resp += ';';
+            } else if (c == '\n' || c == '\r') {
+              resp += '~';
+            } else if (c >= 32 && c <= 126) {
+              resp += c;
+            }
+          }
+        }
+      }
+      nvs_close(nvs_handle);
+    }
+  }
+
+  return resp;
+}
+
 // Save rollback information to NVS
 void saveRollbackInfo() {
+  running_partition = esp_ota_get_running_partition();
   nvs_handle_t nvs_handle;
   esp_err_t err = nvs_open("ota", NVS_READWRITE, &nvs_handle);
   if (err != ESP_OK) {
     Serial.println("ERROR: Failed to open NVS for rollback info");
     return;
   }
-  
-  // Save current partition subtype
-  uint8_t current_subtype = running_partition->subtype;
-  nvs_set_u8(nvs_handle, "rollback_subtype", current_subtype);
-  
-  // Save boot count (will be incremented on next boot)
-  uint8_t boot_count = 0;
-  nvs_get_u8(nvs_handle, "boot_count", &boot_count);
-  boot_count++;
-  nvs_set_u8(nvs_handle, "boot_count", boot_count);
-  
-  // Set rollback flag to false initially
+
+  if (running_partition != NULL) {
+    nvs_set_u8(nvs_handle, "rollback_subtype", running_partition->subtype);
+  }
   nvs_set_u8(nvs_handle, "rollback_flag", 0);
-  
   nvs_commit(nvs_handle);
   nvs_close(nvs_handle);
-  
-  Serial.printf("Rollback info saved: subtype=%d, boot_count=%d\n", current_subtype, boot_count);
+
+  OtaDiagStore diag;
+  loadOtaDiag(diag);
+  if (firmware_size > 0) {
+    diag.session_fw_size = (uint32_t)firmware_size;
+  }
+  diag.session_md5_prefix[0] = expected_md5[0];
+  diag.session_md5_prefix[1] = expected_md5[1];
+  diag.session_md5_prefix[2] = expected_md5[2];
+  diag.session_md5_prefix[3] = expected_md5[3];
+  saveOtaDiag(diag);
+
+  Serial.printf("Rollback info saved: subtype=%u\n",
+                running_partition != NULL ? (unsigned)running_partition->subtype : 0U);
 }
 
 // Check for boot failures and rollback if needed
 void checkBootFailure() {
-  nvs_handle_t nvs_handle;
-  esp_err_t err = nvs_open("ota", NVS_READWRITE, &nvs_handle);
-  if (err != ESP_OK) {
-    Serial.println("WARNING: Failed to open NVS for boot check");
+  OtaDiagStore diag;
+  loadOtaDiag(diag);
+  if (!diag.pending_verify) {
     return;
   }
-  
-  uint8_t boot_count = 0;
-  nvs_get_u8(nvs_handle, "boot_count", &boot_count);
-  
-  // If boot count is high, it means we've been rebooting repeatedly (boot failure)
-  if (boot_count > 3) {
-    Serial.println("WARNING: High boot count detected, may need rollback");
+
+  if (diag.boot_attempts > OTA_AUTO_ROLLBACK_MAX_ATTEMPTS) {
+    Serial.println("WARNING: OTA boot attempts exceeded, rolling back");
     rollback_required = true;
-    
-    // Reset boot count
-    nvs_set_u8(nvs_handle, "boot_count", 0);
-    nvs_commit(nvs_handle);
-    
-    // Attempt rollback
-    if (rollbackOTAUpdate()) {
+    if (logOtaRollback("auto", "boot_attempts_exceeded", NULL)) {
       Serial.println("Rollback successful, rebooting...");
       delay(1000);
       esp_restart();
     }
-  } else {
-    // Successful boot, reset boot count
-    nvs_set_u8(nvs_handle, "boot_count", 0);
-    nvs_commit(nvs_handle);
   }
-  
-  nvs_close(nvs_handle);
 }
 
 // Rollback to previous partition
@@ -3402,9 +4406,8 @@ bool rollbackOTAUpdateWithReason(String* errorCode) {
     return false;
   }
   
-  // Clear rollback flag
+  // Clear rollback flag (boot counters cleared in logOtaRollback / confirmOtaBootOk)
   nvs_set_u8(nvs_handle, "rollback_flag", 0);
-  nvs_set_u8(nvs_handle, "boot_count", 0);
   nvs_commit(nvs_handle);
   nvs_close(nvs_handle);
   
@@ -3432,7 +4435,7 @@ String handleManualOTARollback() {
 
   logError("ota", 0, "manual_rollback_requested", false);
   String rollbackError = "";
-  if (!rollbackOTAUpdateWithReason(&rollbackError)) {
+  if (!logOtaRollback("manual", "manual_support_request", &rollbackError)) {
     if (rollbackError.length() == 0) {
       rollbackError = "FAILED";
     }
@@ -3449,6 +4452,12 @@ bool validateFirmware() {
   if (!md5_received) {
     Serial.println("ERROR: MD5 hash not received");
     return false;
+  }
+
+  if (md5_initialized) {
+    mbedtls_md5_finish(&md5_ctx, calculated_md5);
+    mbedtls_md5_free(&md5_ctx);
+    md5_initialized = false;
   }
   
   // Compare calculated MD5 with expected MD5
@@ -3475,6 +4484,12 @@ bool validateFirmware() {
 void handleOTAChunk(uint8_t* data, size_t length) {
   if (otaState != OTA_RECEIVING) {
     Serial.println("ERROR: Received chunk but not in RECEIVING state");
+    bool isSizeChunk = (length >= 4 && data[0] == 'S' && data[1] == 'I' && data[2] == 'Z' && data[3] == 'E');
+    bool isMd5Chunk = (length >= 3 && data[0] == 'M' && data[1] == 'D' && data[2] == '5');
+    if (otaEnabled && !isSizeChunk && !isMd5Chunk &&
+        (otaState == OTA_IDLE || otaState == OTA_ERROR)) {
+      abortOtaSessionAndDisconnect("STALE_CHUNK");
+    }
     return;
   }
   otaLastChunkMillis = millis();
@@ -3555,6 +4570,7 @@ void handleOTAChunk(uint8_t* data, size_t length) {
 }
 
 void heaterEmergencyShutdown() {
+  captureCrashPendingRtc();
   if (heaterOn || heaterOutputOn) {
     updateHeaterSessionRtc();
   }
@@ -3708,6 +4724,101 @@ static size_t getErrorLogFileSize() {
   return sz;
 }
 
+// Trim /errors.txt to at most targetBytes, keeping newest line-aligned content.
+// Chunked copy avoids large String alloc. Serial-only status; do not call logError here.
+bool trimErrorLogToSize(size_t targetBytes) {
+  if (!errorLogInitialized) {
+    return false;
+  }
+
+  File src = SPIFFS.open(LOG_FILE, "r");
+  if (!src) {
+    Serial.println("WARN: log trim open read failed");
+    return false;
+  }
+
+  size_t oldSize = src.size();
+  if (oldSize <= targetBytes) {
+    src.close();
+    return true;
+  }
+
+  size_t cut = oldSize - targetBytes;
+  if (!src.seek(cut, SeekSet)) {
+    src.close();
+    Serial.println("WARN: log trim seek failed");
+    return false;
+  }
+
+  size_t startOffset = cut;
+  while (src.available()) {
+    int ch = src.read();
+    if (ch < 0) {
+      break;
+    }
+    if (ch == '\n') {
+      startOffset = src.position();
+      break;
+    }
+  }
+  src.close();
+
+  src = SPIFFS.open(LOG_FILE, "r");
+  if (!src) {
+    Serial.println("WARN: log trim reopen read failed");
+    return false;
+  }
+  if (!src.seek(startOffset, SeekSet)) {
+    src.close();
+    Serial.println("WARN: log trim seek start failed");
+    return false;
+  }
+
+  SPIFFS.remove(LOG_TRIM_TEMP_FILE);
+  File dst = SPIFFS.open(LOG_TRIM_TEMP_FILE, "w");
+  if (!dst) {
+    src.close();
+    Serial.println("WARN: log trim temp open failed");
+    return false;
+  }
+
+  uint8_t buf[LOG_TRIM_COPY_CHUNK];
+  size_t copied = 0;
+  while (src.available()) {
+    size_t n = src.read(buf, sizeof(buf));
+    if (n == 0) {
+      break;
+    }
+    size_t written = dst.write(buf, n);
+    if (written != n) {
+      src.close();
+      dst.close();
+      SPIFFS.remove(LOG_TRIM_TEMP_FILE);
+      Serial.println("WARN: log trim write failed");
+      return false;
+    }
+    copied += written;
+    feedTaskWatchdog();
+  }
+  src.close();
+  dst.flush();
+  dst.close();
+
+  if (!SPIFFS.remove(LOG_FILE)) {
+    SPIFFS.remove(LOG_TRIM_TEMP_FILE);
+    Serial.println("WARN: log trim remove original failed");
+    return false;
+  }
+  if (!SPIFFS.rename(LOG_TRIM_TEMP_FILE, LOG_FILE)) {
+    SPIFFS.remove(LOG_TRIM_TEMP_FILE);
+    Serial.println("WARN: log trim rename failed");
+    return false;
+  }
+
+  Serial.printf("Log trimmed: %u -> %u bytes\n", (unsigned)oldSize, (unsigned)copied);
+  return true;
+}
+
 void logBootStatus() {
   esp_reset_reason_t resetReason = esp_reset_reason();
   const char* reasonStr = resetReasonToString(resetReason);
@@ -3736,9 +4847,10 @@ void logAbnormalResetForensics() {
   uint8_t priorHeater = (heaterRtc.magic == HEATER_RTC_MAGIC) ? heaterRtc.heaterWasOn : 0;
   int postAdc = readHeaterCurrentAdc();
   float postTemp = readTemperature();
-  char forensicsMsg[160];
+  float postBat = readBatteryVoltageQuiet();
+  char forensicsMsg[192];
   snprintf(forensicsMsg, sizeof(forensicsMsg),
-           "prior_ms=%lu,prior_heater=%u,prior_temp=%d,prior_pwm=%u,prior_step=%d,prior_cut=%u,post_adc=%d,post_temp=%.1f,rtc_magic=0x%08lX",
+           "prior_ms=%lu,prior_heater=%u,prior_temp=%d,prior_pwm=%u,prior_step=%d,prior_cut=%u,post_adc=%d,post_temp=%.1f,post_bat=%.2f,rtc_magic=0x%08lX",
            (unsigned long)heaterRtc.lastSessionMillis,
            priorHeater,
            (int)heaterRtc.lastHeaterTempCx10,
@@ -3747,6 +4859,7 @@ void logAbnormalResetForensics() {
            (unsigned)heaterRtc.lastCutBag,
            postAdc,
            postTemp,
+           postBat,
            (unsigned long)heaterRtc.magic);
 
   Serial.printf("Abnormal reset logged: %s\n", resetMsg);
@@ -3773,6 +4886,16 @@ void feedTaskWatchdog() {
 }
 
 void wdtCheckpoint() {
+  wdtCheckpoint(nullptr);
+}
+
+void wdtCheckpoint(const char* phase) {
+  if (phase && phase[0]) {
+    g_bootPhase = phase;
+    if (devModeEnabled && errorLogInitialized) {
+      logError("boot_checkpoint", 0, phase, false);
+    }
+  }
   feedTaskWatchdog();
   yield();
   feedTaskWatchdog();
@@ -3839,6 +4962,19 @@ void checkHeaterBootSafety() {
   int adc = readHeaterCurrentAdc();
   bool abnormalReset = isAbnormalResetReason(resetReason);
 
+  if (resetReason == ESP_RST_BROWNOUT) {
+    float postBat = readBatteryVoltageQuiet();
+    if (adc > HEATER_CURRENT_ADC_THRESHOLD) {
+      Serial.printf("Heater boot safety: brownout with heater current (adc=%d)\n", adc);
+      latchHeaterFailsafeError("heater_current_with_gpio_off");
+      return;
+    }
+    if (postBat < minIdleBatteryV()) {
+      Serial.printf("Heater boot safety: brownout with low battery (%.2fV) - forensics only\n", postBat);
+      return;
+    }
+  }
+
   if (abnormalReset && (priorHeaterWasOn || adc > HEATER_CURRENT_ADC_THRESHOLD)) {
     Serial.printf("Heater boot safety: abnormal reset (reason=%d, priorHeaterOn=%u, adc=%d)\n",
                   (int)resetReason, priorHeaterWasOn, adc);
@@ -3867,6 +5003,15 @@ void checkHeaterRuntimeSafety() {
   }
 
   unsigned long now = millis();
+
+  if (heaterOn || heaterOutputOn) {
+    if (!isM1MotorActive()) {
+      float v = readBatteryVoltageQuiet();
+      if (checkRuntimeSagDebounced(v, "runtime_sag_backup")) {
+        return;
+      }
+    }
+  }
 
   if (!heaterOutputOn) {
     if (now - heaterRuntimeMismatchLastCheckMs >= 500UL) {
@@ -3902,105 +5047,178 @@ void checkHeaterRuntimeSafety() {
 void runHeaterSafetyBootSequence() {
   logBootStatus();
   logAbnormalResetForensics();
+  logCoredumpStatus();
   checkHeaterBootSafety();
   initTaskWatchdog();
   if (ERROR_CODE == 0) {
-    testHeaterCurrent();
+    lastBootHeaterTestSkipped = false;
+    lastBootHeaterSkipReason = nullptr;
+    const char* skipReason = nullptr;
+    if (shouldSkipBootHeaterTest(&skipReason)) {
+      lastBootHeaterTestSkipped = true;
+      lastBootHeaterSkipReason = skipReason;
+      char msg[96];
+      float vIdle = readBatteryVoltageQuiet();
+      snprintf(msg, sizeof(msg), "HEATER_TEST_SKIPPED:%s vIdle=%.2f streak=%u",
+               skipReason ? skipReason : "unknown", vIdle, (unsigned)brownoutRtc.streak);
+      Serial.println(msg);
+      SerialBLE_println(msg);
+      logPowerTestEvent("boot_heater_test", msg, true);
+    } else {
+      testHeaterCurrent(false);
+    }
   } else {
     Serial.println("Skipping heater current test due to latched error");
     SerialBLE_println("Skipping heater current test due to latched error");
   }
+  clearBrownoutStreakOnSuccessfulBoot();
+  logBootCheckpoint("heater_safety_ok");
 }
 
 void initCorePlatformServices() {
+  logBootTiming("nvs_init_start");
   esp_err_t err = nvs_flash_init();
   if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    logBootTiming("nvs_erase_start");
     ESP_ERROR_CHECK(nvs_flash_erase());
+    logBootTiming("nvs_erase_done");
     err = nvs_flash_init();
   }
   ESP_ERROR_CHECK(err);
+  logBootTiming("nvs_init_done");
+  logBootCheckpoint("nvs_ok");
+  logBootTiming("spiffs_init_start");
   initErrorLog();
+  logBootTiming("spiffs_init_done");
+  logBootTiming("devmode_load_start");
   loadDevModeSetting();
+  logBootTiming("devmode_load_done");
+  loadMotorHomingDeferredFromNvs();
+  logBootTiming("hw_matrix_start");
   initializeHardwareMatrix();
+  logBootTiming("hw_matrix_done");
+  logBootTiming("hwcfg_start");
   if (!initializeHWCFGStore()) {
     Serial.println("WARNING: HWCFG store failed to initialize");
     SerialBLE_println("WARNING: HWCFG store init failed");
   }
+  logBootTiming("hwcfg_done");
   if (ignoreM12Faults) {
     Serial.println("WARNING: M1/M2 motor faults are LOG-ONLY (ignoreM12Faults=true)");
     SerialBLE_println("WARNING: M1/M2 motor faults are LOG-ONLY");
   }
 }
 
-// Test heater current detection at startup
-void testHeaterCurrent() {
-  Serial.println("Starting heater current detection test...");
-  SerialBLE_println("Starting heater current detection test...");
-  
-  // Set heater fully ON for current detection.
-  applyHeaterPwmDuty(HEATER_PWM_MAX);
-  Serial.println("Heater set to ON for startup current test");
-  SerialBLE_println("Heater set to ON for startup current test");
-  
-  // Monitor for 0.5 seconds, checking every 50ms
-  unsigned long testStartTime = millis();
-  const unsigned long testDuration = 500; // 0.5 seconds
-  const unsigned long checkInterval = 50; // Check every 50ms
-  const int threshold = 200; // ADC threshold for current detection
-  bool currentDetected = false;
-  const unsigned long testHardCapMs = testDuration + 1000UL;
-  unsigned long lastCheckTime = 0;
-  
-  while ((millis() - testStartTime) < testDuration) {
-    if ((millis() - testStartTime) >= testHardCapMs) {
-      Serial.println("ERROR: Heater current test hard cap exceeded");
-      heaterOff();
-      if (ERROR_CODE == 0) {
-        ERROR_CODE = 5;
-        LEDErrorCode(ERROR_CODE);
+// Test heater current detection at startup or flush preflight.
+void testHeaterCurrent(bool lowBatteryAsError) {
+  const char* tag = lowBatteryAsError ? "flush_heater_test" : "boot_heater_test";
+  char msg[128];
+  if (!lowBatteryAsError && isHardwareLikelyDisconnectedForUserAction()) {
+    snprintf(msg, sizeof(msg), "HEATER_TEST_SKIPPED:hw_disconnected");
+    logPowerTestEvent(tag, msg, true);
+    return;
+  }
+  snprintf(msg, sizeof(msg), "start context=%s", lowBatteryAsError ? "flush" : "boot");
+  logPowerTestEvent(tag, msg, true);
+
+  if (!batteryAssessment.valid || !batteryAssessment.assessPassed) {
+    if (!assessBatteryUsable(tag, true, nullptr)) {
+      applyHeaterPwmDuty(0);
+      if (lowBatteryAsError) {
+        snprintf(msg, sizeof(msg), "assess_fail vIdle=%.2f vLoadWorst=%.2f usable=%d%%",
+                 batteryAssessment.vIdle, batteryAssessment.vLoadWorst, batteryAssessment.usablePercent);
+        latchLowBatteryStop(msg);
+      } else {
+        snprintf(msg, sizeof(msg), "HEATER_TEST_SKIPPED:assess_fail vIdle=%.2f vLoadWorst=%.2f",
+                 batteryAssessment.vIdle, batteryAssessment.vLoadWorst);
+        logPowerTestEvent(tag, msg, true);
       }
       return;
     }
-
-    if ((millis() - lastCheckTime) >= checkInterval) {
-      lastCheckTime = millis();
-      
-      int adcReading = readHeaterCurrentAdc();
-      Serial.printf("Heater current ADC reading: %d\n", adcReading);
-      SerialBLE_print("Heater current ADC: ");
-      SerialBLE_println(adcReading);
-      
-      if (adcReading > threshold) {
-        currentDetected = true;
-        Serial.println("Heater current detected - test PASSED");
-        SerialBLE_println("Heater current detected - test PASSED");
-        break;
-      }
-    }
-    wdtSafeDelay(10);
   }
-  
+
+  int maxRampDuty = batteryAssessment.capDuty > 0 ? batteryAssessment.capDuty : HEATER_PWM_MAX;
+  const int rampDuties[] = {HEATER_TEST_START_DUTY, 128, maxRampDuty};
+  const int rampCount = 3;
+  bool currentDetected = false;
+  const unsigned long checkInterval = 50;
+  const unsigned long perRampMaxMs = 170;
+  const unsigned long testHardCapMs = 500 + 1000UL;
+
+  unsigned long testStart = millis();
+  for (int rampIdx = 0; rampIdx < rampCount && !currentDetected; rampIdx++) {
+    int duty = rampDuties[rampIdx];
+    if (duty > maxRampDuty) {
+      continue;
+    }
+    applyHeaterPwmDuty(duty);
+    snprintf(msg, sizeof(msg), "ramp_start idx=%d pwm=%d", rampIdx, duty);
+    logPowerTestEvent(tag, msg, false);
+
+    unsigned long rampStart = millis();
+    unsigned long lastCheckTime = 0;
+    while ((millis() - rampStart) < perRampMaxMs) {
+      if ((millis() - testStart) >= testHardCapMs) {
+        logPowerTestEvent(tag, "FAIL hard_cap_exceeded", true);
+        heaterOff();
+        if (ERROR_CODE == 0) {
+          ERROR_CODE = 5;
+          LEDErrorCode(ERROR_CODE);
+          logError("power_test", 5, "heater_current_test_hard_cap", true);
+        }
+        return;
+      }
+
+      if ((millis() - lastCheckTime) >= checkInterval) {
+        lastCheckTime = millis();
+        float v = readBatteryVoltageQuiet();
+        int adcReading = readHeaterCurrentAdc();
+        snprintf(msg, sizeof(msg), "sample pwm=%d v=%.2f adc=%d", duty, v, adcReading);
+        Serial.println(msg);
+        SerialBLE_println(msg);
+
+        if (v < minLoadedBatteryV) {
+          heaterOff();
+          snprintf(msg, sizeof(msg), "FAIL low_v=%.2f during ramp pwm=%d", v, duty);
+          if (lowBatteryAsError) {
+            latchLowBatteryStop(msg);
+          } else {
+            snprintf(msg, sizeof(msg), "HEATER_TEST_SKIPPED:runtime_v=%.2f pwm=%d", v, duty);
+            logPowerTestEvent(tag, msg, true);
+          }
+          return;
+        }
+
+        if (adcReading > HEATER_CURRENT_ADC_THRESHOLD) {
+          currentDetected = true;
+          snprintf(msg, sizeof(msg), "current_detected pwm=%d adc=%d v=%.2f", duty, adcReading, v);
+          logPowerTestEvent(tag, msg, true);
+          break;
+        }
+      }
+      wdtSafeDelay(10);
+    }
+  }
+
   heaterOff();
-  
-  // Check result
+
   if (!currentDetected) {
-    Serial.println("ERROR: Heater current detection FAILED - No current detected after 0.5s");
-    SerialBLE_println("ERROR: Heater current detection FAILED");
+    logPowerTestEvent(tag, "FAIL no_current_after_ramp", true);
     if (ERROR_CODE == 0) {
       ERROR_CODE = 5;
       LEDErrorCode(ERROR_CODE);
+      logError("power_test", 5, "heater_current_not_detected", true);
     }
-    Serial.println("System halted due to heater current detection failure");
-    // Don't return - let the system continue but with error state
   } else {
-    Serial.println("Heater current test completed successfully");
-    SerialBLE_println("Heater current test PASSED");
+    logPowerTestEvent(tag, "PASS", true);
   }
 }
 
 void setup() {
   Serial.begin(115200);
   delay(100);
+  resetBootTiming();
+  logBootCheckpoint("serial_ok");
 
   esp_sleep_wakeup_cause_t wakeCause = esp_sleep_get_wakeup_cause();
   bool wokeFromDeepSleep = (wakeCause == ESP_SLEEP_WAKEUP_EXT0);
@@ -4012,18 +5230,26 @@ void setup() {
   setFanSpeed(0);
   initHeaterGpioSafe();
   initHeaterPwm();
+  logBootCheckpoint("gpio_safe");
 
   if (wokeFromDeepSleep) {
     Serial.println("\n\n=== WOKE FROM DEEP SLEEP (GPIO2) ===");
     rtc_gpio_deinit((gpio_num_t)controlPanelWake);
 
     initCorePlatformServices();
+    logBootTiming("ota_record_start");
+    recordOtaBootAttempt();
+    logBootTiming("ota_record_done");
     mcp_setup();
+    logBootCheckpoint("mcp_ok");
     Serial.println("MCP23017 Initialized");
     logControlPanelPinout();
 
+    logBootTiming("eeprom_load_start");
     loadParametersFromEEPROM();
     loadFlushCountFromEEPROM();
+    logBootTiming("eeprom_load_done");
+    logBootCheckpoint("eeprom_ok");
     knownResistor = thermistorResistance;
     heaterTargetTemp = K;
     initHeaterPidController();
@@ -4031,7 +5257,9 @@ void setup() {
     maintainEEPROMErrorIndicator();
 
     configureMotorAndSensorPins();
+    logBootCheckpoint("pins_ok");
     runHeaterSafetyBootSequence();
+    logOtaBootAttemptToSpiffs();
     circleLeds();
 
     is_device_connected = false;
@@ -4046,12 +5274,17 @@ void setup() {
     Serial.printf("Min free heap ever: %d bytes\n", ESP.getMinFreeHeap());
 
     server_setup(false);
+    logBootCheckpoint("ble_ok");
 
     Serial.println("=== MEMORY AFTER BLE SERVER SETUP (WAKE) ===");
     Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
     Serial.printf("Largest free block: %d bytes\n", ESP.getMaxAllocHeap());
 
     enableM12Drivers();
+    if (motorHomingDeferred) {
+      applyLoadedMotorHomingDeferred();
+    }
+    logBootCheckpoint("boot_complete:wake");
     return;
   }
 
@@ -4061,22 +5294,35 @@ void setup() {
   Serial.println("Beginning Setup");
 
   initCorePlatformServices();
+  logBootTiming("ota_record_start");
+  recordOtaBootAttempt();
+  logBootTiming("ota_record_done");
 
   mcp_setup();
+  logBootCheckpoint("mcp_ok");
   Serial.println("MCP23017 Initialized");
   logControlPanelPinout();
 
+  logBootTiming("eeprom_load_start");
   loadParametersFromEEPROM();
   loadFlushCountFromEEPROM();
+  logBootTiming("eeprom_load_done");
+  logBootCheckpoint("eeprom_ok");
   knownResistor = thermistorResistance;
   heaterTargetTemp = K;
   initHeaterPidController();
   maintainEEPROMErrorIndicator();
 
   configureMotorAndSensorPins();
+  logBootCheckpoint("pins_ok");
   runHeaterSafetyBootSequence();
+  logOtaBootAttemptToSpiffs();
 
   checkBootFailure();
+  logBootCheckpoint("ota_check_ok");
+  mergeNvsLogTailToSpiffs();
+  incrementOtaGoodBootStreak();
+  confirmOtaBootOk();
   circleLeds();
   Serial.println("LED startup test complete");
 
@@ -4088,6 +5334,7 @@ void setup() {
   Serial.printf("Min free heap ever: %d bytes\n", ESP.getMinFreeHeap());
 
   server_setup(false);
+  logBootCheckpoint("ble_ok");
 
   Serial.println("=== MEMORY AFTER BLE SERVER SETUP ===");
   Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
@@ -4108,7 +5355,25 @@ void setup() {
   }
 
   enableM12Drivers();
-  startMotorHoming();
+  {
+    const char* deferReason = nullptr;
+    if (isHardwareLikelyDisconnectedForUserAction()) {
+      if (motorHomingDeferred) {
+        clearMotorHomingDeferred();
+      }
+      logPowerTestEvent("homing_defer", "boot_skip hw_disconnected", true);
+    } else if (shouldDeferHomingAtBoot(&deferReason)) {
+      if (motorHomingDeferred) {
+        applyLoadedMotorHomingDeferred();
+      } else {
+        deferMotorHoming(deferReason);
+      }
+    } else {
+      startMotorHoming();
+    }
+  }
+  logBootCheckpoint("homing_start");
+  logBootCheckpoint("boot_complete:cold");
 }
 
 void loop() {
@@ -4218,6 +5483,7 @@ void loop() {
   }
 
   updateMotorHoming();
+  tryStartDeferredHomingIfReady();
   updateHeaterSessionRtc();
   checkHeaterRuntimeSafety();
   
@@ -4225,48 +5491,24 @@ void loop() {
   // Read button states
   bool button1Pressed = readControlPanelButton1();
   bool button2Pressed = readControlPanelButton2();
+  bool bothButtonsPressedNow = button1Pressed && button2Pressed;
   bool flushCancelInputActive = readFlushCancelInput(button1Pressed, button2Pressed);
   if (button1Pressed || button2Pressed || flushCancelInputActive) {
     lastActivityMillis = millis();
   }
 
-  if (isFlushing) {
-    if (!flushCancelInputActive) {
-      flushCancelArmed = true;
-    } else if (flushCancelArmed) {
-      Serial.println("Flush cancelled by control panel input");
-      SerialBLE_println("Flush cancelled by control panel input");
-      stopEverything();
-
-      // Treat currently-held cancel buttons as already handled until release.
-      button1WasPressed = button1Pressed;
-      button2WasPressed = button2Pressed;
-      button1Held = false;
-      button1DelayActive = false;
-      button2DelayActive = false;
-      button2FeedStarted = false;
-      button1DisconnectAlertedForCurrentPress = false;
-      button2DisconnectAlertedForCurrentPress = false;
-      bothButtonsPressed = button1Pressed && button2Pressed;
-      dualButtonHoldActive = false;
+  // Single-button press cancels dual-button battery display / DEV hold latch.
+  if (!bothButtonsPressedNow && !bothButtonsPressed && (button1Pressed != button2Pressed)) {
+    dualButtonHoldActive = false;
+    if (batteryDisplayMode) {
       batteryDisplayMode = false;
-      feedTaskWatchdog();
-      delay(1);
-      return;
-    } else {
-      // Ignore the held start/cancel inputs until every cancel source is released once.
-      button1Pressed = false;
-      button2Pressed = false;
-      button1Held = false;
-      button1DelayActive = false;
-      button2DelayActive = false;
+      for (int i = 0; i < totalLeds; i++) {
+        mcp_digitalWrite(getLedPin(i), LOW);
+      }
     }
   }
 
-  // Determine if both buttons are pressed
-  bool bothButtonsPressedNow = button1Pressed && button2Pressed;
-  
-  // Check for both buttons pressed simultaneously
+  // Dual-button edge (before flush block may clear single-button states)
   if (bothButtonsPressedNow && isHardwareLikelyDisconnectedForUserAction()) {
     if (!bothButtonsPressed) {
       SerialBLE_println("Hardware not connected (thermistor open) - battery read blocked");
@@ -4276,24 +5518,49 @@ void loop() {
     dualButtonHoldActive = false;
     batteryDisplayMode = false;
   } else if (bothButtonsPressedNow && !bothButtonsPressed && !otaEnabled) {
-    SerialBLE_println("Both buttons pressed - Stopping all operations and displaying battery charge level");
-    
-    stopEverything();
+    lastDualButtonEdgeMillis = millis();
+    bothButtonsReleaseStartMillis = 0;
+    if (isDeviceIdleForDualButton()) {
+      SerialBLE_println("Both buttons pressed - Stopping all operations and displaying battery charge level");
 
-    // Reset all button state tracking
-    button1WasPressed = false;
-    button2WasPressed = false;
-    button1Held = false;
-    button1DelayActive = false;
-    button2DelayActive = false;
-    
-    // Enter battery display mode and start hold timer for DEV mode toggle
-    bothButtonsPressed = true;
-    batteryDisplayMode = true;
-    batteryDisplayStartTime = millis();
-    dualButtonHoldStartTime = millis();
-    dualButtonHoldActive = true;
-    displayBatteryChargeLevel();
+      stopEverything();
+
+      button1WasPressed = button1Pressed;
+      button2WasPressed = button2Pressed;
+      button1Held = false;
+      button1DelayActive = false;
+      button2DelayActive = false;
+      button2FeedStarted = false;
+
+      bothButtonsPressed = true;
+      batteryDisplayMode = true;
+      batteryDisplayStartTime = millis();
+      dualButtonHoldStartTime = millis();
+      dualButtonHoldActive = true;
+      displayBatteryChargeLevel();
+    } else if (isFlushing) {
+      bool continueFlushRecovery = acceptFlushCancel(button1Pressed, button2Pressed);
+      bothButtonsPressed = true;
+      feedTaskWatchdog();
+      delay(1);
+      if (!continueFlushRecovery) {
+        return;
+      }
+    } else {
+      SerialBLE_println("Both buttons pressed - stopping active operations");
+      stopEverything();
+
+      button1WasPressed = button1Pressed;
+      button2WasPressed = button2Pressed;
+      button1Held = false;
+      button1DelayActive = false;
+      button2DelayActive = false;
+      button2FeedStarted = false;
+
+      bothButtonsPressed = true;
+      dualButtonHoldActive = false;
+      batteryDisplayMode = false;
+    }
   } else if (bothButtonsPressedNow && bothButtonsPressed && !otaEnabled) {
     unsigned long currentMillis = millis();
     if (dualButtonHoldActive &&
@@ -4314,19 +5581,56 @@ void loop() {
       }
     }
   } else if (!bothButtonsPressedNow) {
-    bothButtonsPressed = false;
-    dualButtonHoldActive = false; // Reset hold timer when buttons released
-    if (batteryDisplayMode && (millis() - batteryDisplayStartTime > 3000)) {
-      // Turn off battery display after 3 seconds
-      batteryDisplayMode = false;
-      for (int i = 0; i < totalLeds; i++) {
-        mcp_digitalWrite(getLedPin(i), LOW);
+    if (bothButtonsPressed) {
+      if (bothButtonsReleaseStartMillis == 0) {
+        bothButtonsReleaseStartMillis = millis();
       }
+      if (millis() - bothButtonsReleaseStartMillis >= DUAL_BUTTON_RELEASE_DEBOUNCE_MS) {
+        bothButtonsPressed = false;
+        dualButtonHoldActive = false;
+        bothButtonsReleaseStartMillis = 0;
+      }
+    } else {
+      bothButtonsReleaseStartMillis = 0;
+    }
+  } else {
+    bothButtonsReleaseStartMillis = 0;
+  }
+
+  if (batteryDisplayMode && !bothButtonsPressedNow &&
+      (millis() - batteryDisplayStartTime > 3000)) {
+    batteryDisplayMode = false;
+    for (int i = 0; i < totalLeds; i++) {
+      mcp_digitalWrite(getLedPin(i), LOW);
     }
   }
-  
-  // Handle individual button presses only if not in battery display mode
-  if (!batteryDisplayMode) {
+
+  if (isFlushing) {
+    if (flushStep == FLUSH_STEP_CANCEL_COOL) {
+      // Cancel recovery cooling in progress; ignore further cancel presses.
+    } else if (bothButtonsPressedNow) {
+      // Dual-button cancel handled above (bypasses flushCancelArmed).
+    } else if (!flushCancelInputActive) {
+      flushCancelArmed = true;
+    } else if (flushCancelArmed) {
+      bool continueFlushRecovery = acceptFlushCancel(button1Pressed, button2Pressed);
+      feedTaskWatchdog();
+      delay(1);
+      if (!continueFlushRecovery) {
+        return;
+      }
+    } else {
+      // Ignore the held start/cancel inputs until every cancel source is released once.
+      button1Pressed = false;
+      button2Pressed = false;
+      button1Held = false;
+      button1DelayActive = false;
+      button2DelayActive = false;
+    }
+  }
+
+  // Handle individual button presses only if not in battery display mode or dual-button hold
+  if (!batteryDisplayMode && !bothButtonsPressedNow && !bothButtonsPressed) {
     // Trust handshake: GPIO2 wake line confirms trust during TRUST_WAITING
     if (g_trustState == TRUST_STATE_WAITING && readControlPanelWakeLine()) {
       onTrustConfirmedByFlushButton();
@@ -4350,7 +5654,7 @@ void loop() {
       // Don't start flush sequence immediately - wait to see if it's a hold
     } else if (button1Pressed && button1Held && (millis() - button1HoldStartTime >= BUTTON_HOLD_TIME)) {
       // Button 1 held long enough - enable cutBag and start flush sequence
-      if (!isFlushing && !motorHomingActive) {  // Only start if not already flushing
+      if (!isFlushing && !motorHomingActive && !motorHomingDeferred) {
         if (isHardwareLikelyDisconnectedForUserAction()) {
           if (!button1DisconnectAlertedForCurrentPress) {
             SerialBLE_println("Hardware not connected (thermistor open) - flush blocked");
@@ -4358,33 +5662,55 @@ void loop() {
             button1DisconnectAlertedForCurrentPress = true;
           }
         } else {
+          if (!isFlushAllowedByBattery(true)) {
+            char blockMsg[96];
+            snprintf(blockMsg, sizeof(blockMsg),
+                     "Flush blocked: usable=%d%% threshold=%d%% vIdle=%.2f vLoad=%.2f",
+                     batteryAssessment.usablePercent,
+                     batteryThreshold,
+                     batteryAssessment.vIdle,
+                     batteryAssessment.vLoadWorst);
+            Serial.println(blockMsg);
+            SerialBLE_println(blockMsg);
+            streamBatteryAssessReport("flush_blocked");
+            showBatteryLevelFeedback(batteryAssessment.usablePercent, false);
+            button1DisconnectAlertedForCurrentPress = true;
+            button1Held = false;
+            button1DelayActive = false;
+            return;
+          }
+
           cutBag = true;
           SerialBLE_println("Cut Bag mode enabled!");
           Serial.printf("DEBUG: cutBag set to true, hold time: %lu ms\n", millis() - button1HoldStartTime);
-          cutModeLEDAnimation();
+          flushStartLEDAnimation();
           
           // Start flush sequence with cut bag enabled
           SerialBLE_println("Starting flush sequence with cut bag enabled");
           
-          // Calculate sequence timing and reset LED state
+          // Calculate sequence timing and reset LED state (countdown from full bar)
           calculateSequenceTiming();
-          ledIndex = 0;
-          clockwise = true; // Start clockwise when flushing begins.
-          ledLastUpdateMillis = millis();  // Reset the timer
-          
-          // Turn off all LEDs first, then turn on the first one
-          for (int i = 0; i < totalLeds; i++) {
-            mcp_digitalWrite(getLedPin(i), LOW);
-          }
-          mcp_digitalWrite(getLedPin(0), HIGH);
+          ledIndex = totalLeds - 1;
+          clockwise = true;
+          ledLastUpdateMillis = millis();
           
           flushStep = 0;
           isFlushing = true;
+          lastDevFlushStatusLogMillis = 0;
+          logDevFlush("flush_event", 0, "start", false);
           flushCancelArmed = false;
           button1Held = false;
           button1DelayActive = false;
           button2DelayActive = false;
           flushStartMillis = millis();
+        }
+      } else if (!isFlushing && motorHomingDeferred && !motorHomingActive) {
+        if (!button1DisconnectAlertedForCurrentPress) {
+          SerialBLE_println("Flush blocked: charge battery / homing pending");
+          Serial.println("Flush blocked: homing deferred (charge battery)");
+          int level = batteryAssessment.valid ? batteryAssessment.usablePercent : 0;
+          showBatteryLevelFeedback(level, false);
+          button1DisconnectAlertedForCurrentPress = true;
         }
       }
     } else if (!button1Pressed && button1Held) {
@@ -4443,6 +5769,11 @@ void loop() {
       fanRunning = false;  // Prevent fan timer from interfering
     } else if (button2Pressed && !button2DelayActive && !button2FeedStarted) {
       button2FanStartTime = millis();
+    } else if (!button2Pressed && button2WasPressed
+               && millis() - lastDualButtonEdgeMillis < DUAL_BUTTON_EDGE_GUARD_MS) {
+      // Ignore spurious release after dual-button stop (MCP read flicker).
+      button2WasPressed = false;
+      fanRunning = false;
     } else if (!button2Pressed && button2WasPressed) {
       // Button 2 just released - stop feed motor, start fan timer
       SerialBLE_println("Feed Down Released - Stopping feed, starting fan timer");
@@ -4519,6 +5850,9 @@ void loop() {
     rtc_gpio_pulldown_dis((gpio_num_t)controlPanelWake);
     esp_sleep_enable_ext0_wakeup((gpio_num_t)controlPanelWake, 0);
     prepareFanPinsForDeepSleep();
+    if (getErrorLogFileSize() > LOG_SLEEP_TRIM_TRIGGER) {
+      trimErrorLogToSize(LOG_TRIM_TARGET);
+    }
     esp_task_wdt_reset();
     esp_deep_sleep_start();
   }
@@ -4527,17 +5861,19 @@ void loop() {
     updateHeaterPID();
     float heaterTemp = (float)heaterInput;
     unsigned long now = millis();
-    if (heaterTemp > K) {
-      timeAboveSetpointMillis += (now - lastHeaterCheckMillis);
+    if (!isM1MotorActive()) {
+      if (heaterTemp > K) {
+        timeAboveSetpointMillis += (now - lastHeaterCheckMillis);
+      }
+      // After cut motor (cut mode): count time above CUT_MODE_TEMP for CUT_MODE_HEAT_TIME
+      if (isFlushing && flushStep == 6 && cutBag && case6CutMotorRun) {
+        if (heaterTemp >= CUT_MODE_TEMP) {
+          timeAboveCutModeTempMillis += (now - lastCutModeTempCheckMillis);
+        }
+        lastCutModeTempCheckMillis = now;
+      }
     }
     lastHeaterCheckMillis = now;
-    // After cut motor (cut mode): count time above CUT_MODE_TEMP for CUT_MODE_HEAT_TIME
-    if (isFlushing && flushStep == 6 && cutBag && case6CutMotorRun) {
-      if (heaterTemp >= CUT_MODE_TEMP) {
-        timeAboveCutModeTempMillis += (now - lastCutModeTempCheckMillis);
-      }
-      lastCutModeTempCheckMillis = now;
-    }
     // In cut-bag flushes, allow headroom relative to the higher cut-mode target.
     // This prevents false overheat trips when K is intentionally lower than CUT_MODE_TEMP.
     float overheatBaseTemp = heaterTargetTemp;
@@ -4553,7 +5889,15 @@ void loop() {
   }
   if (isFlushing) {
     flushSequence();
-    updateLEDs();
+    if (isFlushing && flushStep != 13) {
+      if (flushCancelRecoveryActive) {
+        maintainCancelRecoveryLeds();
+      } else {
+        updateLEDs();
+      }
+    }
+  } else if (flushCancelRecoveryActive) {
+    maintainCancelRecoveryLeds();
   }
   
   // Stream serial data to BLE if enabled (only when BLE is active)
@@ -4584,6 +5928,7 @@ void loop() {
 
 void flushSequence() {
   unsigned long currentMillis = millis();
+  logDevFlushStatusTick();
   
   // Required time above K in seconds (H + CUT_MODE_HEAT_TIME if in cut mode)
   long totalHeaterTime = H;
@@ -4592,31 +5937,51 @@ void flushSequence() {
   }
   switch (flushStep) {
     case 0: {
+      char preflightMsg[128];
       ledLastUpdateMillis = millis();
       maxHeaterWallTimeMs = 0;  // Reset at start of each flush cycle before recomputing once.
-      Serial.println("Checking battery voltage");
-      int batteryLevel = getBatteryChargeLevel();
-      if (batteryLevel < batteryThreshold) {
-       String lowBatteryMsg = "LOW BATTERY STOP: level=" + String(batteryLevel) +
-                              "% < threshold=" + String(batteryThreshold) + "%";
-       Serial.println(lowBatteryMsg);
-       SerialBLE_println(lowBatteryMsg);
-       stopEverything();
-       ERROR_CODE = 2;
-       LEDErrorCode(ERROR_CODE);
-       return;
+      logPowerTestEvent("flush_preflight", "gate0 start", false);
+
+      bool flushAllowed = false;
+      if (!assessBatteryUsable("flush_preflight", true, &flushAllowed)) {
+        char reason[96];
+        snprintf(reason, sizeof(reason),
+                 "gate1_fail usable=%d%% threshold=%d%% vIdle=%.2f vLoad=%.2f",
+                 batteryAssessment.usablePercent,
+                 batteryThreshold,
+                 batteryAssessment.vIdle,
+                 batteryAssessment.vLoadWorst);
+        latchLowBatteryStop(reason);
+        return;
       }
+      if (!flushAllowed) {
+        char reason[96];
+        snprintf(reason, sizeof(reason),
+                 "gate1_fail flush_blocked usable=%d%% threshold=%d%%",
+                 batteryAssessment.usablePercent,
+                 batteryThreshold);
+        latchLowBatteryStop(reason);
+        return;
+      }
+      logPowerTestEvent("flush_preflight", "gate1 PASS usable battery ok", true);
+
       logMotorFaultDebug("flush case0 before fault check");
       checkAllMotorFaults();
       logMotorFaultDebug("flush case0 after fault check");
       if (ERROR_CODE != 0) {
+        snprintf(preflightMsg, sizeof(preflightMsg), "gate2_fail error_code=%d", ERROR_CODE);
+        logPowerTestEvent("flush_preflight", preflightMsg, true);
         return;
       }
-      // Test heater current detection at start of flush cycle
-      testHeaterCurrent();
+      logPowerTestEvent("flush_preflight", "gate2 PASS motor_faults_ok", false);
+
+      testHeaterCurrent(true);
       if (ERROR_CODE != 0) {
+        snprintf(preflightMsg, sizeof(preflightMsg), "gate4_fail error_code=%d", ERROR_CODE);
+        logPowerTestEvent("flush_preflight", preflightMsg, true);
         return;
       }
+      logPowerTestEvent("flush_preflight", "gate4 PASS all_preflight_ok", true);
       case1FeedStarted = false;  // Reset flag for case 1
       case6CutMotorRun = false;   // Reset flag for case 6 cut motor (run after H, then heat for CUT_MODE_HEAT_TIME)
       timeAboveCutModeTempMillis = 0;
@@ -4633,7 +5998,7 @@ void flushSequence() {
         Serial.printf("DEBUG: Heater timeout calc (cycle start): current=%.1f C, target=%.1f C, ramp=%.1f s, hold=%.1f s, maxWall=%lu ms\n",
                       timeoutCurrentTemp, timeoutTargetTemp, rampSecondsF, holdSecondsF, maxHeaterWallTimeMs);
       }
-      flushStep++;
+      setFlushStep(flushStep + 1);
       SerialBLE_println("Moving to Case1:");
       SerialBLE_println(millis());
       SerialBLE_println("Starting fan, waiting before feed");
@@ -4654,7 +6019,7 @@ void flushSequence() {
       
       // Check if feed time (F) has elapsed (counted from when M2 starts, not from case 1 start)
       if (case1FeedStarted && (currentMillis - stepStartMillis >= (preFeedFan + F) * 1000)) {
-        flushStep++;
+        setFlushStep(flushStep + 1);
         SerialBLE_print("Moving to Case2:");
         SerialBLE_println(millis());
         motors.setM2Speed(0);
@@ -4674,7 +6039,7 @@ void flushSequence() {
       m3ReverseCompleted = false; // Reset completion flag
       Serial.print("MOTOR START TIME: ");
       Serial.println(motorStartMillis);
-      flushStep++;
+      setFlushStep(flushStep + 1);
       SerialBLE_print("Moving to Case3:");
       Serial.println(millis());
       SerialBLE_print("MOTOR START MILLIS: ");
@@ -4682,14 +6047,7 @@ void flushSequence() {
       break;
 
     case 3:
-      SerialBLE_println("Heater on");
-      mcp_digitalWrite(getLedPin(0), HIGH);
-      heaterOn = true;
-      heaterTargetTemp = K;  // Target K until cut motor runs (then CUT_MODE_TEMP in cut mode)
-      timeAboveSetpointMillis = 0;
-      lastHeaterCheckMillis = currentMillis;
-      lastHeaterControlLogMillis = 0;  // Force immediate first heater control log for this heating phase
-      updateHeaterPID();
+      // M3 reverse fan timing during mechanism close (heater starts after case 5)
       
       // Check if it's time to start M3 reverse (based on fanReverseStartTime percentage of typicalOpeningTime)
       if (!m3ReverseActive && !m3ReverseCompleted && m1CloseStartTime > 0) {
@@ -4710,8 +6068,7 @@ void flushSequence() {
         m3ReverseCompleted = true; // Mark as completed to prevent restart
       }
       
-      stepStartMillis = currentMillis;
-      flushStep++;
+      setFlushStep(flushStep + 1);
       SerialBLE_print("Moving to Case4:");
       Serial.println(millis());
       break;
@@ -4740,7 +6097,7 @@ void flushSequence() {
         case5FeedExecuted = false; // Reset flag when entering case 5
         m1CurrentLogWindowStartMillis = currentMillis;
         m1CurrentMaxInWindow = 0.0;
-        flushStep++;
+        setFlushStep(flushStep + 1);
         SerialBLE_print("Moving to Case5:");
         Serial.println(millis());
       break;
@@ -4818,7 +6175,15 @@ void flushSequence() {
        
         
         SerialBLE_println("switch closed, stop feeding and closing");
-        flushStep++;
+        SerialBLE_println("Mechanism closed — starting heat phase");
+        mcp_digitalWrite(getLedPin(0), HIGH);
+        heaterOn = true;
+        heaterTargetTemp = K;
+        timeAboveSetpointMillis = 0;
+        lastHeaterCheckMillis = currentMillis;
+        lastHeaterControlLogMillis = 0;
+        stepStartMillis = currentMillis;
+        setFlushStep(flushStep + 1);
       }
       break;
     }
@@ -4845,7 +6210,7 @@ void flushSequence() {
           motors.setM1Speed(0);
           case6PrecoolCutRunning = false;
           SerialBLE_println("Pre-cooling cut pulse complete");
-          flushStep++;
+          setFlushStep(flushStep + 1);
           SerialBLE_print("Moving to Case7 from case 6: ");
           SerialBLE_println(millis());
           SerialBLE_println("Heater off");
@@ -4859,7 +6224,7 @@ void flushSequence() {
       }
 
       if (cutBag && !case6CutMotorRun && (timeAboveSetpointMillis >= (unsigned long)(H * 1000))) {
-        SerialBLE_println("Cut bag mode: Running cut motor after H (heater stays on for extra CUT_MODE_HEAT_TIME)");
+        SerialBLE_println("Cut bag mode: Running cut motor after H (heater paused during cut motor)");
         Serial.printf("DEBUG: MOTOR_CUT_TIME = %.3f seconds\n", MOTOR_CUT_TIME);
         motors.setM1Speed(400);
         case6CutMotorRunning = true;
@@ -4896,7 +6261,7 @@ void flushSequence() {
           break;
         }
 
-        flushStep++;
+        setFlushStep(flushStep + 1);
         SerialBLE_print("Moving to Case7 from case 6: ");
         SerialBLE_println(millis());
 
@@ -4943,7 +6308,7 @@ void flushSequence() {
         SerialBLE_print("MOTOR START TIME: ");
         Serial.println(motorStartMillis);
         motors.setM2Speed(400);
-        flushStep++;
+        setFlushStep(flushStep + 1);
         SerialBLE_print("Moving to Case 8: ");
         SerialBLE_println(millis());
         stepStartMillis = currentMillis;
@@ -4974,7 +6339,7 @@ void flushSequence() {
       if (currentMillis - stepStartMillis >= backupTime * 1000) {
         Serial.println("Stop backing bag up");
         motors.setM2Speed(0);
-        flushStep++;
+        setFlushStep(flushStep + 1);
         SerialBLE_print("Moving to Case9: ");
         SerialBLE_println(millis());
       }
@@ -4984,7 +6349,7 @@ void flushSequence() {
     case 9:
       case10FanStarted = false;  // Reset flag for case 10
       case10BackupStarted = false;  // Reset flag for case 10 backup
-      flushStep++;
+      setFlushStep(flushStep + 1);
       SerialBLE_print("Moving to Case10: ");
       Serial.println(millis());
       break;
@@ -5048,7 +6413,7 @@ void flushSequence() {
           case10FanStarted = false;
           case10BackupStarted = false;
           openSwitchLatched = false;
-          flushStep++;
+          setFlushStep(flushStep + 1);
           SerialBLE_print("Moving to Case11:");
           Serial.println(millis());
         }
@@ -5062,7 +6427,7 @@ void flushSequence() {
         motors.setM2Speed(0);
         // Keep M3 running - don't stop it here, case 12 will handle fan duration
         stepStartMillis = currentMillis;
-        flushStep++;
+        setFlushStep(flushStep + 1);
         SerialBLE_print("Moving to Case12:");
         SerialBLE_println(millis());
       }
@@ -5072,28 +6437,34 @@ void flushSequence() {
       if (currentMillis - stepStartMillis >= fanDuration * 1000) {
         SerialBLE_println("STOP fan after fanDuration");
         setFanSpeed(0);// Stop M3 motor/fan
-        // Start end-hold timer: keep all LEDs on for 3 seconds in case 13.
         stepStartMillis = currentMillis;
-        flushStep++;
+        setFlushStep(flushStep + 1);
         SerialBLE_print("Moving to Case13:");
         SerialBLE_println(millis());
       }
       break;
 
-    case 13:
-      // Hold full LED bar for 3 seconds before turning everything off.
-      if (currentMillis - stepStartMillis < 3000) {
+    case 13: {
+      // Completion cue: all LEDs on/off twice in quick succession.
+      const unsigned long completionFlashPhaseMs = 120;
+      const unsigned long completionFlashTotalMs = completionFlashPhaseMs * 4;
+      unsigned long elapsed = currentMillis - stepStartMillis;
+      if (elapsed < completionFlashTotalMs) {
+        int phase = (int)(elapsed / completionFlashPhaseMs);
+        bool allOn = (phase == 0 || phase == 2);
         for (int i = 0; i < totalLeds; i++) {
-          mcp_digitalWrite(getLedPin(i), HIGH);
-        } 
+          mcp_digitalWrite(getLedPin(i), allOn ? HIGH : LOW);
+        }
       } else {
         Serial.println("All LEDs off");
         for (int i = 0; i < totalLeds; i++) {
           mcp_digitalWrite(getLedPin(i), LOW);
         }
         incrementFlushCount();
+        logDevFlush("flush_event", 0, "complete", true);
         isFlushing = false;
-        flushStep = 0;
+        setFlushStep(0, false);
+        lastDevFlushStatusLogMillis = 0;
         flushCancelArmed = false;
         cutBag = false;  // Reset cutBag for next cycle
         lastActivityMillis = millis();  // Restart inactivity/sleep timer at end of flush
@@ -5101,6 +6472,34 @@ void flushSequence() {
         Serial.println(millis());
       }
       break;
+    }
+
+    case 14: {
+      float coolingTemp = readTemperature();
+      if (currentMillis - lastCoolingTempLogMillis >= COOLING_TEMP_LOG_INTERVAL_MS) {
+        SerialBLE_print("Cancel recovery cooling temp: ");
+        SerialBLE_print(coolingTemp);
+        SerialBLE_println(" C");
+        lastCoolingTempLogMillis = currentMillis;
+      }
+
+      bool coolingThresholdReached = coolingTemp < COOL_OPEN_TEMP_C;
+      bool coolingTimeoutReached = (currentMillis - stepStartMillis) >= (MAX_COOL_WAIT_S * 1000UL);
+
+      if (coolingThresholdReached || coolingTimeoutReached) {
+        if (coolingThresholdReached) {
+          SerialBLE_print("Cancel recovery cooling threshold reached at ");
+          SerialBLE_print(coolingTemp);
+          SerialBLE_println(" C");
+        } else {
+          SerialBLE_print("WARNING: Cancel recovery cooling timeout at ");
+          SerialBLE_print(coolingTemp);
+          SerialBLE_println(" C - starting homing");
+        }
+        beginCancelRecoveryHoming();
+      }
+      break;
+    }
   }
 }
 
@@ -5283,6 +6682,52 @@ void disableOTA() {
   Serial.println("OTA mode disabled");
 }
 
+void disconnectBleClient() {
+  if (!blue_server || !is_device_connected) {
+    return;
+  }
+
+  uint16_t connId = blue_server->getConnId();
+  Serial.printf("Disconnecting BLE client (connId=%u)\n", connId);
+  blue_server->disconnect(connId);
+  is_device_connected = false;
+  old_device_connect = false;
+  serial_streaming_enabled = false;
+  resetTrustState();
+}
+
+void abortOtaSessionAndDisconnect(const char* reasonCode) {
+  Serial.printf("OTA session aborted: %s\n", reasonCode);
+  logError("ota", 0, reasonCode, false);
+
+  publishOTAErrorStatus(reasonCode);
+
+  if (ota_handle != 0) {
+    esp_ota_abort(ota_handle);
+    ota_handle = 0;
+  }
+
+  setOTAState(OTA_ERROR, reasonCode);
+  resetOTAState();
+  updateInProgress = false;
+
+  disableOTA();
+
+  // Give the phone a moment to receive the error notification before disconnect.
+  wdtSafeDelay(150);
+
+  disconnectBleClient();
+
+  if (blue_server) {
+    BLEDevice::startAdvertising();
+  }
+  bleEnabled = true;
+  bleIdleStartTime = millis();
+  lastActivityMillis = millis();
+
+  Serial.println("OTA aborted — BLE advertising restarted for normal connection");
+}
+
 const char* otaStateToString(OTAState state) {
   switch (state) {
     case OTA_IDLE: return "OTA_IDLE";
@@ -5400,15 +6845,17 @@ void handleOTACommand(const String& command) {
       SerialBLE_println("Update not prepared");
       return;
     }
-    if (ota_handle == 0) {
-      esp_err_t err = esp_ota_begin(update_partition, OTA_SIZE_UNKNOWN, &ota_handle);
-      if (err != ESP_OK) {
-        Serial.printf("ERROR: esp_ota_begin failed: %s\n", esp_err_to_name(err));
-        setOTAState(OTA_ERROR, "esp_ota_begin failed");
-        ota_error_message = "OTA begin failed: " + String(esp_err_to_name(err));
-        publishOTAErrorStatus("BEGIN_FAILED");
-        return;
-      }
+    if (ota_handle != 0) {
+      esp_ota_abort(ota_handle);
+      ota_handle = 0;
+    }
+    esp_err_t err = esp_ota_begin(update_partition, OTA_SIZE_UNKNOWN, &ota_handle);
+    if (err != ESP_OK) {
+      Serial.printf("ERROR: esp_ota_begin failed: %s\n", esp_err_to_name(err));
+      setOTAState(OTA_ERROR, "esp_ota_begin failed");
+      ota_error_message = "OTA begin failed: " + String(esp_err_to_name(err));
+      publishOTAErrorStatus("BEGIN_FAILED");
+      return;
     }
     if (!setOTAState(OTA_RECEIVING, "start update command")) {
       publishOTAErrorStatus("INVALID_START_TRANSITION");
@@ -5440,11 +6887,24 @@ void handleOTACommand(const String& command) {
         ota_handle = 0;
       }
       publishOTAStatus("UPDATE_VALIDATION_FAILED");
-      if (rollbackOTAUpdate()) {
+      if (logOtaRollback("validation", "md5_mismatch", NULL)) {
         SerialBLE_println("Rollback successful, rebooting...");
         delay(1000);
         esp_restart();
       }
+      return;
+    }
+
+    if (firmware_size == 0 || bytes_received != firmware_size) {
+      Serial.printf("ERROR: Firmware size mismatch (received %u, expected %u)\n",
+                    (unsigned)bytes_received, (unsigned)firmware_size);
+      setOTAState(OTA_ERROR, "firmware size mismatch");
+      ota_error_message = "Firmware size mismatch before finalize";
+      if (ota_handle != 0) {
+        esp_ota_abort(ota_handle);
+        ota_handle = 0;
+      }
+      publishOTAErrorStatus("SIZE_MISMATCH");
       return;
     }
 
@@ -5454,6 +6914,7 @@ void handleOTACommand(const String& command) {
     }
     publishOTAStatus("UPDATE_FINALIZING");
     esp_err_t err = esp_ota_end(ota_handle);
+    ota_handle = 0;
     if (err != ESP_OK) {
       Serial.printf("ERROR: esp_ota_end failed: %s\n", esp_err_to_name(err));
       setOTAState(OTA_ERROR, "esp_ota_end failed");
@@ -5471,6 +6932,7 @@ void handleOTACommand(const String& command) {
     }
     publishOTAStatus("UPDATE_COMPLETE");
     notifyUpdateProgress(100);
+    markOtaPendingVerify();
     SerialBLE_println("OTA update completed successfully, rebooting...");
     delay(1000);
     esp_restart();
@@ -5480,37 +6942,20 @@ void handleOTACommand(const String& command) {
 void checkOTATimeouts() {
   unsigned long now = millis();
   if (otaState == OTA_PREPARING && (now - otaStateEnteredAt > OTA_PREPARE_TIMEOUT_MS)) {
-    setOTAState(OTA_ERROR, "prepare timeout");
-    publishOTAErrorStatus("TIMEOUT_PREPARE");
-    resetOTAState();
-    publishOTAStatus("UPDATE_TIMEOUT_RECOVERED");
+    abortOtaSessionAndDisconnect("TIMEOUT_PREPARE");
     return;
   }
 
   if (otaState == OTA_RECEIVING) {
     unsigned long lastActivity = (otaLastChunkMillis > 0) ? otaLastChunkMillis : otaStateEnteredAt;
     if (now - lastActivity > OTA_RECEIVE_INACTIVITY_TIMEOUT_MS) {
-      if (ota_handle != 0) {
-        esp_ota_abort(ota_handle);
-        ota_handle = 0;
-      }
-      setOTAState(OTA_ERROR, "receive timeout");
-      publishOTAErrorStatus("TIMEOUT_RECEIVE");
-      resetOTAState();
-      publishOTAStatus("UPDATE_TIMEOUT_RECOVERED");
+      abortOtaSessionAndDisconnect("TIMEOUT_RECEIVE");
       return;
     }
   }
 
   if (otaState == OTA_FINALIZING && (now - otaStateEnteredAt > OTA_FINALIZE_TIMEOUT_MS)) {
-    if (ota_handle != 0) {
-      esp_ota_abort(ota_handle);
-      ota_handle = 0;
-    }
-    setOTAState(OTA_ERROR, "finalize timeout");
-    publishOTAErrorStatus("TIMEOUT_FINALIZE");
-    resetOTAState();
-    publishOTAStatus("UPDATE_TIMEOUT_RECOVERED");
+    abortOtaSessionAndDisconnect("TIMEOUT_FINALIZE");
   }
 }
 
@@ -5570,6 +7015,12 @@ bool isHardwareLikelyDisconnectedForUserAction() {
   return readMainThermistorResistanceOhms() > HARDWARE_DISCONNECT_RESISTANCE_OHMS;
 }
 
+void maintainCancelRecoveryLeds() {
+  for (int i = 0; i < totalLeds; i++) {
+    mcp_digitalWrite(getLedPin(i), HIGH);
+  }
+}
+
 void playHardwareNotConnectedAlert() {
   const int cycles = 3;
   const int onMs = 80;
@@ -5581,12 +7032,14 @@ void playHardwareNotConnectedAlert() {
     }
     digitalWrite(buzzerPin, HIGH);
     delay(onMs);
+    feedTaskWatchdog();
 
     for (int i = 0; i < totalLeds; i++) {
       mcp_digitalWrite(getLedPin(i), LOW);
     }
     digitalWrite(buzzerPin, LOW);
     delay(offMs);
+    feedTaskWatchdog();
   }
 
   // Ensure alert outputs are off after the pattern completes.
@@ -5596,29 +7049,676 @@ void playHardwareNotConnectedAlert() {
   }
 }
 
+static float batteryVoltageFromAdc(int analogValue) {
+  float voltage = analogValue * (3.3f / 4095.0f);
+  return voltage * 7.317f;
+}
+
+static int batteryChargeLevelFromVoltage(float batteryVoltage) {
+  if (batteryVoltage >= 12.6f) return 100;
+  if (batteryVoltage <= 11.0f) return 0;
+  return (int)((batteryVoltage - 11.0f) / 1.6f * 100.0f);
+}
+
+void applyBatteryAssessDefaults() {
+  minLoadedBatteryV = 11.2f;
+  maxBatterySagV = 0.4f;
+  minIdleBatteryVFloor = 11.3f;
+  usableVFull = 12.4f;
+  batteryAssessSettleMs = 50;
+  heaterCapV255 = 12.0f;
+  heaterCapV170 = 11.7f;
+  heaterCapV100 = 11.4f;
+}
+
+bool validateBatteryAssessParams() {
+  if (minLoadedBatteryV != minLoadedBatteryV || minLoadedBatteryV < 10.0f || minLoadedBatteryV > 12.5f) {
+    return false;
+  }
+  if (maxBatterySagV != maxBatterySagV || maxBatterySagV < 0.05f || maxBatterySagV > 2.0f) {
+    return false;
+  }
+  if (minIdleBatteryVFloor != minIdleBatteryVFloor || minIdleBatteryVFloor < 10.5f || minIdleBatteryVFloor > 13.0f) {
+    return false;
+  }
+  if (usableVFull != usableVFull || usableVFull <= minLoadedBatteryV || usableVFull > 13.5f) {
+    return false;
+  }
+  if (batteryAssessSettleMs < 10 || batteryAssessSettleMs > 500) {
+    return false;
+  }
+  if (heaterCapV255 != heaterCapV255 || heaterCapV170 != heaterCapV170 || heaterCapV100 != heaterCapV100) {
+    return false;
+  }
+  if (!(heaterCapV255 > heaterCapV170 && heaterCapV170 > heaterCapV100 && heaterCapV100 > minLoadedBatteryV)) {
+    return false;
+  }
+  return true;
+}
+
+void applyBatteryAssessParamsFromCsv(const float* parameters_list, int count) {
+  if (count >= PARAM_COUNT) {
+    minLoadedBatteryV = parameters_list[22];
+    maxBatterySagV = parameters_list[23];
+    minIdleBatteryVFloor = parameters_list[24];
+    usableVFull = parameters_list[25];
+    batteryAssessSettleMs = (uint16_t)parameters_list[26];
+    heaterCapV255 = parameters_list[27];
+    heaterCapV170 = parameters_list[28];
+    heaterCapV100 = parameters_list[29];
+  }
+}
+
+static int usablePercentFromVLoad(float vLoad) {
+  if (vLoad >= usableVFull) {
+    return 100;
+  }
+  if (vLoad <= minLoadedBatteryV) {
+    return 0;
+  }
+  return (int)((vLoad - minLoadedBatteryV) / (usableVFull - minLoadedBatteryV) * 100.0f);
+}
+
+static bool shouldRefreshBatteryCache(bool forceRefresh) {
+  if (forceRefresh) {
+    return true;
+  }
+  if (!batteryAssessment.valid) {
+    return true;
+  }
+  if ((millis() - batteryAssessment.lastAssessMs) >= BATTERY_ASSESS_CACHE_MS) {
+    return !isFlushing && !heaterOn && !heaterOutputOn && !isM1MotorActive();
+  }
+  return false;
+}
+
+static void storeBatteryAssessment(float vIdle, float vLoadWorst, float sagWorst, int capDuty,
+                                   bool assessPassed) {
+  batteryAssessment.vIdle = vIdle;
+  batteryAssessment.vLoadWorst = vLoadWorst;
+  batteryAssessment.sagWorst = sagWorst;
+  batteryAssessment.capDuty = capDuty;
+  batteryAssessment.usablePercent = usablePercentFromVLoad(vLoadWorst);
+  batteryAssessment.assessPassed = assessPassed;
+  batteryAssessment.flushAllowed = assessPassed && (batteryAssessment.usablePercent > batteryThreshold);
+  batteryAssessment.lastAssessMs = millis();
+  batteryAssessment.valid = true;
+}
+
+static void resetRuntimeSagStrikes() {
+  runtimeSagStrikes = 0;
+  runtimeSagLastStrikeMs = 0;
+}
+
+static bool checkRuntimeSagDebounced(float v, const char* reason) {
+  if (v >= minLoadedBatteryV) {
+    resetRuntimeSagStrikes();
+    return false;
+  }
+
+  unsigned long now = millis();
+  if (runtimeSagStrikes == 0 || (now - runtimeSagLastStrikeMs) >= 100UL) {
+    runtimeSagStrikes++;
+    runtimeSagLastStrikeMs = now;
+  }
+  if (runtimeSagStrikes >= RUNTIME_SAG_STRIKES) {
+    latchLowBatteryStop(reason);
+    resetRuntimeSagStrikes();
+    return true;
+  }
+  return false;
+}
+
+float readBatteryVoltageQuiet() {
+  return batteryVoltageFromAdc(analogRead(batteryVoltagePin));
+}
+
+static float heaterCurrentFromAdc(int analogValue) {
+  float voltage = analogValue * (3.3f / 4095.0f);
+  return voltage / 2.0f;
+}
+
+float readHeaterCurrentQuiet() {
+  return heaterCurrentFromAdc(readHeaterCurrentAdc());
+}
+
+static void emitBatteryReportLine(const char* line) {
+  if (!line) {
+    return;
+  }
+  Serial.println(line);
+  if (serial_streaming_enabled) {
+    sendSerialToBLE(String(line) + "\n");
+  }
+}
+
+void streamBatteryAssessReport(const char* tag) {
+  const char* reportTag = (tag && tag[0]) ? tag : "battery_assess";
+  char line[128];
+
+  emitBatteryReportLine("=== BATTERY ASSESS ===");
+  snprintf(line, sizeof(line), "tag=%s vIdle=%.2fV capDuty=%d steps=%u",
+           reportTag,
+           batteryAssessment.vIdle,
+           batteryAssessment.capDuty,
+           (unsigned)batteryAssessment.stepCount);
+  emitBatteryReportLine(line);
+
+  for (uint8_t i = 0; i < batteryAssessment.stepCount; i++) {
+    const BatteryAssessStep& step = batteryAssessment.steps[i];
+    snprintf(line, sizeof(line),
+             "step duty=%d vLoad=%.2fV sag=%.2fV adc=%d I=%.2fA",
+             step.duty, step.vLoad, step.sag, step.heaterAdc, step.heaterA);
+    emitBatteryReportLine(line);
+  }
+
+  snprintf(line, sizeof(line),
+           "summary vLoadWorst=%.2fV sagWorst=%.2fV usable=%d%% passed=%d flushAllowed=%d",
+           batteryAssessment.vLoadWorst,
+           batteryAssessment.sagWorst,
+           batteryAssessment.usablePercent,
+           batteryAssessment.assessPassed ? 1 : 0,
+           batteryAssessment.flushAllowed ? 1 : 0);
+  emitBatteryReportLine(line);
+
+  snprintf(line, sizeof(line),
+           "limits vLoadMin=%.2fV sagMax=%.2fV threshold=%d%%",
+           minLoadedBatteryV,
+           maxBatterySagV,
+           batteryThreshold);
+  emitBatteryReportLine(line);
+  emitBatteryReportLine("=== END BATTERY ASSESS ===");
+}
+
+float minIdleBatteryV() {
+  float fromThreshold = 11.0f + (batteryThreshold / 100.0f) * 1.6f;
+  return (fromThreshold > minIdleBatteryVFloor) ? fromThreshold : minIdleBatteryVFloor;
+}
+
+void logPowerTestEvent(const char* phase, const char* msg, bool includeContext) {
+  if (!phase || !msg) {
+    return;
+  }
+  char line[LOG_LINE_MAX_LEN];
+  snprintf(line, sizeof(line), "[%s] %s", phase, msg);
+  Serial.println(line);
+  SerialBLE_println(line);
+  if (errorLogInitialized) {
+    logError("power_test", 0, line, includeContext);
+  }
+}
+
+bool measureBatteryUnderLoad(float* vIdle, float* vLoad, int testDuty, uint16_t settleMs, const char* testTag) {
+  const char* tag = (testTag && testTag[0]) ? testTag : "load_test";
+  char msg[128];
+
+  snprintf(msg, sizeof(msg), "start duty=%d settle=%ums", testDuty, (unsigned)settleMs);
+  logPowerTestEvent(tag, msg, false);
+
+  float idle = readBatteryVoltageQuiet();
+  if (vIdle) {
+    *vIdle = idle;
+  }
+  snprintf(msg, sizeof(msg), "idle_v=%.2f", idle);
+  logPowerTestEvent(tag, msg, false);
+
+  applyHeaterPwmDuty(testDuty);
+  unsigned long start = millis();
+  while (millis() - start < settleMs) {
+    feedTaskWatchdog();
+    wdtSafeDelay(5);
+  }
+  float loaded = readBatteryVoltageQuiet();
+  applyHeaterPwmDuty(0);
+  if (vLoad) {
+    *vLoad = loaded;
+  }
+
+  float sag = idle - loaded;
+  snprintf(msg, sizeof(msg), "loaded_v=%.2f sag=%.2f", loaded, sag);
+  logPowerTestEvent(tag, msg, true);
+
+  if (loaded < minLoadedBatteryV) {
+    snprintf(msg, sizeof(msg), "FAIL vLoad=%.2f < min=%.2f", loaded, minLoadedBatteryV);
+    logPowerTestEvent(tag, msg, true);
+    return false;
+  }
+  if (sag > maxBatterySagV) {
+    snprintf(msg, sizeof(msg), "FAIL sag=%.2f > max=%.2f", sag, maxBatterySagV);
+    logPowerTestEvent(tag, msg, true);
+    return false;
+  }
+
+  logPowerTestEvent(tag, "PASS", false);
+  return true;
+}
+
+int getHeaterPwmCapForVoltage(float batteryV) {
+  if (batteryV >= heaterCapV255) return HEATER_PWM_MAX;
+  if (batteryV >= heaterCapV170) return 170;
+  if (batteryV >= heaterCapV100) return 100;
+  if (batteryV >= minLoadedBatteryV) return HEATER_TEST_START_DUTY;
+  return 0;
+}
+
+int getEffectiveHeaterPwmCap(float batteryV) {
+  int cap = getHeaterPwmCapForVoltage(batteryV);
+  if (!batteryAssessment.valid || !isFlushing) {
+    return cap;
+  }
+  if (batteryAssessment.vLoadWorst < (minLoadedBatteryV + PREFLIGHT_CAP_MARGIN_V)) {
+    if (cap >= HEATER_PWM_MAX) {
+      cap = 170;
+    } else if (cap >= 170) {
+      cap = 100;
+    } else if (cap >= 100) {
+      cap = HEATER_TEST_START_DUTY;
+    }
+  }
+  return cap;
+}
+
+bool assessBatteryUsable(const char* tag, bool forceRefresh, bool* outFlushAllowed) {
+  const char* assessTag = (tag && tag[0]) ? tag : "battery_assess";
+
+  if (!shouldRefreshBatteryCache(forceRefresh)) {
+    if (outFlushAllowed) {
+      *outFlushAllowed = batteryAssessment.flushAllowed;
+    }
+    return batteryAssessment.assessPassed;
+  }
+
+  char msg[128];
+  float vIdle = readBatteryVoltageQuiet();
+  float minIdle = minIdleBatteryV();
+  if (vIdle < minIdle) {
+    snprintf(msg, sizeof(msg), "idle_fail v=%.2f min_idle=%.2f", vIdle, minIdle);
+    logPowerTestEvent(assessTag, msg, true);
+    batteryAssessment.inProgress = false;
+    batteryAssessment.stepCount = 0;
+    storeBatteryAssessment(vIdle, vIdle, 0.0f, 0, false);
+    if (outFlushAllowed) {
+      *outFlushAllowed = false;
+    }
+    return false;
+  }
+
+  int capDuty = getHeaterPwmCapForVoltage(vIdle);
+  if (capDuty <= 0) {
+    snprintf(msg, sizeof(msg), "cap_fail v=%.2f cap=0", vIdle);
+    logPowerTestEvent(assessTag, msg, true);
+    batteryAssessment.inProgress = false;
+    batteryAssessment.stepCount = 0;
+    storeBatteryAssessment(vIdle, vIdle, 0.0f, 0, false);
+    if (outFlushAllowed) {
+      *outFlushAllowed = false;
+    }
+    return false;
+  }
+
+  batteryAssessment.inProgress = true;
+  batteryAssessment.stepCount = 0;
+  const int candidateDuties[] = {HEATER_TEST_START_DUTY, 128, capDuty};
+  int dutySteps[3];
+  int dutyCount = 0;
+  for (int i = 0; i < 3; i++) {
+    int duty = candidateDuties[i];
+    if (duty > capDuty) {
+      continue;
+    }
+    bool duplicate = false;
+    for (int j = 0; j < dutyCount; j++) {
+      if (dutySteps[j] == duty) {
+        duplicate = true;
+        break;
+      }
+    }
+    if (!duplicate) {
+      dutySteps[dutyCount++] = duty;
+    }
+  }
+
+  snprintf(msg, sizeof(msg), "start vIdle=%.2f capDuty=%d steps=%d", vIdle, capDuty, dutyCount);
+  logPowerTestEvent(assessTag, msg, true);
+
+  float vLoadWorst = vIdle;
+  float sagWorst = 0.0f;
+  float highestDutyVLoad = vIdle;
+  float highestDutySag = 0.0f;
+  int highestDuty = dutySteps[dutyCount - 1];
+  float stepIdle = vIdle;
+
+  for (int i = 0; i < dutyCount; i++) {
+    int duty = dutySteps[i];
+    snprintf(msg, sizeof(msg), "step duty=%d settle=%ums", duty, (unsigned)batteryAssessSettleMs);
+    logPowerTestEvent(assessTag, msg, false);
+
+    applyHeaterPwmDuty(duty);
+    unsigned long start = millis();
+    while (millis() - start < batteryAssessSettleMs) {
+      feedTaskWatchdog();
+      wdtSafeDelay(5);
+    }
+    float vLoad = readBatteryVoltageQuiet();
+    int heaterAdc = readHeaterCurrentAdc();
+    float heaterA = heaterCurrentFromAdc(heaterAdc);
+    applyHeaterPwmDuty(0);
+    float sag = stepIdle - vLoad;
+    if (vLoad < vLoadWorst) {
+      vLoadWorst = vLoad;
+    }
+    if (sag > sagWorst) {
+      sagWorst = sag;
+    }
+    if (duty == highestDuty) {
+      highestDutyVLoad = vLoad;
+      highestDutySag = sag;
+    }
+    if (batteryAssessment.stepCount < 3) {
+      BatteryAssessStep& step = batteryAssessment.steps[batteryAssessment.stepCount++];
+      step.duty = duty;
+      step.vLoad = vLoad;
+      step.sag = sag;
+      step.heaterAdc = heaterAdc;
+      step.heaterA = heaterA;
+    }
+
+    snprintf(msg, sizeof(msg), "step_result duty=%d vLoad=%.2f sag=%.2f adc=%d I=%.2f",
+             duty, vLoad, sag, heaterAdc, heaterA);
+    logPowerTestEvent(assessTag, msg, false);
+
+    stepIdle = readBatteryVoltageQuiet();
+    wdtSafeDelay(20);
+  }
+
+  bool assessPassed = (highestDutyVLoad >= minLoadedBatteryV) && (highestDutySag <= maxBatterySagV);
+  storeBatteryAssessment(vIdle, vLoadWorst, sagWorst, capDuty, assessPassed);
+  batteryAssessment.inProgress = false;
+
+  snprintf(msg, sizeof(msg),
+           "done passed=%d usable=%d%% flushAllowed=%d vLoadWorst=%.2f sagWorst=%.2f capDuty=%d",
+           assessPassed ? 1 : 0,
+           batteryAssessment.usablePercent,
+           batteryAssessment.flushAllowed ? 1 : 0,
+           vLoadWorst,
+           sagWorst,
+           capDuty);
+  logPowerTestEvent(assessTag, msg, false);
+
+  if (outFlushAllowed) {
+    *outFlushAllowed = batteryAssessment.flushAllowed;
+  }
+  return assessPassed;
+}
+
+bool isFlushAllowedByBattery(bool forceRefresh) {
+  bool flushAllowed = false;
+  assessBatteryUsable(forceRefresh ? "flush_button" : "flush_check", forceRefresh, &flushAllowed);
+  return flushAllowed;
+}
+
+bool isBatteryOkForHeaterTest() {
+  return assessBatteryUsable("boot_battery_check", true, nullptr);
+}
+
+void latchLowBatteryStop(const char* reason) {
+  float v = readBatteryVoltageQuiet();
+  char msg[128];
+  snprintf(msg, sizeof(msg), "%s v=%.2f", reason ? reason : "unknown", v);
+  Serial.printf("LOW_BATTERY_STOP: %s\n", msg);
+  SerialBLE_println(String("LOW_BATTERY_STOP: ") + msg);
+  logError("power", 2, msg, true);
+  stopEverything();
+  ERROR_CODE = 2;
+  LEDErrorCode(2);
+}
+
+bool isM1MotorActive() {
+  return mechanismMotorRunning
+      || case6CutMotorRunning
+      || case6PrecoolCutRunning
+      || motorHomingActive;
+}
+
+void initBrownoutStreak() {
+  if (brownoutRtc.magic != BROWNOUT_RTC_MAGIC) {
+    brownoutRtc.magic = BROWNOUT_RTC_MAGIC;
+    brownoutRtc.streak = 0;
+  }
+  esp_reset_reason_t reason = esp_reset_reason();
+  if (reason == ESP_RST_POWERON) {
+    brownoutRtc.streak = 0;
+  } else if (reason == ESP_RST_BROWNOUT && brownoutRtc.streak < 255) {
+    brownoutRtc.streak++;
+    char msg[64];
+    snprintf(msg, sizeof(msg), "brownout_streak=%u reason=%d", (unsigned)brownoutRtc.streak, (int)reason);
+    logPowerTestEvent("boot_brownout", msg, true);
+  }
+}
+
+void clearBrownoutStreakOnSuccessfulBoot() {
+  if (brownoutRtc.magic == BROWNOUT_RTC_MAGIC) {
+    brownoutRtc.streak = 0;
+  }
+}
+
+bool shouldSkipBootHeaterTest(const char** skipReason) {
+  initBrownoutStreak();
+  if (isHardwareLikelyDisconnectedForUserAction()) {
+    logPowerTestEvent("boot_heater_test", "skip hw_disconnected", true);
+    if (skipReason) {
+      *skipReason = "hw_disconnected";
+    }
+    return true;
+  }
+  char msg[128];
+  if (brownoutRtc.streak >= BROWNOUT_STREAK_LIMIT) {
+    snprintf(msg, sizeof(msg), "skip brownout_streak=%u limit=%u",
+             (unsigned)brownoutRtc.streak, (unsigned)BROWNOUT_STREAK_LIMIT);
+    logPowerTestEvent("boot_heater_test", msg, true);
+    if (skipReason) {
+      *skipReason = "brownout_streak";
+    }
+    return true;
+  }
+  if (!isBatteryOkForHeaterTest()) {
+    logPowerTestEvent("boot_heater_test", "skip low_battery", true);
+    if (skipReason) {
+      *skipReason = "low_battery";
+    }
+    return true;
+  }
+  logPowerTestEvent("boot_heater_test", "preflight_ok running test", false);
+  return false;
+}
+
+void loadMotorHomingDeferredFromNvs() {
+  nvs_handle_t nvsHandle;
+  esp_err_t err = nvs_open(DEV_MODE_NAMESPACE, NVS_READONLY, &nvsHandle);
+  if (err != ESP_OK) {
+    return;
+  }
+
+  uint8_t deferred = 0;
+  err = nvs_get_u8(nvsHandle, HOMING_DEFERRED_NVS_KEY, &deferred);
+  if (err == ESP_OK && deferred == 1) {
+    motorHomingDeferred = true;
+    size_t reasonLen = HOMING_DEFER_REASON_MAX;
+    esp_err_t reasonErr = nvs_get_str(nvsHandle, HOMING_DEFER_REASON_NVS_KEY, motorHomingDeferReason, &reasonLen);
+    if (reasonErr != ESP_OK) {
+      motorHomingDeferReason[0] = '\0';
+    }
+    Serial.printf("Loaded homing deferred from NVS: reason=%s\n", motorHomingDeferReason);
+  }
+
+  nvs_close(nvsHandle);
+}
+
+void saveMotorHomingDeferredToNvs(const char* reason) {
+  nvs_handle_t nvsHandle;
+  esp_err_t err = nvs_open(DEV_MODE_NAMESPACE, NVS_READWRITE, &nvsHandle);
+  if (err != ESP_OK) {
+    Serial.printf("Failed to open NVS for homing defer save: %s\n", esp_err_to_name(err));
+    return;
+  }
+
+  err = nvs_set_u8(nvsHandle, HOMING_DEFERRED_NVS_KEY, 1);
+  if (err == ESP_OK && reason) {
+    nvs_set_str(nvsHandle, HOMING_DEFER_REASON_NVS_KEY, reason);
+  }
+  if (err == ESP_OK) {
+    err = nvs_commit(nvsHandle);
+  }
+  nvs_close(nvsHandle);
+
+  if (err != ESP_OK) {
+    Serial.printf("Failed to save homing deferred to NVS: %s\n", esp_err_to_name(err));
+  }
+}
+
+void clearMotorHomingDeferredFromNvs() {
+  nvs_handle_t nvsHandle;
+  esp_err_t err = nvs_open(DEV_MODE_NAMESPACE, NVS_READWRITE, &nvsHandle);
+  if (err != ESP_OK) {
+    return;
+  }
+
+  nvs_erase_key(nvsHandle, HOMING_DEFERRED_NVS_KEY);
+  nvs_erase_key(nvsHandle, HOMING_DEFER_REASON_NVS_KEY);
+  nvs_commit(nvsHandle);
+  nvs_close(nvsHandle);
+}
+
+void deferMotorHoming(const char* reason) {
+  motorHomingDeferred = true;
+  if (reason) {
+    strncpy(motorHomingDeferReason, reason, HOMING_DEFER_REASON_MAX - 1);
+    motorHomingDeferReason[HOMING_DEFER_REASON_MAX - 1] = '\0';
+  } else {
+    motorHomingDeferReason[0] = '\0';
+  }
+  saveMotorHomingDeferredToNvs(motorHomingDeferReason);
+
+  float vIdle = readBatteryVoltageQuiet();
+  char msg[128];
+  snprintf(msg, sizeof(msg), "boot_skip reason=%s vIdle=%.2f streak=%u",
+           motorHomingDeferReason[0] ? motorHomingDeferReason : "unknown",
+           vIdle,
+           (unsigned)(brownoutRtc.magic == BROWNOUT_RTC_MAGIC ? brownoutRtc.streak : 0));
+  logPowerTestEvent("homing_defer", msg, true);
+
+  ERROR_CODE = 2;
+  LEDErrorCode(2);
+}
+
+void clearMotorHomingDeferred() {
+  if (!motorHomingDeferred) {
+    return;
+  }
+  motorHomingDeferred = false;
+  motorHomingDeferReason[0] = '\0';
+  clearMotorHomingDeferredFromNvs();
+  logPowerTestEvent("homing_defer", "complete deferred_cleared", true);
+
+  if (ERROR_CODE == 2) {
+    ERROR_CODE = 0;
+    for (int i = 0; i < totalLeds; i++) {
+      mcp_digitalWrite(getLedPin(i), LOW);
+    }
+  }
+}
+
+void applyLoadedMotorHomingDeferred() {
+  if (!motorHomingDeferred) {
+    return;
+  }
+  if (isHardwareLikelyDisconnectedForUserAction()) {
+    clearMotorHomingDeferred();
+    logPowerTestEvent("homing_defer", "cleared hw_disconnected", true);
+    return;
+  }
+  ERROR_CODE = 2;
+  LEDErrorCode(2);
+  char msg[96];
+  snprintf(msg, sizeof(msg), "boot_skip persisted reason=%s",
+           motorHomingDeferReason[0] ? motorHomingDeferReason : "unknown");
+  logPowerTestEvent("homing_defer", msg, true);
+}
+
+bool shouldDeferHomingAtBoot(const char** reason) {
+  if (motorHomingDeferred) {
+    if (reason) {
+      *reason = motorHomingDeferReason[0] ? motorHomingDeferReason : "nvs_persisted";
+    }
+    return true;
+  }
+  if (lastBootHeaterTestSkipped) {
+    if (reason) {
+      *reason = lastBootHeaterSkipReason ? lastBootHeaterSkipReason : "heater_test_skipped";
+    }
+    return true;
+  }
+  if (!isBatteryOkForHeaterTest()) {
+    if (reason) {
+      *reason = "boot_low_battery";
+    }
+    return true;
+  }
+  return false;
+}
+
+void tryStartDeferredHomingIfReady() {
+  if (!motorHomingDeferred || motorHomingActive || isFlushing || ERROR_CODE != 2) {
+    return;
+  }
+  if (isHardwareLikelyDisconnectedForUserAction()) {
+    return;
+  }
+
+  unsigned long now = millis();
+  if (now - lastHomingRetryCheckMs < HOMING_RETRY_CHECK_INTERVAL_MS) {
+    return;
+  }
+  lastHomingRetryCheckMs = now;
+
+  if (!isBatteryOkForHeaterTest()) {
+    float v = readBatteryVoltageQuiet();
+    char msg[80];
+    snprintf(msg, sizeof(msg), "retry_check fail v=%.2f", v);
+    logPowerTestEvent("homing_defer", msg, true);
+    return;
+  }
+
+  logPowerTestEvent("homing_defer", "retry_start battery_ok", true);
+  startMotorHoming(true);
+}
+
 float readBatteryVoltage() {
   int analogValue = analogRead(batteryVoltagePin);
-  // Convert ADC reading to voltage (0-3.3V)
-  float voltage = analogValue * (3.3 / 4095.0);
-  
-  // Voltage divider: 12V battery -> VMON pin
-  // R29 = 10kΩ, R28 = 2.2kΩ
-  // Battery voltage = VMON voltage * (R29 + R28) / R28
-  // Battery = VMON * (10k + 2.2k) / 2.2k = VMON * 5.545
-  float batteryVoltage = voltage * 7.317; //Changed to 7.317, from 5.545
-  
-  // Charge level: 11.0V = 0%, 12.6V = 100%
-  int chargeLevel;
-  if (batteryVoltage >= 12.6f) chargeLevel = 100;
-  else if (batteryVoltage <= 11.0f) chargeLevel = 0;
-  else chargeLevel = (int)((batteryVoltage - 11.0f) / 1.6f * 100.0f);
+  float batteryVoltage = batteryVoltageFromAdc(analogValue);
+  float voltage = analogValue * (3.3f / 4095.0f);
 
-  // Debug output: one BLE string to avoid truncation/interleaving
-  Serial.printf("Battery Debug: ADC=%d, VMON=%.3fV, Battery=%.2fV\n", analogValue, voltage, batteryVoltage);
-  if (serial_streaming_enabled) {
-    sendSerialToBLE("BAT_ADC: " + String(analogValue) + ", CHARGE: " + String(chargeLevel) + "%\n");
+  if (!batteryAssessment.inProgress) {
+    int chargeLevel = batteryAssessment.valid ? batteryAssessment.usablePercent
+                                              : usablePercentFromVLoad(batteryVoltage);
+    const char* usableSuffix = batteryAssessment.valid ? " cached" : "";
+
+    Serial.printf("Battery Debug: ADC=%d, VMON=%.3fV, Battery=%.2fV, Usable=%d%%%s\n",
+                  analogValue, voltage, batteryVoltage, chargeLevel, usableSuffix);
+    if (serial_streaming_enabled) {
+      sendSerialToBLE("BAT_ADC: " + String(analogValue) + ", USABLE: " + String(chargeLevel) + "%\n");
+    }
   }
   return batteryVoltage;
+}
+
+float readBatteryTemperatureQuiet() {
+  int analogValue = analogRead(batteryTempPin);
+  float voltage = analogValue * (3.3f / 4095.0f);
+  float thermistorResistance = 10000.0f * (3.3f - voltage) / voltage;
+  float ln_ratio = log(thermistorResistance / 10000.0f);
+  float steinhart = ln_ratio / 3950.0f + 1.0f / (25.0f + 273.15f);
+  return (1.0f / steinhart) - 273.15f;
 }
 
 float readBatteryTemperature() {
@@ -5662,69 +7762,69 @@ float readBatteryTemperature() {
 }
 
 int getBatteryChargeLevel() {
-  float batteryVoltage = readBatteryVoltage();
-  
-  // Linear percentage calculation: 11.0V = 0%, 12.6V = 100%
-  if (batteryVoltage >= 12.6) return 100;        // Cap at 100%
-  else if (batteryVoltage <= 11.0) return 0;    // Cap at 0%
-  else {
-    // Linear interpolation: ((voltage - 11.0) / 1.6) * 100
-    int percentage = (int)((batteryVoltage - 11.0) / 1.6 * 100);
-    return percentage;
+  if (!batteryAssessment.valid) {
+    assessBatteryUsable("get_battery", false, nullptr);
   }
+  return batteryAssessment.valid ? batteryAssessment.usablePercent : 0;
 }
 
-void displayBatteryChargeLevel() {
-  int chargeLevel = getBatteryChargeLevel();
-  float batteryVoltage = readBatteryVoltage();
-
-  // Main thermistor: resistance and temperature
-  int mainAnalog = analogRead(thermistorPin);
-  float mainVoltage = mainAnalog * (3.3 / 4095.0);
-  float thermistorResistance = (mainVoltage * knownResistor) / (3.3 - mainVoltage);
-  float mainTemp = readTemperature();
-
-  // Battery thermistor: resistance and temperature
-  int batAnalog = analogRead(batteryTempPin);
-  float batVoltage = batAnalog * (3.3 / 4095.0);
-  float batteryResistance = 10000.0 * (3.3 - batVoltage) / batVoltage;
-  float batteryTemp = readBatteryTemperature();
-
-  // Single BLE string to avoid truncation/interleaving
-  String bleLine = "Battery Voltage: " + String(batteryVoltage, 2) + "V, Charge Level: " + String(chargeLevel) + "%, Thermistor R: " + String(thermistorResistance, 2) + " Ohm, Thermistor T: " + String(mainTemp, 2) + " C, Battery R: " + String(batteryResistance, 2) + " Ohm, Battery T: " + String(batteryTemp, 2) + " C\n";
-  Serial.print(bleLine);
-  if (serial_streaming_enabled) {
-    sendSerialToBLE(bleLine);
-  }
-
-  Serial.printf("DEBUG: Charge level = %d%%, Battery voltage = %.2fV, Thermistor R = %.0f Ohm, Thermistor T = %.1f C, Battery R = %.0f Ohm, Battery T = %.1f C\n",
-                chargeLevel, batteryVoltage, thermistorResistance, mainTemp, batteryResistance, batteryTemp);
-  
-  // Turn off all LEDs first
+void renderBatteryLevelLeds(int chargeLevel) {
   for (int i = 0; i < totalLeds; i++) {
     mcp_digitalWrite(getLedPin(i), LOW);
   }
-  
-  // Calculate how many LEDs to light based on charge level
-  // LED 1 (index 0) = 100%, LED 14 (index 13) = 0%
-  // For 50% charge, LEDs 7-14 (indices 6-13) should be illuminated
+
   int ledsToLight = (chargeLevel * totalLeds) / 100;
-  
-  // Light up LEDs from the bottom (LED 14 = index 13) upwards
-  // Start from the highest index and work down
   for (int i = totalLeds - ledsToLight; i < totalLeds; i++) {
     mcp_digitalWrite(getLedPin(i), HIGH);
   }
-  
-  // Flash the last LED if charge is very low (0-20%)
+
   if (chargeLevel <= 20) {
     for (int flash = 0; flash < 3; flash++) {
       mcp_digitalWrite(getLedPin(totalLeds - 1), HIGH);
       delay(200);
+      feedTaskWatchdog();
       mcp_digitalWrite(getLedPin(totalLeds - 1), LOW);
       delay(200);
+      feedTaskWatchdog();
     }
   }
+}
+
+void showBatteryLevelFeedback(int chargeLevel, bool enterDisplayMode) {
+  renderBatteryLevelLeds(chargeLevel);
+  if (enterDisplayMode) {
+    batteryDisplayMode = true;
+    batteryDisplayStartTime = millis();
+    dualButtonHoldActive = false;
+  }
+}
+
+void displayBatteryChargeLevel() {
+  assessBatteryUsable("display", true, nullptr);
+  streamBatteryAssessReport("display");
+
+  int chargeLevel = batteryAssessment.usablePercent;
+  float batteryVoltage = batteryAssessment.vIdle;
+  float vLoadWorst = batteryAssessment.vLoadWorst;
+
+  float mainTemp = readTemperature();
+  float batteryTemp = readBatteryTemperatureQuiet();
+
+  char summary[160];
+  snprintf(summary, sizeof(summary),
+           "Battery: idle=%.2fV usable=%d%% vLoadWorst=%.2fV flushOK=%d, T=%.1fC batT=%.1fC",
+           batteryVoltage,
+           chargeLevel,
+           vLoadWorst,
+           batteryAssessment.flushAllowed ? 1 : 0,
+           mainTemp,
+           batteryTemp);
+  Serial.println(summary);
+  if (serial_streaming_enabled) {
+    sendSerialToBLE(String(summary) + "\n");
+  }
+
+  renderBatteryLevelLeds(chargeLevel);
 }
 
 void flashLEDsAcknowledgment() {
@@ -5738,57 +7838,174 @@ void flashLEDsAcknowledgment() {
   }
 }
 
-void cutModeLEDAnimation() {
-  // LED arrangement: left to right with paired LEDs
-  // Pattern: 4 -> (5,3) -> (6,2) -> (7,1) -> (8,14) -> (9,13) -> (10,12) -> 11
-  // Then reverse: 11 -> (10,12) -> (9,13) -> (8,14) -> (7,1) -> (6,2) -> (5,3) -> 4
-  // Run 3 times, then 200ms delay before flush sequence
-  
-  const int animationDelay = 75; // 600ms / 8 steps = 75ms per step
-  
-  // Define LED pairs for left-to-right animation
-  int leftLEDs[] = {3, 2, 1, 0, 13, 12, 11, 10};
-  int rightLEDs[] = {-1, 4, 5, 6, 7, 8, 9, -1}; // -1 means no paired LED
-  
-  for (int cycle = 0; cycle < 3; cycle++) {
-    // Turn on LEDs from left to right
-    for (int i = 0; i < 8; i++) {
-      mcp_digitalWrite(getLedPin(leftLEDs[i]), HIGH);
-      if (rightLEDs[i] != -1) {
-        mcp_digitalWrite(getLedPin(rightLEDs[i]), HIGH);
-      }
-      delay(animationDelay);
-      feedTaskWatchdog();
-    }
-    
-    // Turn off LEDs from right to left
-    for (int i = 7; i >= 0; i--) {
-      mcp_digitalWrite(getLedPin(leftLEDs[i]), LOW);
-      if (rightLEDs[i] != -1) {
-        mcp_digitalWrite(getLedPin(rightLEDs[i]), LOW);
-      }
-      delay(animationDelay);
-      feedTaskWatchdog();
-    }
+void flushStartLEDAnimation() {
+  // Reverse illumination: light all LEDs from top (14) to bottom (1) to signal flush start.
+  const unsigned long stepDelayMs = 40;
+
+  for (int i = 0; i < totalLeds; i++) {
+    mcp_digitalWrite(getLedPin(i), LOW);
   }
-  
-  // 200ms delay before flush sequence starts
-  delay(200);
-  feedTaskWatchdog();
+
+  for (int i = totalLeds - 1; i >= 0; i--) {
+    mcp_digitalWrite(getLedPin(i), HIGH);
+    delay(stepDelayMs);
+    feedTaskWatchdog();
+  }
 }
 
+bool mechanismNeedsHomingAfterCancel() {
+  return (flushStep >= 2) || (digitalRead(microswitchOpenPin) != LOW);
+}
+
+bool isDeviceIdleForDualButton() {
+  return !isFlushing
+      && !motorHomingActive
+      && !manualFeedActive
+      && !mechanismMotorRunning;
+}
+
+bool acceptFlushCancel(bool button1Pressed, bool button2Pressed) {
+  if (flushStep == FLUSH_STEP_CANCEL_COOL) {
+    return false;
+  }
+  Serial.println("Flush cancelled by control panel input");
+  SerialBLE_println("Flush cancelled by control panel input");
+  logDevFlush("flush_event", 0, "cancel", true);
+  playHardwareNotConnectedAlert();
+  flushCancelRecoveryActive = true;
+  bool continueFlushRecovery = abortFlushForCancel();
+
+  button1WasPressed = button1Pressed;
+  button2WasPressed = button2Pressed;
+  button1Held = false;
+  button1DelayActive = false;
+  button2DelayActive = false;
+  button2FeedStarted = false;
+  button1DisconnectAlertedForCurrentPress = false;
+  button2DisconnectAlertedForCurrentPress = false;
+  bothButtonsPressed = button1Pressed && button2Pressed;
+  dualButtonHoldActive = false;
+  batteryDisplayMode = false;
+  return continueFlushRecovery;
+}
+
+void stopFlushActiveOperations() {
+  heaterOn = false;
+  heaterOff();
+  motors.setM2Speed(0);
+  if (case6CutMotorRunning) {
+    motors.setM1Speed(0);
+    case6CutMotorRunning = false;
+  }
+  case6PrecoolCutRunning = false;
+  cutMotorRunning = false;
+  fanRunning = false;
+  setFanSpeed(0);
+}
+
+void clearFlushStateForCancel() {
+  motors.setM2Speed(0);
+  motors.setM1Speed(0);
+  setFanSpeed(0);
+  heaterOff();
+  stopManualFeed();
+
+  isFlushing = false;
+  setFlushStep(0, false);
+  lastDevFlushStatusLogMillis = 0;
+  flushCancelArmed = false;
+  cutBag = false;
+  mechanismMotorRunning = false;
+  fanRunning = false;
+  cutMotorRunning = false;
+  case1FeedStarted = false;
+  case5FeedExecuted = false;
+  case6CutMotorRun = false;
+  case6CutMotorRunning = false;
+  case6CutMotorStartMillis = 0;
+  case6PrecoolCutRunning = false;
+  case6PrecoolCutStartMillis = 0;
+  heaterRuntimeMismatchStrikes = 0;
+  heaterRuntimeMismatchLastCheckMs = 0;
+  case10FanStarted = false;
+  case10BackupStarted = false;
+  openSwitchLatched = false;
+  m3ReverseActive = false;
+  m3ReverseCompleted = false;
+  m1CloseStartTime = 0;
+  m3ReverseStartTime = 0;
+  timeAboveSetpointMillis = 0;
+  timeAboveCutModeTempMillis = 0;
+  maxHeaterWallTimeMs = 0;
+  heaterTargetTemp = K;
+  m1CurrentLogWindowStartMillis = 0;
+  m1CurrentMaxInWindow = 0.0;
+}
+
+void completeCancelRecoveryReady() {
+  clearFlushStateForCancel();
+  cancelRecoveryHomingPending = false;
+  flushCancelRecoveryActive = false;
+  for (int i = 0; i < totalLeds; i++) {
+    mcp_digitalWrite(getLedPin(i), LOW);
+  }
+  lastActivityMillis = millis();
+  logDevFlush("flush_event", 0, "cancel_complete", true);
+}
+
+void beginCancelRecoveryHoming() {
+  clearFlushStateForCancel();
+  cancelRecoveryHomingPending = true;
+  startMotorHoming();
+}
+
+bool abortFlushForCancel() {
+  flushCancelArmed = false;
+  stopFlushActiveOperations();
+  cutBag = false;
+  case6CutMotorRun = false;
+  case6CutMotorRunning = false;
+  case6CutMotorStartMillis = 0;
+  case6PrecoolCutRunning = false;
+  case6PrecoolCutStartMillis = 0;
+
+  float temp = readTemperature();
+  if (temp < COOL_OPEN_TEMP_C) {
+    if (mechanismNeedsHomingAfterCancel()) {
+      beginCancelRecoveryHoming();
+    } else {
+      completeCancelRecoveryReady();
+    }
+    return false;
+  }
+
+  motors.setM1Speed(0);
+  mechanismMotorRunning = false;
+  setFlushStep(FLUSH_STEP_CANCEL_COOL);
+  stepStartMillis = millis();
+  lastCoolingTempLogMillis = 0;
+  return true;
+}
 
 void stopEverything() {
   SerialBLE_println("stop everything");
+  bool wasFlushing = isFlushing;
+  if (wasFlushing) {
+    logDevFlush("flush_event", 0, "abort", true);
+  }
   motors.setM2Speed(0);
   motors.setM1Speed(0);
   setFanSpeed(0);  // Stop M3 motor
   heaterOff();
   stopManualFeed();
+  button2FeedStarted = false;
 
   isFlushing = false;
-  flushStep = 0;
+  setFlushStep(0, false);
+  lastDevFlushStatusLogMillis = 0;
   flushCancelArmed = false;
+  cancelRecoveryHomingPending = false;
+  flushCancelRecoveryActive = false;
   cutBag = false;
   mechanismMotorRunning = false;
   fanRunning = false;
@@ -5836,16 +8053,19 @@ int clampLedIndex(int index) {
   return index;
 }
 
-void applyLedFillToIndex(int targetIndex, bool forceImmediate = false) {
-  targetIndex = clampLedIndex(targetIndex);
-  if (targetIndex <= ledIndex) {
+void applyLedDrainToIndex(int targetHighestOnIndex, bool forceImmediate = false) {
+  targetHighestOnIndex = clampLedIndex(targetHighestOnIndex);
+  if (targetHighestOnIndex >= ledIndex && !forceImmediate) {
+    return;
+  }
+  if (forceImmediate && targetHighestOnIndex == ledIndex) {
     return;
   }
 
-  for (int i = ledIndex + 1; i <= targetIndex; i++) {
-    mcp_digitalWrite(getLedPin(i), HIGH);
+  for (int i = ledIndex; i > targetHighestOnIndex; i--) {
+    mcp_digitalWrite(getLedPin(i), LOW);
   }
-  ledIndex = targetIndex;
+  ledIndex = targetHighestOnIndex;
   ledLastUpdateMillis = millis();
 }
 
@@ -5950,7 +8170,7 @@ int computeSectionTargetLedIndex(int section, float progress) {
 
 void determineLedSectionAndProgress(unsigned long currentMillis, float currentTemp, int &section, float &progress) {
   // Final completion guard.
-  if (flushStep >= 13) {
+  if (flushStep >= 13 && flushStep != FLUSH_STEP_CANCEL_COOL) {
     section = LED_PHASE_FINAL;
     progress = 1.0f;
     return;
@@ -6013,7 +8233,7 @@ void determineLedSectionAndProgress(unsigned long currentMillis, float currentTe
   }
 
   // Phase D: cooling with real temperature progress.
-  if (flushStep == 7) {
+  if (flushStep == 7 || flushStep == FLUSH_STEP_CANCEL_COOL) {
     section = LED_PHASE_COOLING;
     if (currentTemp <= COOL_OPEN_TEMP_C) {
       progress = 1.0f;
@@ -6106,7 +8326,7 @@ void updateLEDs() {
 
   // Capture baseline data when key flush transitions are first entered.
   if (flushStep != ledLastFlushStepSeen) {
-    if (flushStep >= 3 && ledLastFlushStepSeen < 3) {
+    if (flushStep >= 6 && ledLastFlushStepSeen < 6) {
       ledHeatStartMillis = currentMillis;
       ledHeatStartTempC = currentTemp;
       ledHeatTargetTempC = K;
@@ -6116,6 +8336,11 @@ void updateLEDs() {
       ledCoolStartTempC = currentTemp;
       float coolTargetStart = cutBag ? CUT_MODE_TEMP : K;
       ledCoolStartRefTempC = (ledCoolStartTempC > coolTargetStart) ? ledCoolStartTempC : coolTargetStart;
+    }
+    if (flushStep == FLUSH_STEP_CANCEL_COOL && ledLastFlushStepSeen != FLUSH_STEP_CANCEL_COOL) {
+      ledCoolingStartMillis = currentMillis;
+      ledCoolStartTempC = currentTemp;
+      ledCoolStartRefTempC = (currentTemp > COOL_OPEN_TEMP_C) ? currentTemp : COOL_OPEN_TEMP_C;
     }
     if (flushStep >= 8 && ledLastFlushStepSeen < 8) {
       ledFinalStartMillis = currentMillis;
@@ -6130,10 +8355,10 @@ void updateLEDs() {
   bool forceImmediate = false;
   if (section != ledLastSectionSeen) {
     if (ledLastSectionSeen >= 0 && section > ledLastSectionSeen) {
-      // Snap to section boundary so late progress from previous section doesn't carry forward.
-      int sectionStart = ledSectionStartIndex[section];
-      if (ledIndex < sectionStart) {
-        applyLedFillToIndex(sectionStart, true);
+      // Snap drain to section boundary so late progress from previous section doesn't carry forward.
+      int mappedBoundary = (totalLeds - 1) - ledSectionStartIndex[section];
+      if (ledIndex > mappedBoundary) {
+        applyLedDrainToIndex(mappedBoundary, true);
       }
     }
     ledLastSectionSeen = section;
@@ -6144,19 +8369,19 @@ void updateLEDs() {
     return;
   }
 
-  int targetIndex = computeSectionTargetLedIndex(section, progress);
+  int fillTargetIndex = computeSectionTargetLedIndex(section, progress);
+  int targetHighestOnIndex = (totalLeds - 1) - fillTargetIndex;
 
-  // Hard completion guarantee: final LED is on at true cycle end.
-  if (flushStep >= 13) {
-    targetIndex = totalLeds - 1;
-    forceImmediate = true;
-  }
-
-  applyLedFillToIndex(targetIndex, forceImmediate);
+  applyLedDrainToIndex(targetHighestOnIndex, forceImmediate);
 }
 
 void locateMotorPos() {
-  startMotorHoming();
+  if (motorHomingDeferred && !isBatteryOkForHeaterTest()) {
+    Serial.println("locateMotorPos blocked: homing deferred, battery too low");
+    logPowerTestEvent("homing_defer", "locateMotorPos blocked battery low", true);
+    return;
+  }
+  startMotorHoming(motorHomingDeferred && isBatteryOkForHeaterTest());
   while (motorHomingActive) {
     updateMotorHoming();
     feedTaskWatchdog();
@@ -6164,7 +8389,14 @@ void locateMotorPos() {
   }
 }
 
-void startMotorHoming() {
+void startMotorHoming(bool batteryPreflightPassed) {
+  if (!batteryPreflightPassed && !isBatteryOkForHeaterTest()) {
+    logPowerTestEvent("homing_defer", "startMotorHoming blocked battery preflight", true);
+    if (!motorHomingDeferred) {
+      deferMotorHoming("homing_blocked_low_battery");
+    }
+    return;
+  }
   Serial.println("Ensuring Closing motor is at a known position...");
   motorHomingActive = true;
   motorHomingPhase = HOMING_INIT;
@@ -6232,7 +8464,7 @@ void updateMotorHoming() {
     case HOMING_OPEN_FULL: {
       if (millis() - motorHomingPhaseStartMillis > TIMEOUT) {
         if (ERROR_CODE == 0) {
-          ERROR_CODE = 3;
+          ERROR_CODE = 1;
           flashLeds();
           stopEverything();
           LEDErrorCode(ERROR_CODE);
@@ -6250,6 +8482,12 @@ void updateMotorHoming() {
         motorHomingPhase = HOMING_IDLE;
         Serial.println("Motor opened fully and positioned (open switch closed).");
         Serial.println("Motor positioning complete.");
+        if (motorHomingDeferred) {
+          clearMotorHomingDeferred();
+        }
+        if (cancelRecoveryHomingPending) {
+          completeCancelRecoveryReady();
+        }
       }
       break;
     }
@@ -6303,8 +8541,31 @@ void updateHeaterPID() {
   unsigned long now = millis();
   heaterSetpoint = heaterTargetTemp;
   heaterInput = readTemperature();
+
+  if (isM1MotorActive()) {
+    applyHeaterPwmDuty(0);
+    return;
+  }
+
+  float v = readBatteryVoltageQuiet();
+  int cap = getEffectiveHeaterPwmCap(v);
+  if (cap <= 0) {
+    applyHeaterPwmDuty(0);
+    if (heaterOn || heaterOutputOn) {
+      if (checkRuntimeSagDebounced(v, "runtime_sag")) {
+        return;
+      }
+    }
+    return;
+  }
+
+  heaterPid.SetOutputLimits(0, cap);
   heaterPid.Compute();
   applyHeaterPwmDuty((int)heaterOutput);
+
+  if (heaterOutputOn && checkRuntimeSagDebounced(v, "runtime_sag")) {
+    return;
+  }
 
   if (lastHeaterControlLogMillis == 0 || (now - lastHeaterControlLogMillis >= HEATER_CONTROL_LOG_INTERVAL_MS)) {
     SerialBLE_print("Heater temp: ");
@@ -6578,7 +8839,7 @@ void writeResponseToChannel(const String& response) {
   }
 }
 
-// Build 22-value CSV for param read/write
+// Build 30-value CSV for param read/write
 String buildParamCSV() {
   return String(batteryThreshold) + "," +
          String(K) + "," +
@@ -6601,7 +8862,15 @@ String buildParamCSV() {
          String(heaterLowerToleranceC) + "," +
          String(heaterUpperToleranceC) + "," +
          String(COOL_OPEN_TEMP_C) + "," +
-         String(MAX_COOL_WAIT_S);
+         String(MAX_COOL_WAIT_S) + "," +
+         String(minLoadedBatteryV, 2) + "," +
+         String(maxBatterySagV, 2) + "," +
+         String(minIdleBatteryVFloor, 2) + "," +
+         String(usableVFull, 2) + "," +
+         String(batteryAssessSettleMs) + "," +
+         String(heaterCapV255, 2) + "," +
+         String(heaterCapV170, 2) + "," +
+         String(heaterCapV100, 2);
 }
 
 // Low-level: push value+notify to serial GATT. Does not check serial_streaming_enabled.

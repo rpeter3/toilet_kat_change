@@ -45,30 +45,40 @@ python toilet_bluetooth_interface.py
 
 ## Parameters
 
-The system supports 20 configurable parameters. Default values are set for 1mil High Barrier Plastic material:
+The system supports 30 configurable parameters over BLE. Default values are set for 1.5mil High Barrier Plastic material (see `material_parameters.csv`):
 
 | Parameter | Description | Units | Default |
 |-----------|-------------|-------|---------|
-| batteryThreshold | Battery voltage threshold for low battery detection | ADC units | 5 |
-| K | Temperature setpoint for PID control | °C | 120.0 |
-| F | How long to feed the bag at the START of a flush | seconds | 6 |
+| batteryThreshold | Minimum usable battery percent before flush | % | 7 |
+| K | Temperature setpoint for PID control | °C | 150.0 |
+| F | How long to feed the bag at the START of a flush | seconds | 8 |
 | T | Cooling Time | seconds | 60 |
-| thermistorResistance | Thermistor resistance value | ohms | 10000.0 |
-| r2 | Thermistor resistance parameter 2 | ohms | 2 |
-| backupTime | How long to back up the bag when re-opening | seconds | 1.7 |
-| r4 | Thermistor resistance parameter 4 | ohms | 2 |
+| backupTime | How long to back up the bag when re-opening | seconds | 1.0 |
 | fanDuration | How long to run the fan after feeding at the end of a flush | seconds | 5 |
-| H | Heater On time | seconds | 40 |
-| continueFeeder | Feeder continue time | seconds | 7.0 |
+| H | Heater On time | seconds | 30 |
+| continueFeeder | How long to feed the bag at the END of a flush | seconds | 6.0 |
 | maxOpeningTime | Max opening time | seconds | 12 |
 | typicalOpeningTime | Typical opening time | seconds | 10 |
 | MOTOR_CUT_TIME | Motor cut duration | seconds | 0.5 |
-| CUT_MODE_HEAT_TIME | Additional heater time in cut mode | seconds | 25.0 |
-| postCoolingFanDuration | Post cooling fan duration | seconds | 5.0 |
-| preFeedFan | Pre-feed fan delay | seconds | 3.0 |
-| fanReverseTime | Fan reverse time | seconds | 3.0 |
-| fanReverseStartTime | Fan reverse start time (percentage) | % | 0.0 |
-| backupTimeAfterReopen | Backup time after reopen | seconds | 1.7 |
+| CUT_MODE_HEAT_TIME | Additional heater time in cut mode | seconds | 15.0 |
+| postCoolingFanDuration | Fan duration before feed motors start in case 10 | seconds | 5.0 |
+| preFeedFan | Fan duration before feed motor starts in case 1 and button 2 | seconds | 2.0 |
+| fanReverseTime | Duration M3 runs in reverse after starting | seconds | 12.0 |
+| fanReverseStartTime | Delay before M3 reverse starts (% of typicalOpeningTime) | % | 0.0 |
+| backupTimeAfterReopen | Feed bag backup duration after mechanism motor finishes opening | seconds | 1.7 |
+| CUT_MODE_TEMP | Temperature to maintain for CUT_MODE_HEAT_TIME after cut motor | °C | 150.0 |
+| heaterLowerToleranceC | Heater ON threshold below target | °C | 0.0 |
+| heaterUpperToleranceC | Heater OFF threshold above target | °C | 2.0 |
+| COOL_OPEN_TEMP_C | Open sealer when thermistor cools below this temperature | °C | 80.0 |
+| MAX_COOL_WAIT_S | Safety timeout for cooling stage before forcing open | seconds | 180 |
+| minLoadedBatteryV | Minimum loaded battery voltage during flush preflight heater test | V | 11.2 |
+| maxBatterySagV | Maximum allowed battery sag during flush preflight heater test | V | 0.85 |
+| minIdleBatteryVFloor | Minimum idle battery voltage floor before flush preflight | V | 11.3 |
+| usableVFull | Loaded battery voltage mapped to 100% usable | V | 12.4 |
+| batteryAssessSettleMs | Heater pulse settle time during battery assessment | ms | 50 |
+| heaterCapV255 | Idle battery voltage for maximum heater PWM cap during assessment | V | 11.23 |
+| heaterCapV170 | Idle battery voltage for 170 heater PWM cap during assessment | V | 11.22 |
+| heaterCapV100 | Idle battery voltage for 100 heater PWM cap during assessment | V | 11.21 |
 
 **Note**: Material-specific parameters can be found in `material_parameters.csv` for different bag materials (1mil/1.5mil High Barrier Plastic, Compostable 1.5mil).
 
@@ -92,7 +102,7 @@ Enter your choice (1-6): 2
 
 Updating parameters...
 Enter new values (press Enter to keep current value):
-batteryThreshold (Battery voltage threshold for low battery detection) [ADC units] [current: 5]: 12
+batteryThreshold (Minimum usable battery percent before flush) [%] [current: 7]: 8
 K (Temperature setpoint for PID control) [°C] [current: 120.0]: 125.5
 F (How long to feed the bag at the START of a flush) [seconds] [current: 6]: 
 ...
@@ -107,10 +117,10 @@ Parameters saved to my_config.json
 
 ## File Format
 
-Parameters are saved in JSON format with all 20 parameters:
+Parameters are saved in JSON format with all 30 parameters:
 ```json
 {
-  "batteryThreshold": 5,
+  "batteryThreshold": 7,
   "K": 120.0,
   "F": 6,
   "T": 60,
