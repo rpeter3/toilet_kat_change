@@ -391,19 +391,24 @@ The BLE trust handshake requires a physical button press near the device before 
 
 ## Hardware DEV mode toggle via dual-button hold
 
-Holding both control panel buttons for 10 seconds toggles persisted DEV mode on or off via `setDevModeEnabled()`. A short simultaneous dual press behaves differently depending on whether the device is idle.
+Holding both control panel buttons for 10 seconds while **DEV mode is off** enables persisted DEV mode via `setDevModeEnabled(true)`. A short simultaneous dual press behaves differently depending on whether the device is idle.
+
+When **DEV mode is on**, the same dual-button hold gesture does **not** turn DEV mode off at 10 seconds. Instead, at 10 seconds the device gives warning feedback (double beep + brief LED flash). If both buttons remain held for **20 seconds total** from the idle battery path, the device performs a **factory firmware rollback** (same outcome as BLE `OTA_ROLLBACK_FACTORY`). Turn DEV mode off via BLE `SET_DEV_MODE:0` or the app.
 
 **Behavior**:
 
-- **Idle** (`isDeviceIdleForDualButton()`): short dual press stops any stray state via `stopEverything()`, shows battery level on the LEDs, and starts the 10-second DEV hold timer. LEDs auto-clear a few seconds after release.
+- **Idle** (`isDeviceIdleForDualButton()`): short dual press stops any stray state via `stopEverything()`, shows battery level on the LEDs, and starts the dual-button hold timer. LEDs auto-clear a few seconds after release.
 - **Not idle** (flushing, homing, manual feed, mechanism/fan motion): short dual press does **not** show battery. If flushing, runs flush cancel recovery via `acceptFlushCancel()`. Otherwise calls `stopEverything()` as a hard stop.
-- 10-second continuous dual hold: toggle DEV mode (persisted in NVS); only available from the idle battery path (`dualButtonHoldActive`); blocked while an OTA window is active.
+- **DEV off**, 10-second continuous dual hold: enable DEV mode (persisted in NVS); only from the idle battery path (`dualButtonHoldActive`); blocked while an OTA window is active.
+- **DEV on**, 10-second hold: warning only (no DEV toggle off).
+- **DEV on**, 20-second continuous dual hold: factory partition rollback and reboot; same idle/OTA guards as the DEV-on path above.
 - OTA firmware updates are app-only: send `ENABLE_OTA` over BLE; there is no hardware path to OTA mode.
 
 **Rationale**:
 
 - OTA entry via a hidden button sequence is redundant now that the app handles firmware updates.
 - A hardware DEV mode toggle remains useful for field debugging (BLE stays on, inactivity sleep disabled) without requiring the app.
+- Factory rollback via hardware is deliberately hard to trigger (DEV on + 20 s hold while idle) to avoid accidental customer rollbacks.
 - Battery display is only meaningful when idle; during active operations dual press should cancel or stop, not show battery level.
 - Dual-button flush cancel predates single-button cancel and must work on first simultaneous press without the `flushCancelArmed` release-then-press debounce.
 

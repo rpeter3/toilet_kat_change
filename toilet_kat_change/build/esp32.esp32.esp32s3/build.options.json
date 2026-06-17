@@ -1,8 +1,9 @@
 {
   "additionalFiles": "..\\..,..\\..\\..,..\\..\\..,..\\..",
+  "builtInLibrariesFolders": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\libraries",
   "compiler.optimization_flags": "-Os",
-  "customBuildProperties": "build.partitions_file=partitions.csv,upload.flash_size=16MB,build.flash_size=16MB,build.sdkconfig.defaults=sdkconfig.defaults",
-  "fqbn": "esp32:esp32:esp32s3",
+  "customBuildProperties": "",
+  "fqbn": "esp32:esp32:esp32s3:UploadSpeed=921600,USBMode=hwcdc,CDCOnBoot=cdc,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240,FlashMode=qio,FlashSize=16M,PartitionScheme=default,DebugLevel=none,PSRAM=disabled,LoopCore=1,EventsCore=1,EraseFlash=all,JTAGAdapter=default,ZigbeeMode=default",
   "hardwareFolders": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.10,C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.10",
   "otherLibrariesFolders": "C:\\Users\\richa\\Documents\\Arduino\\libraries",
   "sketchLocation": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change"

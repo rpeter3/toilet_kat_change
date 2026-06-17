@@ -47,11 +47,11 @@ Client implementations may use payload chunking to respect BLE MTU limits when w
 
 1. **Command channel (`...fea0`)**
    - Client writes command strings only.
-   - Examples: `TRUST_START`, `TRUST_STATUS`, `TRUST_CANCEL`, `GET_DEV_MODE`, `GET_FLUSH_COUNT`, `GET_BATTERY`, `SET_DEV_MODE:<0|1>`, `ENABLE_OTA`, `OTA_ROLLBACK_PREVIOUS`, `GET_LOGS`, `GET_LOGS:<offset>`, `GET_OTA_DIAG`
+   - Examples: `TRUST_START`, `TRUST_STATUS`, `TRUST_CANCEL`, `GET_DEV_MODE`, `GET_FLUSH_COUNT`, `GET_BATTERY`, `SET_DEV_MODE:<0|1>`, `ENABLE_OTA`, `OTA_ROLLBACK_PREVIOUS`, `OTA_ROLLBACK_FACTORY`, `GET_LOGS`, `GET_LOGS:<offset>`, `GET_OTA_DIAG`
 
 2. **Response channel (`...fea4`)**
    - Client reads command responses only.
-   - Examples: `TRUST_WAITING`, `TRUST_CONFIRMED`, `TRUST_TIMEOUT`, `TRUST_CANCEL_ACK`, `AUTH_REQUIRED`, `DEV_MODE:0`, `FLUSH_COUNT:<n>`, `BATTERY:<n>`, `SET_DEV_MODE_ACK:1`, `OTA_ROLLBACK_ACK:REBOOTING`, `LOGS:<offset>:<length>:<data>`, `LOGS_END`, etc.
+   - Examples: `TRUST_WAITING`, `TRUST_CONFIRMED`, `TRUST_TIMEOUT`, `TRUST_CANCEL_ACK`, `AUTH_REQUIRED`, `DEV_MODE:0`, `FLUSH_COUNT:<n>`, `BATTERY:<n>`, `SET_DEV_MODE_ACK:1`, `OTA_ROLLBACK_ACK:REBOOTING`, `OTA_ROLLBACK_FACTORY_ACK:REBOOTING`, `LOGS:<offset>:<length>:<data>`, `LOGS_END`, etc.
 
 3. **Parameter read channel (`...fea5`)**
    - Client reads current parameter snapshot only.
@@ -267,6 +267,39 @@ This is different from `HWCFG_ROLLBACK_LAST_GOOD`:
 - `OTA_ROLLBACK_ERR:NVS_OPEN_FAILED` -> rollback metadata namespace could not be opened
 
 Apps should show an explicit confirmation before sending this command, for example a typed confirmation in support tools. Do not automatically send this command after transient BLE failures.
+
+---
+
+## Manual OTA Factory Rollback
+
+Command `OTA_ROLLBACK_FACTORY` switches the ESP32 boot partition to the **factory** app partition and reboots. This is a support/admin recovery action for field units that need to return to the factory-flashed firmware image, not the NVS-recorded previous OTA slot.
+
+This is different from `OTA_ROLLBACK_PREVIOUS`:
+
+- `OTA_ROLLBACK_PREVIOUS` rolls back to the partition recorded in NVS at OTA `PREPARE_UPDATE` (usually the last running OTA slot before the update).
+- `OTA_ROLLBACK_FACTORY` always targets the `factory` partition from `partitions.csv` (offset `0x10000`).
+
+### Protocol
+
+- **Command**: `OTA_ROLLBACK_FACTORY`
+- **Channel**: write command to `...fea0`, read response from `...fea4`
+- **Trust**: required
+- **When allowed**: device must be idle, not flushing, not homing/running mechanism motors, and not in an OTA transfer/finalize state
+
+### Responses
+
+- `OTA_ROLLBACK_FACTORY_ACK:REBOOTING` -> factory boot partition was selected; device will reboot shortly
+- `OTA_ROLLBACK_FACTORY_ERR:AUTH_REQUIRED` -> trust handshake is not complete
+- `OTA_ROLLBACK_FACTORY_ERR:BUSY_OTA` -> OTA transfer/finalize is active
+- `OTA_ROLLBACK_FACTORY_ERR:BUSY_FLUSH` -> flush or critical motor action is active
+- `OTA_ROLLBACK_FACTORY_ERR:NO_FACTORY_PARTITION` -> factory partition missing from partition table
+- `OTA_ROLLBACK_FACTORY_ERR:ALREADY_ON_FACTORY` -> device is already running from factory
+- `OTA_ROLLBACK_FACTORY_ERR:INVALID_FACTORY_IMAGE` -> factory slot is empty or corrupt (image validation failed)
+- `OTA_ROLLBACK_FACTORY_ERR:SET_BOOT_FAILED` -> ESP-IDF failed to set the factory boot partition
+
+`GET_OTA_DIAG` should record the rollback with `to=factory` and `reason=factory_request` (BLE) or `hardware_factory_hold` (hardware path).
+
+Apps should show an explicit confirmation before sending this command. There is no customer-app UI for this command in the current phase; support tools may expose it for lab use.
 
 ---
 

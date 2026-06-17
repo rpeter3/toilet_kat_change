@@ -7,6 +7,7 @@
 #include <PID_v1_bc.h>               // Heater temperature PID
 #include <EEPROM.h>     // Include EEPROM library for parameter persistence
 #include <esp_ota_ops.h>  // Include OTA operations for updates
+#include <esp_image_format.h>
 #include <nvs_flash.h>   // Include NVS for rollback state storage
 #include <nvs.h>
 #include <esp_system.h>  // Include for reboot functionality
@@ -29,6 +30,7 @@
 #define LOG_HEADROOM 25600
 #define LOG_SLEEP_TRIM_TRIGGER (MAX_LOG_SIZE - LOG_HEADROOM)
 #define LOG_TRIM_TARGET 153600
+#define OTA_PREP_LOG_TRIM_TARGET 102400
 #define LOG_TRIM_TEMP_FILE "/errors.tmp"
 #define LOG_TRIM_COPY_CHUNK 512
 #define LOG_CHUNK_SIZE 450
@@ -222,7 +224,7 @@ struct HWCFGConfigStore {
 //set this when building the firmware
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-const char* SOFTWARE_VERSION_NUMBER = "4.0.10";
+const char* SOFTWARE_VERSION_NUMBER = "4.0.11";
 const char* FACTORY_SOFTWARE_DATE = "2026-06-13";
 const char* SOFTWARE_BUILD_DATE = __DATE__ " " __TIME__;
 
@@ -324,7 +326,11 @@ bool prepareForOTA();
 void notifyUpdateProgress(int percentage);
 bool rollbackOTAUpdate();
 bool rollbackOTAUpdateWithReason(String* errorCode);
+bool rollbackOTAUpdateToFactoryWithReason(String* errorCode);
+bool logOtaFactoryRollback(const char* trigger, const char* reason, String* errorCode);
 String handleManualOTARollback();
+String handleManualOTAFactoryRollback();
+void executeFactoryRollbackFromHardware();
 bool validateFirmware();
 void handleOTAChunk(uint8_t* data, size_t length);
 void resetOTAState();
@@ -603,7 +609,9 @@ bool otaEnabled = false;
 unsigned long dualButtonHoldStartTime = 0;
 unsigned long otaWindowStartTime = 0;
 bool dualButtonHoldActive = false;
+bool factoryRollbackHoldWarned = false;
 const unsigned long DUAL_BUTTON_DEV_HOLD_MS = 10000; // 10 seconds
+const unsigned long DUAL_BUTTON_FACTORY_HOLD_MS = 20000; // 20 seconds (DEV on only)
 const unsigned long DUAL_BUTTON_EDGE_GUARD_MS = 300;
 const unsigned long DUAL_BUTTON_RELEASE_DEBOUNCE_MS = 100;
 unsigned long lastDualButtonEdgeMillis = 0;
@@ -632,7 +640,7 @@ inline bool otaTransferInProgress() {
           otaState == OTA_VALIDATING || otaState == OTA_FINALIZING);
 }
 void publishOTAStatus(const String& status, bool notify = true);
-void publishOTAErrorStatus(const char* reasonCode);
+void publishOTAErrorStatus(const char* reasonCode, const char* detail = NULL);
 bool setOTAState(OTAState nextState, const char* reason);
 bool isKnownOTACommand(const String& command);
 void handleOTACommand(const String& command);
@@ -1158,6 +1166,17 @@ class command_characteristic_callbacks: public BLECharacteristicCallbacks {
       Serial.printf("Processed OTA_ROLLBACK_PREVIOUS -> %s\n", rollbackResponse.c_str());
       sendSerialToBLE("Processed OTA_ROLLBACK_PREVIOUS");
       if (rollbackResponse == "OTA_ROLLBACK_ACK:REBOOTING") {
+        delay(500);
+        esp_restart();
+      }
+      return;
+    }
+    if (cmd == "OTA_ROLLBACK_FACTORY") {
+      String rollbackResponse = handleManualOTAFactoryRollback();
+      writeResponseToChannel(rollbackResponse);
+      Serial.printf("Processed OTA_ROLLBACK_FACTORY -> %s\n", rollbackResponse.c_str());
+      sendSerialToBLE("Processed OTA_ROLLBACK_FACTORY");
+      if (rollbackResponse == "OTA_ROLLBACK_FACTORY_ACK:REBOOTING") {
         delay(500);
         esp_restart();
       }
@@ -3689,6 +3708,16 @@ bool prepareForOTA() {
     SerialBLE_println("Update preparation blocked - flush in progress");
     return false;
   }
+
+  size_t logSize = getErrorLogFileSize();
+  if (logSize > OTA_PREP_LOG_TRIM_TARGET) {
+    Serial.printf("OTA prep: trimming error log from %u to %u bytes\n",
+                  (unsigned)logSize, (unsigned)OTA_PREP_LOG_TRIM_TARGET);
+    if (!trimErrorLogToSize(OTA_PREP_LOG_TRIM_TARGET)) {
+      Serial.println("WARN: OTA prep log trim failed — continuing");
+    }
+  }
+
   // Get current running partition
   running_partition = esp_ota_get_running_partition();
   if (running_partition == NULL) {
@@ -4157,10 +4186,11 @@ void markOtaPendingVerify() {
                 (unsigned)diag.ota_target_subtype, (unsigned)diag.session_fw_size);
 }
 
-bool logOtaRollback(const char* trigger, const char* reason, String* errorCode) {
-  OtaDiagStore diag;
-  loadOtaDiag(diag);
+static void recordOtaRollbackDiag(const char* trigger,
+                                  const char* reason,
+                                  const esp_partition_t* target_partition);
 
+bool logOtaRollback(const char* trigger, const char* reason, String* errorCode) {
   running_partition = esp_ota_get_running_partition();
   uint8_t rollback_subtype = OTA_SUBTYPE_UNSET;
   nvs_handle_t nvs_handle;
@@ -4181,50 +4211,7 @@ bool logOtaRollback(const char* trigger, const char* reason, String* errorCode) 
     return false;
   }
 
-  copyPartitionLabel(running_partition, diag.failed_label, sizeof(diag.failed_label));
-  copyPartitionLabel(rollback_partition, diag.good_label, sizeof(diag.good_label));
-  diag.last_reset_reason = (uint8_t)esp_reset_reason();
-
-  if (strcmp(trigger, "auto") == 0) {
-    diag.last_trigger = OTA_TRIGGER_AUTO;
-  } else if (strcmp(trigger, "validation") == 0) {
-    diag.last_trigger = OTA_TRIGGER_VALIDATION;
-  } else if (strcmp(trigger, "manual") == 0) {
-    diag.last_trigger = OTA_TRIGGER_MANUAL;
-  }
-
-  strncpy(diag.last_reason, reason != NULL ? reason : "", sizeof(diag.last_reason) - 1);
-  diag.last_reason[sizeof(diag.last_reason) - 1] = '\0';
-  if (diag.event_seq < 65535) {
-    diag.event_seq++;
-  }
-
-  char md5hex[9];
-  snprintf(md5hex, sizeof(md5hex), "%02x%02x%02x%02x",
-           diag.session_md5_prefix[0], diag.session_md5_prefix[1],
-           diag.session_md5_prefix[2], diag.session_md5_prefix[3]);
-
-  char rollMsg[180];
-  snprintf(rollMsg, sizeof(rollMsg),
-           "trigger=%s,from=%s,to=%s,attempts=%u,reset=%s,md5=%s,size=%lu,reason=%s",
-           trigger,
-           diag.failed_label,
-           diag.good_label,
-           (unsigned)diag.boot_attempts,
-           otaResetReasonToString((esp_reset_reason_t)diag.last_reset_reason),
-           md5hex,
-           (unsigned long)diag.session_fw_size,
-           diag.last_reason);
-  logError("ota_rollback", 0, rollMsg, false);
-
-  captureSpiffsLogTailToNvs(diag);
-
-  diag.pending_verify = 0;
-  diag.boot_attempts = 0;
-  diag.good_boot_streak = 0;
-  diag.ota_target_subtype = OTA_SUBTYPE_UNSET;
-  saveOtaDiag(diag);
-
+  recordOtaRollbackDiag(trigger, reason, rollback_partition);
   return rollbackOTAUpdateWithReason(errorCode);
 }
 
@@ -4422,15 +4409,163 @@ bool rollbackOTAUpdate() {
   return rollbackOTAUpdateWithReason(NULL);
 }
 
+static String getFirmwareRollbackBusyError() {
+  if (otaTransferInProgress() || updateInProgress || ota_handle != 0) {
+    return "BUSY_OTA";
+  }
+  if (isFlushing || motorHomingActive || mechanismMotorRunning || manualFeedActive) {
+    return "BUSY_FLUSH";
+  }
+  return "";
+}
+
+static bool isFactoryPartitionBootable(const esp_partition_t* factory, String* errorCode) {
+  if (factory == NULL) {
+    if (errorCode != NULL) {
+      *errorCode = "NO_FACTORY_PARTITION";
+    }
+    return false;
+  }
+
+  esp_ota_img_states_t otaState;
+  esp_err_t err = esp_ota_get_state_partition(factory, &otaState);
+  if (err == ESP_OK &&
+      (otaState == ESP_OTA_IMG_VALID || otaState == ESP_OTA_IMG_PENDING_VERIFY)) {
+    return true;
+  }
+
+  esp_partition_pos_t partPos = {};
+  partPos.offset = factory->address;
+  partPos.size = factory->size;
+  if (esp_image_verify(ESP_IMAGE_VERIFY_SILENT, &partPos, NULL) == ESP_OK) {
+    return true;
+  }
+
+  if (errorCode != NULL) {
+    *errorCode = "INVALID_FACTORY_IMAGE";
+  }
+  return false;
+}
+
+bool rollbackOTAUpdateToFactoryWithReason(String* errorCode) {
+  const esp_partition_t* factory_partition =
+      esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
+  if (factory_partition == NULL) {
+    Serial.println("ERROR: Cannot find factory partition");
+    if (errorCode != NULL) {
+      *errorCode = "NO_FACTORY_PARTITION";
+    }
+    return false;
+  }
+
+  running_partition = esp_ota_get_running_partition();
+  if (running_partition != NULL &&
+      running_partition->subtype == ESP_PARTITION_SUBTYPE_APP_FACTORY) {
+    Serial.println("Already running from factory partition");
+    if (errorCode != NULL) {
+      *errorCode = "ALREADY_ON_FACTORY";
+    }
+    return false;
+  }
+
+  if (!isFactoryPartitionBootable(factory_partition, errorCode)) {
+    Serial.println("ERROR: Factory partition image is not bootable");
+    return false;
+  }
+
+  esp_err_t err = esp_ota_set_boot_partition(factory_partition);
+  if (err != ESP_OK) {
+    Serial.printf("ERROR: Failed to set factory boot partition: %s\n", esp_err_to_name(err));
+    if (errorCode != NULL) {
+      *errorCode = "SET_BOOT_FAILED";
+    }
+    return false;
+  }
+
+  nvs_handle_t nvs_handle;
+  if (nvs_open("ota", NVS_READWRITE, &nvs_handle) == ESP_OK) {
+    nvs_set_u8(nvs_handle, "rollback_flag", 0);
+    nvs_commit(nvs_handle);
+    nvs_close(nvs_handle);
+  }
+
+  Serial.printf("Factory rollback successful to partition: %s\n", factory_partition->label);
+  if (errorCode != NULL) {
+    *errorCode = "";
+  }
+  return true;
+}
+
+static void recordOtaRollbackDiag(const char* trigger,
+                                  const char* reason,
+                                  const esp_partition_t* target_partition) {
+  OtaDiagStore diag;
+  loadOtaDiag(diag);
+
+  running_partition = esp_ota_get_running_partition();
+  copyPartitionLabel(running_partition, diag.failed_label, sizeof(diag.failed_label));
+  copyPartitionLabel(target_partition, diag.good_label, sizeof(diag.good_label));
+  diag.last_reset_reason = (uint8_t)esp_reset_reason();
+
+  if (strcmp(trigger, "auto") == 0) {
+    diag.last_trigger = OTA_TRIGGER_AUTO;
+  } else if (strcmp(trigger, "validation") == 0) {
+    diag.last_trigger = OTA_TRIGGER_VALIDATION;
+  } else if (strcmp(trigger, "manual") == 0) {
+    diag.last_trigger = OTA_TRIGGER_MANUAL;
+  }
+
+  strncpy(diag.last_reason, reason != NULL ? reason : "", sizeof(diag.last_reason) - 1);
+  diag.last_reason[sizeof(diag.last_reason) - 1] = '\0';
+  if (diag.event_seq < 65535) {
+    diag.event_seq++;
+  }
+
+  char md5hex[9];
+  snprintf(md5hex, sizeof(md5hex), "%02x%02x%02x%02x",
+           diag.session_md5_prefix[0], diag.session_md5_prefix[1],
+           diag.session_md5_prefix[2], diag.session_md5_prefix[3]);
+
+  char rollMsg[180];
+  snprintf(rollMsg, sizeof(rollMsg),
+           "trigger=%s,from=%s,to=%s,attempts=%u,reset=%s,md5=%s,size=%lu,reason=%s",
+           trigger,
+           diag.failed_label,
+           diag.good_label,
+           (unsigned)diag.boot_attempts,
+           otaResetReasonToString((esp_reset_reason_t)diag.last_reset_reason),
+           md5hex,
+           (unsigned long)diag.session_fw_size,
+           diag.last_reason);
+  logError("ota_rollback", 0, rollMsg, false);
+
+  captureSpiffsLogTailToNvs(diag);
+
+  diag.pending_verify = 0;
+  diag.boot_attempts = 0;
+  diag.good_boot_streak = 0;
+  diag.ota_target_subtype = OTA_SUBTYPE_UNSET;
+  saveOtaDiag(diag);
+}
+
+bool logOtaFactoryRollback(const char* trigger, const char* reason, String* errorCode) {
+  const esp_partition_t* factory_partition =
+      esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
+  if (!isFactoryPartitionBootable(factory_partition, errorCode)) {
+    return false;
+  }
+
+  recordOtaRollbackDiag(trigger, reason, factory_partition);
+  return rollbackOTAUpdateToFactoryWithReason(errorCode);
+}
+
 String handleManualOTARollback() {
   if (!isTrustedConnection()) {
     return "OTA_ROLLBACK_ERR:AUTH_REQUIRED";
   }
-  if (otaTransferInProgress() || updateInProgress || ota_handle != 0) {
-    return "OTA_ROLLBACK_ERR:BUSY_OTA";
-  }
-  if (isFlushing || motorHomingActive || mechanismMotorRunning || manualFeedActive) {
-    return "OTA_ROLLBACK_ERR:BUSY_FLUSH";
+  String busyError = getFirmwareRollbackBusyError();
+  if (busyError.length() > 0) {
+    return String("OTA_ROLLBACK_ERR:") + busyError;
   }
 
   logError("ota", 0, "manual_rollback_requested", false);
@@ -4445,6 +4580,61 @@ String handleManualOTARollback() {
 
   logError("ota", 0, "manual_rollback_rebooting", false);
   return "OTA_ROLLBACK_ACK:REBOOTING";
+}
+
+String handleManualOTAFactoryRollback() {
+  if (!isTrustedConnection()) {
+    return "OTA_ROLLBACK_FACTORY_ERR:AUTH_REQUIRED";
+  }
+  String busyError = getFirmwareRollbackBusyError();
+  if (busyError.length() > 0) {
+    return String("OTA_ROLLBACK_FACTORY_ERR:") + busyError;
+  }
+
+  logError("ota", 0, "manual_factory_rollback_requested", false);
+  String rollbackError = "";
+  if (!logOtaFactoryRollback("manual", "factory_request", &rollbackError)) {
+    if (rollbackError.length() == 0) {
+      rollbackError = "FAILED";
+    }
+    logError("ota", 0, rollbackError.c_str(), false);
+    return String("OTA_ROLLBACK_FACTORY_ERR:") + rollbackError;
+  }
+
+  logError("ota", 0, "manual_factory_rollback_rebooting", false);
+  return "OTA_ROLLBACK_FACTORY_ACK:REBOOTING";
+}
+
+void executeFactoryRollbackFromHardware() {
+  if (!devModeEnabled) {
+    Serial.println("Factory rollback blocked: DEV mode is off");
+    return;
+  }
+  if (otaEnabled || otaTransferInProgress()) {
+    Serial.println("Factory rollback blocked: OTA active");
+    return;
+  }
+  String busyError = getFirmwareRollbackBusyError();
+  if (busyError.length() > 0) {
+    Serial.printf("Factory rollback blocked: %s\n", busyError.c_str());
+    return;
+  }
+
+  logError("ota", 0, "hardware_factory_rollback_requested", false);
+  String rollbackError = "";
+  if (!logOtaFactoryRollback("manual", "hardware_factory_hold", &rollbackError)) {
+    if (rollbackError.length() == 0) {
+      rollbackError = "FAILED";
+    }
+    logError("ota", 0, rollbackError.c_str(), false);
+    Serial.printf("Factory rollback failed: %s\n", rollbackError.c_str());
+    return;
+  }
+
+  logError("ota", 0, "hardware_factory_rollback_rebooting", false);
+  Serial.println("Factory rollback accepted via hardware hold, rebooting...");
+  delay(1000);
+  esp_restart();
 }
 
 // Validate firmware using MD5
@@ -5500,6 +5690,7 @@ void loop() {
   // Single-button press cancels dual-button battery display / DEV hold latch.
   if (!bothButtonsPressedNow && !bothButtonsPressed && (button1Pressed != button2Pressed)) {
     dualButtonHoldActive = false;
+    factoryRollbackHoldWarned = false;
     if (batteryDisplayMode) {
       batteryDisplayMode = false;
       for (int i = 0; i < totalLeds; i++) {
@@ -5537,6 +5728,7 @@ void loop() {
       batteryDisplayStartTime = millis();
       dualButtonHoldStartTime = millis();
       dualButtonHoldActive = true;
+      factoryRollbackHoldWarned = false;
       displayBatteryChargeLevel();
     } else if (isFlushing) {
       bool continueFlushRecovery = acceptFlushCancel(button1Pressed, button2Pressed);
@@ -5563,21 +5755,47 @@ void loop() {
     }
   } else if (bothButtonsPressedNow && bothButtonsPressed && !otaEnabled) {
     unsigned long currentMillis = millis();
-    if (dualButtonHoldActive &&
-        (currentMillis - dualButtonHoldStartTime >= DUAL_BUTTON_DEV_HOLD_MS)) {
-      bool targetDevMode = !devModeEnabled;
-      if (setDevModeEnabled(targetDevMode)) {
-        Serial.printf("DEV mode toggled via hardware hold: %d\n", devModeEnabled ? 1 : 0);
-        sendSerialToBLE(String("DEV_MODE_HW_TOGGLE:") + String(devModeEnabled ? 1 : 0));
-      } else {
-        Serial.println("DEV mode hardware toggle failed: NVS persist error");
-        sendSerialToBLE("DEV_MODE_HW_TOGGLE_ERR:PERSIST_FAIL");
-      }
-      dualButtonHoldActive = false;
-      batteryDisplayMode = false;
-      bothButtonsPressed = false;
-      for (int i = 0; i < totalLeds; i++) {
-        mcp_digitalWrite(getLedPin(i), LOW);
+    if (dualButtonHoldActive) {
+      unsigned long holdMs = currentMillis - dualButtonHoldStartTime;
+      if (devModeEnabled) {
+        if (holdMs >= DUAL_BUTTON_FACTORY_HOLD_MS) {
+          executeFactoryRollbackFromHardware();
+          dualButtonHoldActive = false;
+          batteryDisplayMode = false;
+          bothButtonsPressed = false;
+          factoryRollbackHoldWarned = false;
+          for (int i = 0; i < totalLeds; i++) {
+            mcp_digitalWrite(getLedPin(i), LOW);
+          }
+        } else if (holdMs >= DUAL_BUTTON_DEV_HOLD_MS && !factoryRollbackHoldWarned) {
+          factoryRollbackHoldWarned = true;
+          Serial.println("DEV on dual hold 10s: factory rollback warning (hold 20s total)");
+          sendSerialToBLE("DEV_MODE_FACTORY_HOLD_WARN");
+          trustDoubleBeep();
+          for (int i = 0; i < totalLeds; i++) {
+            mcp_digitalWrite(getLedPin(i), HIGH);
+          }
+          feedTaskWatchdog();
+          delay(120);
+          for (int i = 0; i < totalLeds; i++) {
+            mcp_digitalWrite(getLedPin(i), LOW);
+          }
+        }
+      } else if (holdMs >= DUAL_BUTTON_DEV_HOLD_MS) {
+        if (setDevModeEnabled(true)) {
+          Serial.printf("DEV mode toggled via hardware hold: %d\n", devModeEnabled ? 1 : 0);
+          sendSerialToBLE(String("DEV_MODE_HW_TOGGLE:") + String(devModeEnabled ? 1 : 0));
+        } else {
+          Serial.println("DEV mode hardware toggle failed: NVS persist error");
+          sendSerialToBLE("DEV_MODE_HW_TOGGLE_ERR:PERSIST_FAIL");
+        }
+        dualButtonHoldActive = false;
+        batteryDisplayMode = false;
+        bothButtonsPressed = false;
+        factoryRollbackHoldWarned = false;
+        for (int i = 0; i < totalLeds; i++) {
+          mcp_digitalWrite(getLedPin(i), LOW);
+        }
       }
     }
   } else if (!bothButtonsPressedNow) {
@@ -5588,6 +5806,7 @@ void loop() {
       if (millis() - bothButtonsReleaseStartMillis >= DUAL_BUTTON_RELEASE_DEBOUNCE_MS) {
         bothButtonsPressed = false;
         dualButtonHoldActive = false;
+        factoryRollbackHoldWarned = false;
         bothButtonsReleaseStartMillis = 0;
       }
     } else {
@@ -6789,9 +7008,13 @@ void publishOTAStatus(const String& status, bool notify) {
   }
 }
 
-void publishOTAErrorStatus(const char* reasonCode) {
+void publishOTAErrorStatus(const char* reasonCode, const char* detail) {
   String status = "UPDATE_ERROR:";
   status += reasonCode;
+  if (detail != NULL && detail[0] != '\0') {
+    status += ":";
+    status += detail;
+  }
   publishOTAStatus(status);
 }
 
@@ -6854,7 +7077,7 @@ void handleOTACommand(const String& command) {
       Serial.printf("ERROR: esp_ota_begin failed: %s\n", esp_err_to_name(err));
       setOTAState(OTA_ERROR, "esp_ota_begin failed");
       ota_error_message = "OTA begin failed: " + String(esp_err_to_name(err));
-      publishOTAErrorStatus("BEGIN_FAILED");
+      publishOTAErrorStatus("BEGIN_FAILED", esp_err_to_name(err));
       return;
     }
     if (!setOTAState(OTA_RECEIVING, "start update command")) {
@@ -6919,7 +7142,7 @@ void handleOTACommand(const String& command) {
       Serial.printf("ERROR: esp_ota_end failed: %s\n", esp_err_to_name(err));
       setOTAState(OTA_ERROR, "esp_ota_end failed");
       ota_error_message = "OTA end failed: " + String(esp_err_to_name(err));
-      publishOTAErrorStatus("END_FAILED");
+      publishOTAErrorStatus("END_FAILED", esp_err_to_name(err));
       return;
     }
     err = esp_ota_set_boot_partition(update_partition);
@@ -6927,7 +7150,7 @@ void handleOTACommand(const String& command) {
       Serial.printf("ERROR: esp_ota_set_boot_partition failed: %s\n", esp_err_to_name(err));
       setOTAState(OTA_ERROR, "set boot partition failed");
       ota_error_message = "Set boot partition failed: " + String(esp_err_to_name(err));
-      publishOTAErrorStatus("BOOT_PARTITION_FAILED");
+      publishOTAErrorStatus("BOOT_PARTITION_FAILED", esp_err_to_name(err));
       return;
     }
     publishOTAStatus("UPDATE_COMPLETE");

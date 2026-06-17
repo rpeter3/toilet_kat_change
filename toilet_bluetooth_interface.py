@@ -385,8 +385,8 @@ class ToiletSystemInterface:
         print("ESP32 Toilet device not found!")
         return None
 
-    async def connect(self, address: str) -> bool:
-        """Connect to ESP32 device"""
+    async def connect(self, address: str, *, require_trust: bool = True) -> bool:
+        """Connect to ESP32 device. Set require_trust=False for diagnostic-only commands."""
         try:
             self.client = BleakClient(address)
             await self.client.connect()
@@ -403,6 +403,9 @@ class ToiletSystemInterface:
                 print("New protocol (fea4/fea5/fea6) not found. Device may need firmware update.")
                 await self.disconnect()
                 return False
+            if not require_trust:
+                print("Diagnostic connection (trust handshake skipped).")
+                return True
             # Per BLE_HANDSHAKE_INTERFACE_SPEC: trust handshake required before allowing session
             print("Trust handshake required before connection is fully established...")
             if not await self.trust_handshake():
@@ -1160,6 +1163,27 @@ class ToiletSystemInterface:
         print(f"Unexpected OTA rollback response: {response}")
         return False
 
+    async def ota_rollback_factory(self) -> bool:
+        """Request firmware rollback to the factory partition. Device reboots on success."""
+        if not self.trusted:
+            if not await self.trust_handshake():
+                print("OTA factory rollback aborted: trust handshake required.")
+                return False
+        response = await self._send_command_and_read_response("OTA_ROLLBACK_FACTORY")
+        if not response:
+            print("No response from firmware for OTA_ROLLBACK_FACTORY")
+            return False
+        if response == "OTA_ROLLBACK_FACTORY_ACK:REBOOTING":
+            print("Firmware accepted factory rollback. Device is rebooting to factory partition.")
+            self.connected = False
+            self.trusted = False
+            return True
+        if response.startswith("OTA_ROLLBACK_FACTORY_ERR:"):
+            print(f"Firmware rejected OTA factory rollback: {response}")
+            return False
+        print(f"Unexpected OTA factory rollback response: {response}")
+        return False
+
     async def get_hw_component(self, component: str) -> Optional[Dict[str, str]]:
         component = component.strip().upper()
         if component not in self.hardware_components:
@@ -1318,8 +1342,9 @@ async def main():
             print("20. Read error logs (GET_LOGS)")
             print("21. Trust handshake (press control panel button / GPIO2 wake line to confirm)")
             print("22. Manual OTA rollback to previous firmware")
+            print("23. Manual OTA rollback to factory firmware")
             
-            choice = input("\nEnter your choice (1-22): ").strip()
+            choice = input("\nEnter your choice (1-23): ").strip()
             
             if choice == "1":
                 print("\nReading current parameters...")
@@ -1683,8 +1708,20 @@ async def main():
                 if ok:
                     break
 
+            elif choice == "23":
+                print("\nManual OTA factory rollback")
+                print("This will reboot the device to the factory firmware partition.")
+                confirm = input("Type FACTORY_ROLLBACK to continue: ").strip()
+                if confirm != "FACTORY_ROLLBACK":
+                    print("OTA factory rollback cancelled.")
+                    continue
+                ok = await interface.ota_rollback_factory()
+                print("OTA factory rollback command accepted." if ok else "OTA factory rollback failed.")
+                if ok:
+                    break
+
             else:
-                print("Invalid choice. Please enter 1-22.")
+                print("Invalid choice. Please enter 1-23.")
     
     except KeyboardInterrupt:
         print("\nProgram interrupted by user")
