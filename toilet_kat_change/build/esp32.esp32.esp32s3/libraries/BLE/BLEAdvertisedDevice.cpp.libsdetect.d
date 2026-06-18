@@ -1,7 +1,7 @@
 BLEAdvertisedDevice.o: \
  C:\Users\richa\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.3.3\libraries\BLE\src\BLEAdvertisedDevice.cpp \
  C:\Users\richa\AppData\Local\Arduino15\packages\esp32\tools\esp32-arduino-libs\idf-release_v5.5-f1a1df9b-v3\esp32s3/include/soc/esp32s3/include/soc/soc_caps.h \
- C:\Users\richa\AppData\Local\Arduino15\packages\esp32\tools\esp32-arduino-libs\idf-release_v5.5-f1a1df9b-v3\esp32s3/qio_qspi/include/sdkconfig.h \
+ C:\Users\richa\AppData\Local\Arduino15\packages\esp32\tools\esp32-arduino-libs\idf-release_v5.5-f1a1df9b-v3\esp32s3/dio_opi/include/sdkconfig.h \
  C:\Users\richa\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.3.3\libraries\BLE\src\BLEAdvertisedDevice.h \
  C:\Users\richa\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.3.3\libraries\BLE\src\BLEAddress.h \
  C:\Users\richa\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.3.3\cores\esp32/WString.h \

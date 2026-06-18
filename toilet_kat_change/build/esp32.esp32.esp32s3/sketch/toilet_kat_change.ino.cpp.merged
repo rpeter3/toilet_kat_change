@@ -226,8 +226,8 @@ struct HWCFGConfigStore {
 //set this when building the firmware
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-const char* SOFTWARE_VERSION_NUMBER = "4.0.15";
-const char* FACTORY_SOFTWARE_DATE = "2026-06-13";
+const char* SOFTWARE_VERSION_NUMBER = "4.0.17";
+const char* FACTORY_SOFTWARE_DATE = "2026-06-18";
 const char* SOFTWARE_BUILD_DATE = __DATE__ " " __TIME__;
 
 // Forward declarations
@@ -496,14 +496,27 @@ float heaterLowerToleranceC = 0.0; //parameters_list[18] - Turn heater ON at tar
 float heaterUpperToleranceC = 2.0; //parameters_list[19] - Turn heater OFF at target+upper (can be negative)
 float COOL_OPEN_TEMP_C = 80.0f; //parameters_list[20] - Open sealer below this thermistor temp
 long MAX_COOL_WAIT_S = 180; //parameters_list[21] - Safety fallback max cooling wait (seconds)
-float minLoadedBatteryV = 11.2f; //parameters_list[22]
-float maxBatterySagV = 0.85f; //parameters_list[23]
-float minIdleBatteryVFloor = 11.3f; //parameters_list[24]
-float usableVFull = 12.4f; //parameters_list[25]
-uint16_t batteryAssessSettleMs = 50; //parameters_list[26]
-float heaterCapV255 = 11.6f; //parameters_list[27]
-float heaterCapV170 = 11.5f; //parameters_list[28]
-float heaterCapV100 = 11.4f; //parameters_list[29]
+
+// Battery assessment defaults (material_parameters.csv / BLE presets)
+namespace {
+constexpr float kBatteryAssessDefaultMinLoadedV = 11.2f;
+constexpr float kBatteryAssessDefaultMaxSagV = 0.85f;
+constexpr float kBatteryAssessDefaultMinIdleVFloor = 11.3f;
+constexpr float kBatteryAssessDefaultUsableVFull = 12.4f;
+constexpr uint16_t kBatteryAssessDefaultSettleMs = 50;
+constexpr float kBatteryAssessDefaultHeaterCapV255 = 11.23f;
+constexpr float kBatteryAssessDefaultHeaterCapV170 = 11.22f;
+constexpr float kBatteryAssessDefaultHeaterCapV100 = 11.21f;
+}  // namespace
+
+float minLoadedBatteryV = kBatteryAssessDefaultMinLoadedV; //parameters_list[22]
+float maxBatterySagV = kBatteryAssessDefaultMaxSagV; //parameters_list[23]
+float minIdleBatteryVFloor = kBatteryAssessDefaultMinIdleVFloor; //parameters_list[24]
+float usableVFull = kBatteryAssessDefaultUsableVFull; //parameters_list[25]
+uint16_t batteryAssessSettleMs = kBatteryAssessDefaultSettleMs; //parameters_list[26]
+float heaterCapV255 = kBatteryAssessDefaultHeaterCapV255; //parameters_list[27]
+float heaterCapV170 = kBatteryAssessDefaultHeaterCapV170; //parameters_list[28]
+float heaterCapV100 = kBatteryAssessDefaultHeaterCapV100; //parameters_list[29]
 float heaterTargetTemp = 150.0;    // Active heater target (K or CUT_MODE_TEMP)
 
 const int FLUSH_STEP_CANCEL_COOL = 14;
@@ -605,6 +618,11 @@ unsigned long suppressedM12RecoveryCycles = 0;
 
 unsigned long lastActivityMillis = 0;
 bool bleEnabled = true;
+
+void noteBleDiagnosticActivity() {
+  lastActivityMillis = millis();
+  bleIdleStartTime = millis();
+}
 
 // OTA timing variables
 bool otaEnabled = false;
@@ -1210,6 +1228,7 @@ class command_characteristic_callbacks: public BLECharacteristicCallbacks {
       return;
     }
     if (cmd == "GET_HW_MATRIX") {
+      noteBleDiagnosticActivity();
       if (!hardwareMatrixInitialized && !initializeHardwareMatrix()) {
         writeResponseToChannel("HW_MATRIX_ERR:INIT_FAIL");
         sendSerialToBLE("GET_HW_MATRIX failed: init");
@@ -1222,6 +1241,7 @@ class command_characteristic_callbacks: public BLECharacteristicCallbacks {
       return;
     }
     if (cmd.startsWith("GET_HW_COMPONENT:")) {
+      noteBleDiagnosticActivity();
       if (!hardwareMatrixInitialized && !initializeHardwareMatrix()) {
         writeResponseToChannel("HW_COMPONENT_ERR:INIT_FAIL");
         sendSerialToBLE("GET_HW_COMPONENT failed: init");
@@ -1306,6 +1326,7 @@ class command_characteristic_callbacks: public BLECharacteristicCallbacks {
       return;
     }
     if (cmd == "GET_LOGS" || cmd.startsWith("GET_LOGS:")) {
+      noteBleDiagnosticActivity();
       size_t offset = 0;
       if (cmd.startsWith("GET_LOGS:")) {
         offset = (size_t)cmd.substring(9).toInt();
@@ -1317,6 +1338,7 @@ class command_characteristic_callbacks: public BLECharacteristicCallbacks {
       return;
     }
     if (cmd == "GET_BOOT_INFO") {
+      noteBleDiagnosticActivity();
       String response = buildBootInfoResponse();
       writeResponseToChannel(response);
       Serial.printf("Processed GET_BOOT_INFO -> %s\n", response.c_str());
@@ -1324,6 +1346,7 @@ class command_characteristic_callbacks: public BLECharacteristicCallbacks {
       return;
     }
     if (cmd == "GET_COREDUMP" || cmd.startsWith("GET_COREDUMP:")) {
+      noteBleDiagnosticActivity();
       size_t offset = 0;
       if (cmd.startsWith("GET_COREDUMP:")) {
         offset = (size_t)cmd.substring(13).toInt();
@@ -1342,6 +1365,7 @@ class command_characteristic_callbacks: public BLECharacteristicCallbacks {
       return;
     }
     if (cmd == "GET_OTA_DIAG") {
+      noteBleDiagnosticActivity();
       String response = buildOtaDiagResponse();
       writeResponseToChannel(response);
       Serial.printf("Processed GET_OTA_DIAG -> %s\n", response.substring(0, 80).c_str());
@@ -2508,8 +2532,38 @@ void initializeDefaultHardwareMatrix(HardwareMatrix& matrix) {
   setHardwareComponentDefaults(matrix.components[HW_THERMISTOR], "1", "VERSION OF THE THERMISTOR IN THE HEATING ELEMENT", "2026-02-28");
   setHardwareComponentDefaults(matrix.components[HW_BATTERY], "1", "VERSION OF THE BATTERY POWER SUPPLY", "2026-02-28");
   setHardwareComponentDefaults(matrix.components[HW_FACTORY_SOFTWARE_DATE], FACTORY_SOFTWARE_DATE, "DATE OF THE FACTORY SOFTWARE", FACTORY_SOFTWARE_DATE);
-  setHardwareComponentDefaults(matrix.components[HW_SOFTWARE_VERSION_NUMBER], SOFTWARE_VERSION_NUMBER, "SOFTWARE VERSION NUMBER", __DATE__);
+  setHardwareComponentDefaults(matrix.components[HW_SOFTWARE_VERSION_NUMBER], SOFTWARE_VERSION_NUMBER, "SOFTWARE VERSION NUMBER", FACTORY_SOFTWARE_DATE);
   refreshHardwareMatrixCRC(matrix);
+}
+
+// Keep SOFTWARE_VERSION_NUMBER matrix fields valid (ISO install_date) and in sync with this build.
+bool syncSoftwareVersionMatrixEntry(HardwareMatrix& matrix) {
+  HardwareComponentEntry& entry = matrix.components[HW_SOFTWARE_VERSION_NUMBER];
+  bool changed = false;
+
+  if (strcmp(entry.current_version, SOFTWARE_VERSION_NUMBER) != 0) {
+    copyBoundedString(entry.current_version, sizeof(entry.current_version), SOFTWARE_VERSION_NUMBER);
+    changed = true;
+  }
+  if (!isIso8601DateOrEmpty(entry.install_date) || entry.install_date[0] == '\0') {
+    copyBoundedString(entry.install_date, sizeof(entry.install_date), FACTORY_SOFTWARE_DATE);
+    changed = true;
+  }
+  if (changed) {
+    refreshHardwareMatrixCRC(matrix);
+  }
+  return changed;
+}
+
+bool tryLoadHardwareMatrixFromNvs(const char* key, HardwareMatrix& outMatrix, String& validationError, bool* outRepaired) {
+  if (!loadHardwareMatrixBlob(key, outMatrix)) {
+    return false;
+  }
+  bool repaired = syncSoftwareVersionMatrixEntry(outMatrix);
+  if (outRepaired != NULL) {
+    *outRepaired = repaired;
+  }
+  return validateHardwareMatrix(outMatrix, &validationError);
 }
 
 bool validateHardwareMatrix(const HardwareMatrix& matrix, String* errorCode) {
@@ -2660,15 +2714,15 @@ String getHardwareComponentString(HardwareComponentId componentId) {
 
 bool initializeHardwareMatrix() {
   String validationError = "";
+  bool repaired = false;
   memset(&hardwareMatrixScratchActive, 0, sizeof(hardwareMatrixScratchActive));
-  if (loadHardwareMatrixBlob(HW_MATRIX_ACTIVE_KEY, hardwareMatrixScratchActive) &&
-      validateHardwareMatrix(hardwareMatrixScratchActive, &validationError)) {
+  if (tryLoadHardwareMatrixFromNvs(HW_MATRIX_ACTIVE_KEY, hardwareMatrixScratchActive, validationError, &repaired)) {
     hardwareMatrix = hardwareMatrixScratchActive;
-    copyBoundedString(hardwareMatrix.components[HW_SOFTWARE_VERSION_NUMBER].current_version,
-                      sizeof(hardwareMatrix.components[HW_SOFTWARE_VERSION_NUMBER].current_version),
-                      SOFTWARE_VERSION_NUMBER);
-    refreshHardwareMatrixCRC(hardwareMatrix);
     hardwareMatrixInitialized = true;
+    if (repaired) {
+      saveHardwareMatrixBlob(hardwareMatrix, false);
+      Serial.println("Hardware matrix repaired (software version install date)");
+    }
     Serial.println("Hardware matrix loaded from active NVS record");
     logBootTiming("hw_matrix_path,active_nvs");
     return true;
@@ -2679,16 +2733,15 @@ bool initializeHardwareMatrix() {
   }
 
   validationError = "";
+  repaired = false;
   memset(&hardwareMatrixScratchLastGood, 0, sizeof(hardwareMatrixScratchLastGood));
-  if (loadHardwareMatrixBlob(HW_MATRIX_LAST_GOOD_KEY, hardwareMatrixScratchLastGood) &&
-      validateHardwareMatrix(hardwareMatrixScratchLastGood, &validationError)) {
+  if (tryLoadHardwareMatrixFromNvs(HW_MATRIX_LAST_GOOD_KEY, hardwareMatrixScratchLastGood, validationError, &repaired)) {
     hardwareMatrix = hardwareMatrixScratchLastGood;
-    copyBoundedString(hardwareMatrix.components[HW_SOFTWARE_VERSION_NUMBER].current_version,
-                      sizeof(hardwareMatrix.components[HW_SOFTWARE_VERSION_NUMBER].current_version),
-                      SOFTWARE_VERSION_NUMBER);
-    refreshHardwareMatrixCRC(hardwareMatrix);
     hardwareMatrixInitialized = true;
     saveHardwareMatrixBlob(hardwareMatrix, false);
+    if (repaired) {
+      Serial.println("Hardware matrix repaired (software version install date)");
+    }
     Serial.println("Recovered hardware matrix from last-known-good record");
     logBootTiming("hw_matrix_path,last_good");
     return true;
@@ -4421,34 +4474,6 @@ static String getFirmwareRollbackBusyError() {
   return "";
 }
 
-static bool isFactoryPartitionBootable(const esp_partition_t* factory, String* errorCode) {
-  if (factory == NULL) {
-    if (errorCode != NULL) {
-      *errorCode = "NO_FACTORY_PARTITION";
-    }
-    return false;
-  }
-
-  esp_ota_img_states_t otaState;
-  esp_err_t err = esp_ota_get_state_partition(factory, &otaState);
-  if (err == ESP_OK &&
-      (otaState == ESP_OTA_IMG_VALID || otaState == ESP_OTA_IMG_PENDING_VERIFY)) {
-    return true;
-  }
-
-  esp_partition_pos_t partPos = {};
-  partPos.offset = factory->address;
-  partPos.size = factory->size;
-  if (esp_image_verify(ESP_IMAGE_VERIFY_SILENT, &partPos, NULL) == ESP_OK) {
-    return true;
-  }
-
-  if (errorCode != NULL) {
-    *errorCode = "INVALID_FACTORY_IMAGE";
-  }
-  return false;
-}
-
 bool rollbackOTAUpdateToFactoryWithReason(String* errorCode) {
   const esp_partition_t* factory_partition =
       esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
@@ -4470,12 +4495,40 @@ bool rollbackOTAUpdateToFactoryWithReason(String* errorCode) {
     return false;
   }
 
-  if (!isFactoryPartitionBootable(factory_partition, errorCode)) {
-    Serial.println("ERROR: Factory partition image is not bootable");
+  uint8_t magic = 0;
+  if (esp_partition_read(factory_partition, 0, &magic, 1) != ESP_OK) {
+    Serial.println("ERROR: Failed to read factory partition header");
+    if (errorCode != NULL) {
+      *errorCode = "INVALID_FACTORY_IMAGE";
+    }
+    return false;
+  }
+  if (magic == 0xFF || magic != ESP_IMAGE_HEADER_MAGIC) {
+    Serial.println("ERROR: Factory slot empty or no image header");
+    if (errorCode != NULL) {
+      *errorCode = "INVALID_FACTORY_IMAGE";
+    }
     return false;
   }
 
+  esp_app_desc_t factory_desc;
+  esp_err_t desc_err = esp_ota_get_partition_description(factory_partition, &factory_desc);
+  if (desc_err == ESP_OK) {
+    Serial.printf("Factory rollback target: version=%s compiled=%s %s\n",
+                  factory_desc.version, factory_desc.date, factory_desc.time);
+  } else {
+    Serial.printf("Factory rollback target: app description unavailable (%s)\n",
+                  esp_err_to_name(desc_err));
+  }
+
   esp_err_t err = esp_ota_set_boot_partition(factory_partition);
+  if (err == ESP_ERR_OTA_VALIDATE_FAILED) {
+    Serial.printf("ERROR: Factory image validation failed: %s\n", esp_err_to_name(err));
+    if (errorCode != NULL) {
+      *errorCode = "INVALID_FACTORY_IMAGE";
+    }
+    return false;
+  }
   if (err != ESP_OK) {
     Serial.printf("ERROR: Failed to set factory boot partition: %s\n", esp_err_to_name(err));
     if (errorCode != NULL) {
@@ -4553,7 +4606,10 @@ static void recordOtaRollbackDiag(const char* trigger,
 bool logOtaFactoryRollback(const char* trigger, const char* reason, String* errorCode) {
   const esp_partition_t* factory_partition =
       esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
-  if (!isFactoryPartitionBootable(factory_partition, errorCode)) {
+  if (factory_partition == NULL) {
+    if (errorCode != NULL) {
+      *errorCode = "NO_FACTORY_PARTITION";
+    }
     return false;
   }
 
@@ -7286,14 +7342,14 @@ static int batteryChargeLevelFromVoltage(float batteryVoltage) {
 }
 
 void applyBatteryAssessDefaults() {
-  minLoadedBatteryV = 11.2f;
-  maxBatterySagV = 0.4f;
-  minIdleBatteryVFloor = 11.3f;
-  usableVFull = 12.4f;
-  batteryAssessSettleMs = 50;
-  heaterCapV255 = 12.0f;
-  heaterCapV170 = 11.7f;
-  heaterCapV100 = 11.4f;
+  minLoadedBatteryV = kBatteryAssessDefaultMinLoadedV;
+  maxBatterySagV = kBatteryAssessDefaultMaxSagV;
+  minIdleBatteryVFloor = kBatteryAssessDefaultMinIdleVFloor;
+  usableVFull = kBatteryAssessDefaultUsableVFull;
+  batteryAssessSettleMs = kBatteryAssessDefaultSettleMs;
+  heaterCapV255 = kBatteryAssessDefaultHeaterCapV255;
+  heaterCapV170 = kBatteryAssessDefaultHeaterCapV170;
+  heaterCapV100 = kBatteryAssessDefaultHeaterCapV100;
 }
 
 bool validateBatteryAssessParams() {

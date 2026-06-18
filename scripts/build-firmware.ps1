@@ -1,10 +1,10 @@
 # Build production firmware for BLE OTA / S1 app bundling.
-# Toolchain pins are defined in scripts/firmware-toolchain.json.
+# Toolchain pins and FQBN are defined in scripts/firmware-toolchain.json.
 #
 # Output: toilet_kat_change/build/esp32.esp32.esp32s3/toilet_kat_change.ino.bin
 #
 # To build and bundle into CompoCloset-S1-app:
-#   ..\CompoCloset-S1-app\scripts\build-firmware.ps1 [version]
+#   npm run bundle-firmware -- <path-to-bin> 4.0.16
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
@@ -15,6 +15,10 @@ if (-not (Test-Path $ToolchainPath)) {
 $Toolchain = Get-Content $ToolchainPath -Raw | ConvertFrom-Json
 $CoreVersion = $Toolchain.arduinoEsp32Core
 $IdfLibsTag = $Toolchain.espIdfLibsTag
+$Fqbn = $Toolchain.fqbn
+if (-not $Fqbn) {
+    throw "firmware-toolchain.json must define fqbn"
+}
 $SketchDir = Join-Path $Root "toilet_kat_change"
 $BuildDir = Join-Path $SketchDir "build\esp32.esp32.esp32s3"
 $Cli = "C:\Program Files\Arduino CLI\arduino-cli.exe"
@@ -36,11 +40,8 @@ try {
     & $Cli compile `
         --clean `
         --build-path $BuildDir `
-        --fqbn esp32:esp32:esp32s3 . `
+        --fqbn $Fqbn . `
         --build-property "build.partitions_file=partitions.csv" `
-        --build-property "upload.flash_size=16MB" `
-        --build-property "build.flash_size=16MB" `
-        --build-property "build.cdc_on_boot=1" `
         --build-property "build.sdkconfig.defaults=sdkconfig.defaults"
     if ($LASTEXITCODE -ne 0) {
         throw "arduino-cli compile failed with exit code $LASTEXITCODE"
@@ -65,7 +66,53 @@ if ($mapText -notmatch [regex]::Escape($corePath) -and $mapText -notmatch [regex
     throw "Build used unexpected toolchain; expected $corePath or $IdfLibsTag in map file"
 }
 
+$CompileCommandsPath = Join-Path $BuildDir "compile_commands.json"
+if (-not (Test-Path $CompileCommandsPath)) {
+    throw "compile_commands.json not found at $CompileCommandsPath"
+}
+$compileText = Get-Content $CompileCommandsPath -Raw
+$profileChecks = @(
+    @{ Label = "CORE_DEBUG_LEVEL=3"; Pattern = "CORE_DEBUG_LEVEL=3" },
+    @{ Label = "BOARD_HAS_PSRAM"; Pattern = "BOARD_HAS_PSRAM" },
+    @{ Label = "ARDUINO_USB_CDC_ON_BOOT=1"; Pattern = "ARDUINO_USB_CDC_ON_BOOT=1" }
+)
+foreach ($check in $profileChecks) {
+    if ($compileText -notmatch [regex]::Escape($check.Pattern)) {
+        throw "Build profile mismatch: expected $($check.Label) in compile_commands.json"
+    }
+}
+
+$SdkConfigPath = Join-Path $BuildDir "sdkconfig"
+$BuildOptionsPath = Join-Path $BuildDir "build.options.json"
+if (-not (Test-Path $BuildOptionsPath)) {
+    throw "build.options.json not found at $BuildOptionsPath"
+}
+$buildOptions = Get-Content $BuildOptionsPath -Raw | ConvertFrom-Json
+if ($buildOptions.fqbn -ne $Fqbn) {
+    throw "Build profile mismatch: expected fqbn '$Fqbn' in build.options.json"
+}
+if ($compileText -notmatch "esp32s3/dio_opi/") {
+    throw "Build profile mismatch: expected dio_opi prebuilt libs in compile_commands.json"
+}
+
+$AppBinItem = Get-Item $OutBin
+$AppBinMd5 = (Get-FileHash $OutBin -Algorithm MD5).Hash.ToLowerInvariant()
+$Metadata = [ordered]@{
+    fqbn               = $Fqbn
+    arduinoEsp32Core   = $CoreVersion
+    espIdfVersion      = $Toolchain.espIdfVersion
+    espIdfLibsTag      = $IdfLibsTag
+    appBinSize         = $AppBinItem.Length
+    appBinMd5          = $AppBinMd5
+    factoryOffset      = "0x10000"
+    builtAt            = (Get-Date).ToUniversalTime().ToString("o")
+}
+$MetadataPath = Join-Path $BuildDir "build-metadata.json"
+$Metadata | ConvertTo-Json -Depth 4 | Set-Content -Path $MetadataPath -Encoding UTF8
+
 Write-Host "Firmware built: $OutBin"
+Write-Host "Metadata: $MetadataPath"
 Write-Host "Size: $((Get-Item $OutBin).Length) bytes"
 Write-Host "Core: esp32:esp32@$CoreVersion"
 Write-Host "IDF:  $($Toolchain.espIdfVersion)"
+Write-Host "FQBN: $Fqbn"

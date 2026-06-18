@@ -2,7 +2,7 @@ FreeRTOS.o: \
  C:\Users\richa\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.3.3\libraries\BLE\src\FreeRTOS.cpp \
  C:\Users\richa\AppData\Local\Arduino15\packages\esp32\tools\esp32-arduino-libs\idf-release_v5.5-f1a1df9b-v3\esp32s3/include/freertos/FreeRTOS-Kernel/include/freertos/FreeRTOS.h \
  C:\Users\richa\AppData\Local\Arduino15\packages\esp32\tools\esp32-arduino-libs\idf-release_v5.5-f1a1df9b-v3\esp32s3/include/freertos/config/include/freertos/FreeRTOSConfig.h \
- C:\Users\richa\AppData\Local\Arduino15\packages\esp32\tools\esp32-arduino-libs\idf-release_v5.5-f1a1df9b-v3\esp32s3/qio_qspi/include/sdkconfig.h \
+ C:\Users\richa\AppData\Local\Arduino15\packages\esp32\tools\esp32-arduino-libs\idf-release_v5.5-f1a1df9b-v3\esp32s3/dio_opi/include/sdkconfig.h \
  C:\Users\richa\AppData\Local\Arduino15\packages\esp32\tools\esp32-arduino-libs\idf-release_v5.5-f1a1df9b-v3\esp32s3/include/newlib/platform_include/assert.h \
  C:\Users\richa\AppData\Local\Arduino15\packages\esp32\tools\esp32-arduino-libs\idf-release_v5.5-f1a1df9b-v3\esp32s3/include/freertos/config/xtensa/include/freertos/FreeRTOSConfig_arch.h \
  C:\Users\richa\AppData\Local\Arduino15\packages\esp32\tools\esp32-arduino-libs\idf-release_v5.5-f1a1df9b-v3\esp32s3/include/xtensa/include/xtensa_config.h \

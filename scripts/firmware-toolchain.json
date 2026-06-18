@@ -2,5 +2,6 @@
   "arduinoEsp32Core": "3.3.3",
   "espIdfLibsTag": "f1a1df9b",
   "espIdfVersion": "v5.5.1-418-gf1a1df9b2e",
-  "cdcOnBoot": true
+  "cdcOnBoot": true,
+  "fqbn": "esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,DebugLevel=info,DFUOnBoot=default,FlashMode=dio,FlashSize=16M,LoopCore=1,EventsCore=1,JTAGAdapter=default,PSRAM=opi,USBMode=hwcdc,ZigbeeMode=default"
 }

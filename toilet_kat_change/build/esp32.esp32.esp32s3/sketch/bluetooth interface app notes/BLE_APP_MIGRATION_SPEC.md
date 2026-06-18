@@ -280,6 +280,18 @@ This is different from `OTA_ROLLBACK_PREVIOUS`:
 - `OTA_ROLLBACK_PREVIOUS` rolls back to the partition recorded in NVS at OTA `PREPARE_UPDATE` (usually the last running OTA slot before the update).
 - `OTA_ROLLBACK_FACTORY` always targets the `factory` partition from `partitions.csv` (offset `0x10000`).
 
+### Factory provisioning
+
+The factory slot holds whatever app image was last written to the `factory` partition at `0x10000`. Rollback does **not** embed, name, or version-check a specific factory binary — it only verifies that the slot contains a bootable ESP-IDF app image and then selects that partition via `esp_ota_set_boot_partition()`.
+
+**Build parity requirement:** factory and OTA release images must be built with the same [`firmware-toolchain.json`](../../../scripts/firmware-toolchain.json) profile (FQBN, `partitions.csv`, `sdkconfig.defaults`) so segment load addresses, PSRAM, and flash mode match. Mismatched build parameters can cause validation failures or broken memory maps after rollback.
+
+**Lab / manufacturing flash:** use [`scripts/flash-factory-app.ps1`](../../../scripts/flash-factory-app.ps1) with any `.bin` produced by `scripts/build-firmware.ps1`. Do not use SPIKE/SARAH-specific scripts for production provisioning.
+
+`build-firmware.ps1` writes `build-metadata.json` next to the app binary (FQBN, core, IDF tag, MD5, size) for traceability of whichever image is stamped at factory.
+
+**Firmware validation path:** on `OTA_ROLLBACK_FACTORY`, firmware checks the factory header byte (`0xE9`), logs the target app description (version / compile time) on Serial, then delegates full image validation to ESP-IDF `esp_ota_set_boot_partition()`. Check Serial for `esp_err_to_name()` detail when `INVALID_FACTORY_IMAGE` is returned.
+
 ### Protocol
 
 - **Command**: `OTA_ROLLBACK_FACTORY`
@@ -295,7 +307,7 @@ This is different from `OTA_ROLLBACK_PREVIOUS`:
 - `OTA_ROLLBACK_FACTORY_ERR:BUSY_FLUSH` -> flush or critical motor action is active
 - `OTA_ROLLBACK_FACTORY_ERR:NO_FACTORY_PARTITION` -> factory partition missing from partition table
 - `OTA_ROLLBACK_FACTORY_ERR:ALREADY_ON_FACTORY` -> device is already running from factory
-- `OTA_ROLLBACK_FACTORY_ERR:INVALID_FACTORY_IMAGE` -> factory slot is empty or corrupt (image validation failed)
+- `OTA_ROLLBACK_FACTORY_ERR:INVALID_FACTORY_IMAGE` -> factory slot is empty (`0xFF` header) or ESP-IDF `image_validate` rejected the image (checksum, chip ID, revision); see Serial for `esp_err` detail
 - `OTA_ROLLBACK_FACTORY_ERR:SET_BOOT_FAILED` -> ESP-IDF failed to set the factory boot partition
 
 `GET_OTA_DIAG` should record the rollback with `to=factory` and `reason=factory_request` (BLE) or `hardware_factory_hold` (hardware path).

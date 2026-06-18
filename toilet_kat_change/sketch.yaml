@@ -1,6 +1,6 @@
 profiles:
   esp32s3:
-    notes: Production ESP32-S3 build (core 3.3.3, USB CDC on boot for startup Serial logs)
-    fqbn: esp32:esp32:esp32s3:CDCOnBoot=cdc,FlashSize=16M
+    notes: Production ESP32-S3 build (core 3.3.3, matches firmware-toolchain.json)
+    fqbn: esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,DebugLevel=info,DFUOnBoot=default,FlashMode=dio,FlashSize=16M,LoopCore=1,EventsCore=1,JTAGAdapter=default,PSRAM=opi,USBMode=hwcdc,ZigbeeMode=default
     platforms:
       - platform: esp32:esp32 (3.3.3)
