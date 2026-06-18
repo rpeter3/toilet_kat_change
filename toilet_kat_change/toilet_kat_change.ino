@@ -17,15 +17,16 @@
 #include <esp_task_wdt.h>
 #include <mbedtls/md5.h> // Include for MD5 validation
 #include <mbedtls/base64.h>
-#include <SPIFFS.h>
+#include <LittleFS.h>
+#include "esp_flash.h"
 #include <esp_core_dump.h>
 #include <esp_partition.h>
 #include "ota_diag_types.h"
 #define LED_PHASE_COUNT 5
 
-// Error log (SPIFFS, bounded, BLE-retrievable)
+// Error log (LittleFS storage partition, bounded, BLE-retrievable)
 #define LOG_FILE "/errors.txt"
-#define SPIFFS_PARTITION_LABEL "storage"
+#define STORAGE_PARTITION_LABEL "storage"
 #define MAX_LOG_SIZE 204800
 #define LOG_HEADROOM 25600
 #define LOG_SLEEP_TRIM_TRIGGER (MAX_LOG_SIZE - LOG_HEADROOM)
@@ -39,7 +40,7 @@
 
 //########################################################################
 // Uncomment to test heater fail-safe WDT recovery: stops TWDT feed during flush while heater is on.
-// Expect task-WDT reset within 5 s of heating phase, forensics on Serial/SPIFFS after reboot.
+// Expect task-WDT reset within 5 s of heating phase, forensics on Serial/storage after reboot.
 //#define SIMULATE_WDT_HANG
 //########################################################################
 
@@ -337,10 +338,10 @@ void resetOTAState();
 void checkBootFailure();
 void saveRollbackInfo();
 void recordOtaBootAttempt();
-void logOtaBootAttemptToSpiffs();
+void logOtaBootAttemptToStorage();
 void incrementOtaGoodBootStreak();
 void confirmOtaBootOk();
-void mergeNvsLogTailToSpiffs();
+void mergeNvsLogTailToStorage();
 void markOtaPendingVerify();
 bool logOtaRollback(const char* trigger, const char* reason, String* errorCode);
 String buildOtaDiagResponse();
@@ -1822,33 +1823,66 @@ void saveParametersToEEPROM() {
 static bool isAbnormalResetReason(esp_reset_reason_t reason);
 static const char* resetReasonToString(esp_reset_reason_t reason);
 
-void initErrorLog() {
-  unsigned long spiffsBeginStart = millis();
-  bool mounted = SPIFFS.begin(true, "/spiffs", 10, SPIFFS_PARTITION_LABEL);
-  unsigned long spiffsBeginMs = millis() - spiffsBeginStart;
-  if (!mounted) {
-    Serial.printf("WARN: SPIFFS begin(storage) failed after %lums, trying default partition\n", spiffsBeginMs);
-    spiffsBeginStart = millis();
-    mounted = SPIFFS.begin(true);
-    spiffsBeginMs = millis() - spiffsBeginStart;
+static void logStorageFlashDiagnostics() {
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  Serial.printf("Storage init: running=%s subtype=%u\n",
+                running ? running->label : "null",
+                running ? (unsigned)running->subtype : 0U);
+
+  uint32_t chipSize = 0;
+  esp_err_t sizeErr = esp_flash_get_size(NULL, &chipSize);
+  if (sizeErr == ESP_OK) {
+    Serial.printf("Storage flash chip size: %u bytes (%u MB)\n",
+                  (unsigned)chipSize, (unsigned)(chipSize / (1024U * 1024U)));
+  } else {
+    Serial.printf("WARN: esp_flash_get_size failed: %s\n", esp_err_to_name(sizeErr));
   }
-  Serial.printf("Boot timing: spiffs_begin,%lums\n", spiffsBeginMs);
-  if (!mounted) {
-    Serial.println("WARN: SPIFFS init failed, error log disabled");
+
+  const esp_partition_t* storagePart = esp_partition_find_first(
+      ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, STORAGE_PARTITION_LABEL);
+  if (storagePart == NULL) {
+    Serial.println("WARN: storage partition not found in partition table");
     return;
   }
+
+  uint32_t storageEnd = storagePart->address + storagePart->size;
+  Serial.printf("Storage partition: offset=0x%x size=0x%x end=0x%x\n",
+                (unsigned)storagePart->address,
+                (unsigned)storagePart->size,
+                (unsigned)storageEnd);
+  if (sizeErr == ESP_OK && storageEnd > chipSize) {
+    Serial.printf("WARN: storage extends past chip (end 0x%x > chip 0x%x)\n",
+                  (unsigned)storageEnd, (unsigned)chipSize);
+  }
+}
+
+void initErrorLog() {
+  logStorageFlashDiagnostics();
+
+  unsigned long storageBeginStart = millis();
+  if (!LittleFS.begin(true, "/littlefs", 10, STORAGE_PARTITION_LABEL)) {
+    unsigned long storageBeginMs = millis() - storageBeginStart;
+    Serial.printf("Boot timing: storage_begin,%lums\n", storageBeginMs);
+    Serial.printf("WARN: LittleFS begin(%s) failed after %lums\n",
+                  STORAGE_PARTITION_LABEL, storageBeginMs);
+    Serial.println("WARN: storage init failed, error log disabled");
+    return;
+  }
+  unsigned long storageBeginMs = millis() - storageBeginStart;
+  Serial.printf("Boot timing: storage_begin,%lums\n", storageBeginMs);
+
   unsigned long probeStart = millis();
-  File probe = SPIFFS.open(LOG_FILE, "a");
+  File probe = LittleFS.open(LOG_FILE, "a");
   if (!probe) {
-    Serial.printf("Boot timing: spiffs_probe_fail,%lums\n", millis() - probeStart);
-    Serial.println("WARN: SPIFFS log file not writable, error log disabled");
+    Serial.printf("Boot timing: storage_probe_fail,%lums\n", millis() - probeStart);
+    Serial.println("WARN: storage log file not writable, error log disabled");
     return;
   }
   probe.close();
-  Serial.printf("Boot timing: spiffs_probe_ok,%lums\n", millis() - probeStart);
+  Serial.printf("Boot timing: storage_probe_ok,%lums\n", millis() - probeStart);
   errorLogInitialized = true;
-  Serial.printf("SPIFFS mounted: total=%u used=%u bytes, log=%s\n",
-                (unsigned)SPIFFS.totalBytes(), (unsigned)SPIFFS.usedBytes(), LOG_FILE);
+  Serial.printf("LittleFS mounted: total=%u used=%u bytes, log=%s\n",
+                (unsigned)LittleFS.totalBytes(), (unsigned)LittleFS.usedBytes(), LOG_FILE);
   logError("boot_checkpoint", 0, "serial_ok", false);
   logError("boot_checkpoint", 0, "gpio_safe", false);
   logError("boot_checkpoint", 0, "nvs_ok", false);
@@ -1856,7 +1890,7 @@ void initErrorLog() {
   flushPendingCrashLog();
   logBootTiming("crash_flush_done");
   Serial.printf("Boot timing: crash_flush,%lums\n", millis() - flushStart);
-  logBootCheckpoint("spiffs_ok");
+  logBootCheckpoint("lfs_ok");
 }
 
 void resetBootTiming() {
@@ -2055,7 +2089,7 @@ void logError(const char* type, int code, const char* msg, bool includeContext) 
   if (includeContext) line += getCurrentContextString();
   if (line.length() > LOG_LINE_MAX_LEN) line = line.substring(0, LOG_LINE_MAX_LEN);
   line += "\n";
-  File f = SPIFFS.open(LOG_FILE, "a");
+  File f = LittleFS.open(LOG_FILE, "a");
   if (!f) {
     static bool logOpenFailedWarned = false;
     if (!logOpenFailedWarned) {
@@ -2074,7 +2108,7 @@ void logError(const char* type, int code, const char* msg, bool includeContext) 
 
 String readLogChunk(size_t offset) {
   if (!errorLogInitialized) return "LOGS_ERR:NOT_MOUNTED";
-  File f = SPIFFS.open(LOG_FILE, "r");
+  File f = LittleFS.open(LOG_FILE, "r");
   if (!f) return "LOGS_END";
   size_t total = f.size();
   if (offset >= total) { f.close(); return "LOGS_END"; }
@@ -3069,11 +3103,11 @@ bool loadHWCFGBlobFromNVS(const char* key, HWCFGConfigStore& outStore) {
   return err == ESP_OK;
 }
 
-bool loadHWCFGBlobFromSPIFFS(const char* path, HWCFGConfigStore& outStore) {
+bool loadHWCFGBlobFromStorage(const char* path, HWCFGConfigStore& outStore) {
   if (path == NULL) {
     return false;
   }
-  File f = SPIFFS.open(path, "r");
+  File f = LittleFS.open(path, "r");
   if (!f) {
     return false;
   }
@@ -3088,7 +3122,7 @@ bool loadHWCFGBlobFromSPIFFS(const char* path, HWCFGConfigStore& outStore) {
 
 bool loadHWCFGBlob(const char* key, HWCFGConfigStore& outStore) {
   const char* path = hwcfgFilePathForKey(key);
-  if (loadHWCFGBlobFromSPIFFS(path, outStore)) {
+  if (loadHWCFGBlobFromStorage(path, outStore)) {
     return true;
   }
   return loadHWCFGBlobFromNVS(key, outStore);
@@ -3099,34 +3133,34 @@ bool saveHWCFGBlobFile(const char* path, const HWCFGConfigStore& store) {
     return false;
   }
   String tempPath = String(path) + ".tmp";
-  SPIFFS.remove(tempPath.c_str());
+  LittleFS.remove(tempPath.c_str());
 
-  File f = SPIFFS.open(tempPath.c_str(), "w");
+  File f = LittleFS.open(tempPath.c_str(), "w");
   if (!f) {
-    Serial.printf("HWCFG SPIFFS open failed: %s\n", tempPath.c_str());
+    Serial.printf("HWCFG storage open failed: %s\n", tempPath.c_str());
     return false;
   }
   size_t bytesWritten = f.write(reinterpret_cast<const uint8_t*>(&store), sizeof(HWCFGConfigStore));
   f.flush();
   f.close();
   if (bytesWritten != sizeof(HWCFGConfigStore)) {
-    SPIFFS.remove(tempPath.c_str());
-    Serial.printf("HWCFG SPIFFS short write: %u/%u bytes\n",
+    LittleFS.remove(tempPath.c_str());
+    Serial.printf("HWCFG storage short write: %u/%u bytes\n",
                   (unsigned)bytesWritten, (unsigned)sizeof(HWCFGConfigStore));
     return false;
   }
 
-  SPIFFS.remove(path);
-  if (!SPIFFS.rename(tempPath.c_str(), path)) {
-    SPIFFS.remove(tempPath.c_str());
-    Serial.printf("HWCFG SPIFFS rename failed: %s -> %s\n", tempPath.c_str(), path);
+  LittleFS.remove(path);
+  if (!LittleFS.rename(tempPath.c_str(), path)) {
+    LittleFS.remove(tempPath.c_str());
+    Serial.printf("HWCFG storage rename failed: %s -> %s\n", tempPath.c_str(), path);
     return false;
   }
 
   memset(&hwcfgVerifyScratch, 0, sizeof(hwcfgVerifyScratch));
-  if (!loadHWCFGBlobFromSPIFFS(path, hwcfgVerifyScratch) ||
+  if (!loadHWCFGBlobFromStorage(path, hwcfgVerifyScratch) ||
       computeHWCFGCRC(hwcfgVerifyScratch) != hwcfgVerifyScratch.crc32) {
-    Serial.printf("HWCFG SPIFFS verify failed: %s\n", path);
+    Serial.printf("HWCFG storage verify failed: %s\n", path);
     return false;
   }
   return true;
@@ -3138,18 +3172,18 @@ bool saveHWCFGBlob(const HWCFGConfigStore& store, bool updateLastGood) {
     saved = saveHWCFGBlobFile(HWCFG_LAST_GOOD_FILE, store);
   }
   if (!saved) {
-    Serial.println("HWCFG persist failed: SPIFFS_WRITE_FAIL");
+    Serial.println("HWCFG persist failed: STORAGE_WRITE_FAIL");
   }
   return saved;
 }
 
-bool migrateHWCFGBlobFromNVSToSPIFFS(const char* key, const HWCFGConfigStore& store) {
+bool migrateHWCFGBlobFromNVSToStorage(const char* key, const HWCFGConfigStore& store) {
   const char* path = hwcfgFilePathForKey(key);
   if (path == NULL) {
     return false;
   }
   if (saveHWCFGBlobFile(path, store)) {
-    Serial.printf("Migrated HWCFG %s record from NVS to SPIFFS\n", key);
+    Serial.printf("Migrated HWCFG %s record from NVS to storage\n", key);
     return true;
   }
   return false;
@@ -3222,11 +3256,11 @@ void initializeDefaultHWCFG(HWCFGConfigStore& store) {
 bool initializeHWCFGStore() {
   String err;
   memset(&hwcfgScratchActive, 0, sizeof(hwcfgScratchActive));
-  if (loadHWCFGBlobFromSPIFFS(HWCFG_ACTIVE_FILE, hwcfgScratchActive) && validateHWCFGStore(hwcfgScratchActive, err)) {
+  if (loadHWCFGBlobFromStorage(HWCFG_ACTIVE_FILE, hwcfgScratchActive) && validateHWCFGStore(hwcfgScratchActive, err)) {
     hwcfgStore = hwcfgScratchActive;
     hwcfgStoreInitialized = true;
     hwcfgSafeFault = false;
-    logBootTiming("hwcfg_path,spiffs_active");
+    logBootTiming("hwcfg_path,storage_active");
     return true;
   }
   err = "";
@@ -3235,20 +3269,20 @@ bool initializeHWCFGStore() {
     hwcfgStore = hwcfgScratchActive;
     hwcfgStoreInitialized = true;
     logBootTiming("hwcfg_migrate_start");
-    hwcfgSafeFault = !migrateHWCFGBlobFromNVSToSPIFFS(HWCFG_ACTIVE_KEY, hwcfgStore);
+    hwcfgSafeFault = !migrateHWCFGBlobFromNVSToStorage(HWCFG_ACTIVE_KEY, hwcfgStore);
     logBootTiming(hwcfgSafeFault ? "hwcfg_path,nvs_active_migrate_fail" : "hwcfg_path,nvs_active_migrated");
     return !hwcfgSafeFault;
   }
 
   memset(&hwcfgScratchLastGood, 0, sizeof(hwcfgScratchLastGood));
   err = "";
-  if (loadHWCFGBlobFromSPIFFS(HWCFG_LAST_GOOD_FILE, hwcfgScratchLastGood) && validateHWCFGStore(hwcfgScratchLastGood, err)) {
+  if (loadHWCFGBlobFromStorage(HWCFG_LAST_GOOD_FILE, hwcfgScratchLastGood) && validateHWCFGStore(hwcfgScratchLastGood, err)) {
     hwcfgStore = hwcfgScratchLastGood;
     hwcfgStoreInitialized = true;
     hwcfgSafeFault = false;
     logBootTiming("hwcfg_last_good_save_start");
     saveHWCFGBlob(hwcfgStore, false);
-    logBootTiming("hwcfg_path,spiffs_last_good");
+    logBootTiming("hwcfg_path,storage_last_good");
     return true;
   }
   err = "";
@@ -3257,7 +3291,7 @@ bool initializeHWCFGStore() {
     hwcfgStore = hwcfgScratchLastGood;
     hwcfgStoreInitialized = true;
     logBootTiming("hwcfg_migrate_last_good_start");
-    hwcfgSafeFault = !migrateHWCFGBlobFromNVSToSPIFFS(HWCFG_LAST_GOOD_KEY, hwcfgStore);
+    hwcfgSafeFault = !migrateHWCFGBlobFromNVSToStorage(HWCFG_LAST_GOOD_KEY, hwcfgStore);
     if (!hwcfgSafeFault) {
       hwcfgSafeFault = !saveHWCFGBlob(hwcfgStore, false);
     }
@@ -3881,7 +3915,7 @@ void resetOTAState() {
   }
 }
 
-// --- OTA boot diagnostics (NVS + SPIFFS) ---
+// --- OTA boot diagnostics (NVS + storage) ---
 
 static void initDefaultOtaDiag(OtaDiagStore& diag) {
   memset(&diag, 0, sizeof(diag));
@@ -4001,7 +4035,7 @@ bool isOnOtaTargetPartition() {
   return running->subtype == diag.ota_target_subtype;
 }
 
-static bool captureSpiffsLogTailToNvs(OtaDiagStore& diag) {
+static bool captureLogTailToNvs(OtaDiagStore& diag) {
   nvs_handle_t nvs_handle;
   if (nvs_open("ota", NVS_READWRITE, &nvs_handle) != ESP_OK) {
     return false;
@@ -4011,7 +4045,7 @@ static bool captureSpiffsLogTailToNvs(OtaDiagStore& diag) {
   size_t tailLen = 0;
 
   if (errorLogInitialized) {
-    File f = SPIFFS.open(LOG_FILE, "r");
+    File f = LittleFS.open(LOG_FILE, "r");
     if (f) {
       size_t fileSize = f.size();
       size_t offset = (fileSize > OTA_LOG_TAIL_MAX_BYTES) ? (fileSize - OTA_LOG_TAIL_MAX_BYTES) : 0;
@@ -4036,7 +4070,7 @@ static bool captureSpiffsLogTailToNvs(OtaDiagStore& diag) {
   return true;
 }
 
-void mergeNvsLogTailToSpiffs() {
+void mergeNvsLogTailToStorage() {
   if (!errorLogInitialized) {
     return;
   }
@@ -4104,7 +4138,7 @@ void recordOtaBootAttempt() {
   saveOtaDiag(diag);
 }
 
-void logOtaBootAttemptToSpiffs() {
+void logOtaBootAttemptToStorage() {
   if (!errorLogInitialized || !isOnOtaTargetPartition()) {
     return;
   }
@@ -4539,7 +4573,7 @@ static void recordOtaRollbackDiag(const char* trigger,
            diag.last_reason);
   logError("ota_rollback", 0, rollMsg, false);
 
-  captureSpiffsLogTailToNvs(diag);
+  captureLogTailToNvs(diag);
 
   diag.pending_verify = 0;
   diag.boot_attempts = 0;
@@ -4905,7 +4939,7 @@ static size_t getErrorLogFileSize() {
   if (!errorLogInitialized) {
     return 0;
   }
-  File f = SPIFFS.open(LOG_FILE, "r");
+  File f = LittleFS.open(LOG_FILE, "r");
   if (!f) {
     return 0;
   }
@@ -4921,7 +4955,7 @@ bool trimErrorLogToSize(size_t targetBytes) {
     return false;
   }
 
-  File src = SPIFFS.open(LOG_FILE, "r");
+  File src = LittleFS.open(LOG_FILE, "r");
   if (!src) {
     Serial.println("WARN: log trim open read failed");
     return false;
@@ -4953,7 +4987,7 @@ bool trimErrorLogToSize(size_t targetBytes) {
   }
   src.close();
 
-  src = SPIFFS.open(LOG_FILE, "r");
+  src = LittleFS.open(LOG_FILE, "r");
   if (!src) {
     Serial.println("WARN: log trim reopen read failed");
     return false;
@@ -4964,8 +4998,8 @@ bool trimErrorLogToSize(size_t targetBytes) {
     return false;
   }
 
-  SPIFFS.remove(LOG_TRIM_TEMP_FILE);
-  File dst = SPIFFS.open(LOG_TRIM_TEMP_FILE, "w");
+  LittleFS.remove(LOG_TRIM_TEMP_FILE);
+  File dst = LittleFS.open(LOG_TRIM_TEMP_FILE, "w");
   if (!dst) {
     src.close();
     Serial.println("WARN: log trim temp open failed");
@@ -4983,7 +5017,7 @@ bool trimErrorLogToSize(size_t targetBytes) {
     if (written != n) {
       src.close();
       dst.close();
-      SPIFFS.remove(LOG_TRIM_TEMP_FILE);
+      LittleFS.remove(LOG_TRIM_TEMP_FILE);
       Serial.println("WARN: log trim write failed");
       return false;
     }
@@ -4994,13 +5028,13 @@ bool trimErrorLogToSize(size_t targetBytes) {
   dst.flush();
   dst.close();
 
-  if (!SPIFFS.remove(LOG_FILE)) {
-    SPIFFS.remove(LOG_TRIM_TEMP_FILE);
+  if (!LittleFS.remove(LOG_FILE)) {
+    LittleFS.remove(LOG_TRIM_TEMP_FILE);
     Serial.println("WARN: log trim remove original failed");
     return false;
   }
-  if (!SPIFFS.rename(LOG_TRIM_TEMP_FILE, LOG_FILE)) {
-    SPIFFS.remove(LOG_TRIM_TEMP_FILE);
+  if (!LittleFS.rename(LOG_TRIM_TEMP_FILE, LOG_FILE)) {
+    LittleFS.remove(LOG_TRIM_TEMP_FILE);
     Serial.println("WARN: log trim rename failed");
     return false;
   }
@@ -5014,7 +5048,7 @@ void logBootStatus() {
   const char* reasonStr = resetReasonToString(resetReason);
   char msg[64];
   snprintf(msg, sizeof(msg), "reason=%s,code=%d", reasonStr, (int)resetReason);
-  Serial.printf("Boot status: reset=%s (%d), spiffs=%s, log_bytes=%u\n",
+  Serial.printf("Boot status: reset=%s (%d), storage=%s, log_bytes=%u\n",
                 reasonStr, (int)resetReason,
                 errorLogInitialized ? "ok" : "off",
                 (unsigned)getErrorLogFileSize());
@@ -5058,7 +5092,7 @@ void logAbnormalResetForensics() {
   if (errorLogInitialized) {
     logError("reset", (int)resetReason, resetMsg, false);
     logError("reset_forensics", (int)resetReason, forensicsMsg, false);
-    Serial.printf("SPIFFS log size after forensics: %u bytes\n",
+    Serial.printf("Storage log size after forensics: %u bytes\n",
                   (unsigned)getErrorLogFileSize());
   }
 }
@@ -5277,9 +5311,9 @@ void initCorePlatformServices() {
   ESP_ERROR_CHECK(err);
   logBootTiming("nvs_init_done");
   logBootCheckpoint("nvs_ok");
-  logBootTiming("spiffs_init_start");
+  logBootTiming("storage_init_start");
   initErrorLog();
-  logBootTiming("spiffs_init_done");
+  logBootTiming("storage_init_done");
   logBootTiming("devmode_load_start");
   loadDevModeSetting();
   logBootTiming("devmode_load_done");
@@ -5449,7 +5483,7 @@ void setup() {
     configureMotorAndSensorPins();
     logBootCheckpoint("pins_ok");
     runHeaterSafetyBootSequence();
-    logOtaBootAttemptToSpiffs();
+    logOtaBootAttemptToStorage();
     circleLeds();
 
     is_device_connected = false;
@@ -5506,11 +5540,11 @@ void setup() {
   configureMotorAndSensorPins();
   logBootCheckpoint("pins_ok");
   runHeaterSafetyBootSequence();
-  logOtaBootAttemptToSpiffs();
+  logOtaBootAttemptToStorage();
 
   checkBootFailure();
   logBootCheckpoint("ota_check_ok");
-  mergeNvsLogTailToSpiffs();
+  mergeNvsLogTailToStorage();
   incrementOtaGoodBootStreak();
   confirmOtaBootOk();
   circleLeds();
