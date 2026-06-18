@@ -1,0 +1,139 @@
+#line 1 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\SPIKE_BootloaderEraseTest\\SPIKE_BootloaderEraseTest.ino"
+// Sacrificial test: can the running app ROM-erase the bootloader region @0x0?
+// Reports every step on serial. Recovery: reflash SARAH bootloader via USB script.
+
+#include <Arduino.h>
+#include <esp_flash.h>
+#include <esp_ota_ops.h>
+#include <esp_rom_spiflash.h>
+#include <esp_private/cache_utils.h>
+#include <esp_task_wdt.h>
+#include "esp32-hal.h"
+#include "soc/timer_group_struct.h"
+#include "hal/mwdt_ll.h"
+
+static const size_t BOOTLOADER_REGION_SIZE = 0x8000;
+static const uint32_t SECTOR_SIZE = 4096;
+
+static void logLine(const char* msg) {
+  Serial.println(msg);
+  Serial.flush();
+}
+
+static void disableMwdtHardware() {
+  // INT WDT lives on TIMG1; TG1WDT_SYS_RST fires when caches/ints are off during ROM erase.
+  mwdt_ll_write_protect_disable(&TIMERG0);
+  mwdt_ll_set_flashboot_en(&TIMERG0, false);
+  mwdt_ll_disable(&TIMERG0);
+  mwdt_ll_write_protect_enable(&TIMERG0);
+
+  mwdt_ll_write_protect_disable(&TIMERG1);
+  mwdt_ll_disable(&TIMERG1);
+  mwdt_ll_write_protect_enable(&TIMERG1);
+}
+
+IRAM_ATTR static esp_err_t romEraseSector(uint32_t sector, int* romResult) {
+  disableMwdtHardware();
+  spi_flash_disable_interrupts_caches_and_other_cpu();
+  esp_rom_spiflash_result_t r = esp_rom_spiflash_erase_sector(sector);
+  spi_flash_enable_interrupts_caches_and_other_cpu();
+  if (romResult) {
+    *romResult = static_cast<int>(r);
+  }
+  return (r == ESP_ROM_SPIFLASH_RESULT_OK) ? ESP_OK : ESP_FAIL;
+}
+
+static void logRunningPartition() {
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  if (!running) {
+    logLine("[info] running partition: <unknown>");
+    return;
+  }
+  Serial.printf("[info] running partition: label=%s offset=0x%06X subtype=0x%02X\n",
+                running->label, (unsigned)running->address, running->subtype);
+  Serial.flush();
+}
+
+static void logFlashSample() {
+  uint8_t buf[64] = {0};
+  esp_err_t err = esp_flash_read(esp_flash_default_chip, buf, 0, sizeof(buf));
+  Serial.printf("[readback] esp_flash_read @0x0 len=%u err=%d\n", (unsigned)sizeof(buf), err);
+  Serial.print("[readback] first 16 bytes:");
+  for (int i = 0; i < 16; i++) {
+    Serial.printf(" %02X", buf[i]);
+  }
+  Serial.println();
+
+  bool allFf = true;
+  for (int i = 0; i < 16; i++) {
+    if (buf[i] != 0xFF) {
+      allFf = false;
+      break;
+    }
+  }
+  Serial.printf("[readback] first 16 bytes all 0xFF: %s\n", allFf ? "yes" : "no");
+  Serial.flush();
+}
+
+static void disableAllWatchdogs() {
+  // Do not call disableCore0WDT/disableCore1WDT here: they call esp_task_wdt_delete
+  // on idle tasks, then esp_task_wdt_deinit() hits ESP_ERROR_CHECK in unsubscribe_idle.
+  disableLoopWDT();
+  esp_err_t err = esp_task_wdt_deinit();
+  disableMwdtHardware();
+  Serial.printf("[wdt] esp_task_wdt_deinit err=%d TG0_en=%d TG1_en=%d\n",
+                err,
+                mwdt_ll_check_if_enabled(&TIMERG0),
+                mwdt_ll_check_if_enabled(&TIMERG1));
+  Serial.flush();
+}
+
+static void runEraseTest() {
+  disableAllWatchdogs();
+
+  logLine("");
+  logLine("=== SPIKE Bootloader ERASE test ===");
+  logRunningPartition();
+
+  for (uint32_t sector = 0; sector < (BOOTLOADER_REGION_SIZE / SECTOR_SIZE); sector++) {
+    Serial.printf("[erase] sector %lu begin\n", (unsigned long)(sector + 1));
+    Serial.flush();
+
+    uint32_t t0 = millis();
+    int romResult = -1;
+    esp_err_t err = romEraseSector(sector, &romResult);
+
+    Serial.printf("[erase] sector %lu end err=%d rom_result=%d dt=%lu ms\n",
+                  (unsigned long)(sector + 1), err, romResult, millis() - t0);
+    Serial.flush();
+
+    if (err != ESP_OK) {
+      Serial.printf("[FAIL] erase stopped at sector %lu\n", (unsigned long)(sector + 1));
+      logFlashSample();
+      logLine("[done] device may need USB reflash of bootloader @0x0");
+      return;
+    }
+  }
+
+  logLine("[erase] all sectors complete");
+  logFlashSample();
+  logLine("[PASS] in-app ROM erase of 0x0..0x8000 completed");
+  logLine("[done] reflash bootloader via USB before normal use");
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(1500);
+  logLine("ERASE_TEST: setup done");
+}
+
+void loop() {
+  static bool ran = false;
+  if (ran) {
+    delay(1000);
+    return;
+  }
+  ran = true;
+  runEraseTest();
+}
+

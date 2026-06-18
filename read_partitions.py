@@ -77,8 +77,10 @@ def parse_partition_entries(data: bytes) -> list[dict]:
 def parse_otadata(data: bytes) -> dict:
     """Parse otadata (two OTA selection records, 32 bytes each)."""
     records = []
-    for i in range(0, min(len(data), 64), 32):
-        rec = data[i : i + 32]
+    for slot, offset in enumerate((0, 0x1000)):
+        if offset + 32 > len(data):
+            break
+        rec = data[offset : offset + 32]
         if len(rec) < 32:
             break
         seq = struct.unpack_from("<I", rec, 0)[0]
@@ -91,7 +93,7 @@ def parse_otadata(data: bytes) -> dict:
         crc = struct.unpack_from("<I", rec, 28)[0]
         records.append(
             {
-                "slot": i // 32,
+                "slot": slot,
                 "seq": seq,
                 "label": label,
                 "ota_state": ota_state,

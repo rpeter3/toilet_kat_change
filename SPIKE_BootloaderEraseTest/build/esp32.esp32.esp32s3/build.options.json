@@ -1,0 +1,9 @@
+{
+  "additionalFiles": "",
+  "compiler.optimization_flags": "-Os",
+  "customBuildProperties": "build.partitions_file=partitions.csv,build.flash_size=16MB,upload.flash_size=16MB,build.cdc_on_boot=1",
+  "fqbn": "esp32:esp32:esp32s3",
+  "hardwareFolders": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.10,C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.10",
+  "otherLibrariesFolders": "C:\\Users\\richa\\Documents\\Arduino\\libraries",
+  "sketchLocation": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\SPIKE_BootloaderEraseTest"
+}

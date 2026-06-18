@@ -1,0 +1,306 @@
+// Phase 0 spike: prove ROM-level erase/write to bootloader @0x0 works from ota_0
+// under the SARAH bootloader (esp_flash_read is unreliable there — use ROM write only).
+
+#include <Arduino.h>
+#include <stdarg.h>
+#include <nvs.h>
+#include <nvs_flash.h>
+#include <esp_flash.h>
+#include <esp_ota_ops.h>
+#include <esp_partition.h>
+#include <esp_rom_spiflash.h>
+#include <esp_private/cache_utils.h>
+#include <esp_log.h>
+#include <esp_task_wdt.h>
+#include <mbedtls/md5.h>
+
+#include "good_bootloader.h"
+
+#include <soc/rtc.h>
+
+static const char* SPIKE_TAG = "SPIKE";
+static const uint32_t SPIKE_PATCH_MAGIC = 0x53504B42;  // "SPKB"
+RTC_NOINIT_ATTR static uint32_t g_patchRtcMagic;
+RTC_NOINIT_ATTR static uint32_t g_patchAttempts;
+static const char* SPIKE_NVS_NS = "spike";
+static const char* SPIKE_NVS_PATCHED = "bl_patched";
+
+static const size_t BOOTLOADER_REGION_SIZE = 0x8000;
+
+static const char* GOOD_BOOTLOADER_MD5 = "e536c176c97b5905286ed980da47abe8";
+static const char* SARAH_BOOTLOADER_MD5 = "89fd4bd73330253ce7a3a3679f6f7547";
+
+#ifndef SPIKE_SKIP_ROM_TEST
+#define SPIKE_SKIP_ROM_TEST 0
+#endif
+
+static void spikeLog(const char* fmt, ...) {
+  char buf[256];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, args);
+  va_end(args);
+  Serial.println(buf);
+  ESP_LOGI(SPIKE_TAG, "%s", buf);
+}
+
+static void md5Hex(const uint8_t* data, size_t len, char out[33]) {
+  uint8_t digest[16];
+  mbedtls_md5(data, len, digest);
+  for (int i = 0; i < 16; i++) {
+    sprintf(out + (i * 2), "%02x", digest[i]);
+  }
+  out[32] = '\0';
+}
+
+static bool md5Equal(const uint8_t* a, const uint8_t* b, size_t len) {
+  char ha[33];
+  char hb[33];
+  md5Hex(a, len, ha);
+  md5Hex(b, len, hb);
+  return strcmp(ha, hb) == 0;
+}
+
+static esp_err_t flashReadRegion(uint32_t addr, uint8_t* buf, size_t len) {
+  return esp_flash_read(esp_flash_default_chip, buf, addr, len);
+}
+
+static void suspendWatchdogForFlashPatch() {
+  esp_task_wdt_deinit();
+}
+
+static void initPatchAttemptCounter() {
+  if (g_patchRtcMagic != SPIKE_PATCH_MAGIC) {
+    g_patchRtcMagic = SPIKE_PATCH_MAGIC;
+    g_patchAttempts = 0;
+  }
+}
+
+static void resetPatchAttemptCounter() {
+  g_patchRtcMagic = SPIKE_PATCH_MAGIC;
+  g_patchAttempts = 0;
+}
+
+IRAM_ATTR static esp_err_t romEraseOneSector(uint32_t sector) {
+  spi_flash_disable_interrupts_caches_and_other_cpu();
+  esp_rom_spiflash_result_t result = esp_rom_spiflash_erase_sector(sector);
+  spi_flash_enable_interrupts_caches_and_other_cpu();
+  return (result == ESP_ROM_SPIFLASH_RESULT_OK) ? ESP_OK : ESP_FAIL;
+}
+
+static esp_err_t romEraseBootloaderRegion() {
+  const uint32_t sectorCount = BOOTLOADER_REGION_SIZE / 4096;
+  for (uint32_t sector = 0; sector < sectorCount; sector++) {
+    esp_err_t err = romEraseOneSector(sector);
+    spikeLog("[step] ROM erase sector %lu/%lu: err=%d", sector + 1, sectorCount, err);
+    if (err != ESP_OK) {
+      return err;
+    }
+    delay(1);
+  }
+  return ESP_OK;
+}
+
+IRAM_ATTR static esp_err_t romWriteBulk(uint32_t destAddr, const uint8_t* data, size_t len) {
+  if ((len % 4) != 0) {
+    return ESP_ERR_INVALID_SIZE;
+  }
+
+  spi_flash_disable_interrupts_caches_and_other_cpu();
+  esp_rom_spiflash_result_t wr =
+      esp_rom_spiflash_write(destAddr, reinterpret_cast<const uint32_t*>(data), static_cast<int32_t>(len));
+  spi_flash_enable_interrupts_caches_and_other_cpu();
+  return (wr == ESP_ROM_SPIFLASH_RESULT_OK) ? ESP_OK : ESP_FAIL;
+}
+
+static bool nvsGetPatchedFlag() {
+  nvs_handle_t handle;
+  if (nvs_open(SPIKE_NVS_NS, NVS_READONLY, &handle) != ESP_OK) {
+    return false;
+  }
+  uint8_t patched = 0;
+  esp_err_t err = nvs_get_u8(handle, SPIKE_NVS_PATCHED, &patched);
+  nvs_close(handle);
+  return err == ESP_OK && patched != 0;
+}
+
+static void nvsSetPatchedFlag() {
+  nvs_handle_t handle;
+  if (nvs_open(SPIKE_NVS_NS, NVS_READWRITE, &handle) != ESP_OK) {
+    return;
+  }
+  nvs_set_u8(handle, SPIKE_NVS_PATCHED, 1);
+  nvs_commit(handle);
+  nvs_close(handle);
+}
+
+static void nvsClearPatchedFlag() {
+  nvs_handle_t handle;
+  if (nvs_open(SPIKE_NVS_NS, NVS_READWRITE, &handle) != ESP_OK) {
+    return;
+  }
+  nvs_erase_key(handle, SPIKE_NVS_PATCHED);
+  nvs_commit(handle);
+  nvs_close(handle);
+}
+
+static void printRunningPartition() {
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  if (!running) {
+    spikeLog("[info] running partition: <unknown>");
+    return;
+  }
+  spikeLog("[info] running partition: label=%s offset=0x%06X subtype=0x%02X",
+           running->label, (unsigned)running->address, running->subtype);
+}
+
+static void logBootloaderIdentity(const char* md5) {
+  spikeLog("[info] bootloader MD5: %s", md5);
+  if (strcmp(md5, SARAH_BOOTLOADER_MD5) == 0) {
+    spikeLog("[info] bootloader identity: SARAH (old)");
+  } else if (strcmp(md5, GOOD_BOOTLOADER_MD5) == 0) {
+    spikeLog("[info] bootloader identity: good (new build)");
+  } else {
+    spikeLog("[info] bootloader identity: unknown");
+  }
+}
+
+static void runBootOnlyTest() {
+  spikeLog("=== SPIKE Phase 0 Test A: boot check ===");
+  printRunningPartition();
+
+  uint8_t* view = static_cast<uint8_t*>(heap_caps_malloc(EMBEDDED_BOOTLOADER_LEN, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+  if (!view) {
+    spikeLog("[FAIL] heap alloc");
+    return;
+  }
+
+  uint32_t t0 = millis();
+  esp_err_t err = flashReadRegion(0, view, EMBEDDED_BOOTLOADER_LEN);
+  char md5[33];
+  md5Hex(view, EMBEDDED_BOOTLOADER_LEN, md5);
+  spikeLog("[step] esp_flash_read @0x0: err=%d dt=%lu ms md5=%s", err, millis() - t0, md5);
+  logBootloaderIdentity(md5);
+  spikeLog("[note] rom_read from ota_0+SARAH hangs — physical BL verified via esptool");
+  spikeLog("[note] esp_flash_read MD5 is unreliable here (expected under SARAH+ota_0)");
+  free(view);
+
+  spikeLog("[PASS] Phase 0 Test A: ota_0 boot path OK");
+}
+
+static void runPostPatchVerify() {
+  spikeLog("=== SPIKE Phase 0: post-patch verify ===");
+  printRunningPartition();
+
+  uint8_t* view = static_cast<uint8_t*>(heap_caps_malloc(EMBEDDED_BOOTLOADER_LEN, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+  if (!view) {
+    spikeLog("[FAIL] heap alloc");
+    return;
+  }
+
+  esp_err_t err = flashReadRegion(0, view, EMBEDDED_BOOTLOADER_LEN);
+  char md5[33];
+  md5Hex(view, EMBEDDED_BOOTLOADER_LEN, md5);
+  spikeLog("[step] esp_flash_read @0x0 after patch: err=%d md5=%s", err, md5);
+  logBootloaderIdentity(md5);
+
+  if (strcmp(md5, EMBEDDED_BOOTLOADER_MD5) == 0) {
+    spikeLog("[PASS] Phase 0 field-patch verify: good bootloader active");
+  } else {
+    spikeLog("[FAIL] Phase 0 field-patch verify: unexpected bootloader MD5");
+  }
+  free(view);
+}
+
+static void runFieldPatchTest() {
+  spikeLog("=== SPIKE Phase 0 Test B: field patch (write embedded good BL) ===");
+  printRunningPartition();
+
+  initPatchAttemptCounter();
+
+  if (g_patchAttempts >= 2) {
+    spikeLog("[FAIL] patch halted after %lu watchdog reboots — reflash SARAH via script", g_patchAttempts);
+    return;
+  }
+  g_patchAttempts++;
+
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  if (!running) {
+    spikeLog("[FAIL] could not determine running partition");
+    return;
+  }
+  spikeLog("[info] patch running from: label=%s offset=0x%06X", running->label, (unsigned)running->address);
+  if (running->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 ||
+      running->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_1) {
+    spikeLog("[FAIL] ROM patch from ota slot blocked under SARAH (use factory boot or OTA-finalize patch)");
+    return;
+  }
+
+  uint8_t* imageRam = static_cast<uint8_t*>(heap_caps_malloc(EMBEDDED_BOOTLOADER_LEN, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+  if (!imageRam) {
+    spikeLog("[FAIL] heap alloc for bootloader image");
+    return;
+  }
+  memcpy(imageRam, EMBEDDED_BOOTLOADER, EMBEDDED_BOOTLOADER_LEN);
+
+  suspendWatchdogForFlashPatch();
+
+  spikeLog("[step] ROM erase starting...");
+  uint32_t t0 = millis();
+  esp_err_t err = romEraseBootloaderRegion();
+  spikeLog("[step] ROM erase done: err=%d dt=%lu ms", err, millis() - t0);
+  if (err != ESP_OK) {
+    spikeLog("[FAIL] ROM erase failed");
+    free(imageRam);
+    return;
+  }
+
+  t0 = millis();
+  err = romWriteBulk(0, imageRam, EMBEDDED_BOOTLOADER_LEN);
+  free(imageRam);
+  spikeLog("[step] ROM write embedded good BL: err=%d dt=%lu ms", err, millis() - t0);
+  if (err != ESP_OK) {
+    spikeLog("[FAIL] ROM write failed — reflash bootloader via USB");
+    return;
+  }
+
+  nvsSetPatchedFlag();
+  spikeLog("[step] patch written, rebooting in 1s...");
+  delay(1000);
+  esp_restart();
+}
+
+static void runSpikeTest() {
+  nvs_flash_init();
+  initPatchAttemptCounter();
+
+#if SPIKE_SKIP_ROM_TEST
+  resetPatchAttemptCounter();
+  nvsClearPatchedFlag();
+  runBootOnlyTest();
+  return;
+#endif
+
+  if (nvsGetPatchedFlag()) {
+    runPostPatchVerify();
+    return;
+  }
+
+  runFieldPatchTest();
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  spikeLog("SPIKE: setup complete, starting test in loop...");
+}
+
+void loop() {
+  static bool testStarted = false;
+  if (testStarted) {
+    delay(1000);
+    return;
+  }
+  testStarted = true;
+  runSpikeTest();
+}

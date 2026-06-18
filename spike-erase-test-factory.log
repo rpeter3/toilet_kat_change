@@ -1,0 +1,245 @@
+Guru Meditation Error: Core  1 panic'ed (Double exception). 
+
+Core  1 register dump:
+PC      : 0x4038471e  PS      : 0x00040136  A0      : 0x00000004  A1      : 0x60100000  
+A2      : 0x00040136  A3      : 0x00040026  A4      : 0x00000000  A5      : 0x00000000  
+A6      : 0x3fc98875  A7      : 0x3fc949a4  A8      : 0x8037576f  A9      : 0x00000000  
+A10     : 0x00000000  A11     : 0x40375680  A12     : 0x00000000  A13     : 0x00000000  
+A14     : 0x00000001  A15     : 0x00000004  SAR     : 0x0000000a  EXCCAUSE: 0x00000002  
+EXCVADDR: 0x00000000  LBEG    : 0x40056fc5  LEND    : 0x40056fe7  LCOUNT  : 0x00000000  
+
+
+Backtrace: 0x4038471b:0x60100000 |<-CORRUPTED
+
+
+
+
+ELF file SHA256: f06626788
+
+Rebooting...
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0xc (RTC_SW_CPU_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x403756a4
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+ERASE_TEST: setup done
+[wdt] esp_task_wdt_deinit err=0 TG0_en=0 TG1_en=0
+
+=== SPIKE Bootloader ERASE test ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[erase] sector 1 begin
+Guru Meditation Error: Core  1 panic'ed (Double exception). 
+
+Core  1 register dump:
+PC      : 0x4038471e  PS      : 0x00040136  A0      : 0x00000004  A1      : 0x60100000  
+A2      : 0x00040136  A3      : 0x00040026  A4      : 0x00000000  A5      : 0x00000000  
+A6      : 0x3fc98875  A7      : 0x3fc949a4  A8      : 0x8037576f  A9      : 0x00000000  
+A10     : 0x00000000  A11     : 0x40375680  A12     : 0x00000000  A13     : 0x00000000  
+A14     : 0x00000001  A15     : 0x00000004  SAR     : 0x0000000a  EXCCAUSE: 0x00000002  
+EXCVADDR: 0x00000000  LBEG    : 0x40056fc5  LEND    : 0x40056fe7  LCOUNT  : 0x00000000  
+
+
+Backtrace: 0x4038471b:0x60100000 |<-CORRUPTED
+
+
+
+
+ELF file SHA256: f06626788
+
+Rebooting...
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0xc (RTC_SW_CPU_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x403756a1
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+ERASE_TEST: setup done
+[wdt] esp_task_wdt_deinit err=0 TG0_en=0 TG1_en=0
+
+=== SPIKE Bootloader ERASE test ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[erase] sector 1 begin
+Guru Meditation Error: Core  1 panic'ed (Double exception). 
+
+Core  1 register dump:
+PC      : 0x4038471e  PS      : 0x00040136  A0      : 0x00000004  A1      : 0x60100000  
+A2      : 0x00040136  A3      : 0x00040026  A4      : 0x00000000  A5      : 0x00000000  
+A6      : 0x3fc98875  A7      : 0x3fc949a4  A8      : 0x8037576f  A9      : 0x00000000  
+A10     : 0x00000000  A11     : 0x40375680  A12     : 0x00000000  A13     : 0x00000000  
+A14     : 0x00000001  A15     : 0x00000004  SAR     : 0x0000000a  EXCCAUSE: 0x00000002  
+EXCVADDR: 0x00000000  LBEG    : 0x40056fc5  LEND    : 0x40056fe7  LCOUNT  : 0x00000000  
+
+
+Backtrace: 0x4038471b:0x60100000 |<-CORRUPTED
+
+
+
+
+ELF file SHA256: f06626788
+
+Rebooting...
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0xc (RTC_SW_CPU_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x403756a7
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+ERASE_TEST: setup done
+[wdt] esp_task_wdt_deinit err=0 TG0_en=0 TG1_en=0
+
+=== SPIKE Bootloader ERASE test ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[erase] sector 1 begin
+Guru Meditation Error: Core  1 panic'ed (Double exception). 
+
+Core  1 register dump:
+PC      : 0x4038471e  PS      : 0x00040136  A0      : 0x00000004  A1      : 0x60100000  
+A2      : 0x00040136  A3      : 0x00040026  A4      : 0x00000000  A5      : 0x00000000  
+A6      : 0x3fc98875  A7      : 0x3fc949a4  A8      : 0x8037576f  A9      : 0x00000000  
+A10     : 0x00000000  A11     : 0x40375680  A12     : 0x00000000  A13     : 0x00000000  
+A14     : 0x00000001  A15     : 0x00000004  SAR     : 0x0000000a  EXCCAUSE: 0x00000002  
+EXCVADDR: 0x00000000  LBEG    : 0x40056fc5  LEND    : 0x40056fe7  LCOUNT  : 0x00000000  
+
+
+Backtrace: 0x4038471b:0x60100000 |<-CORRUPTED
+
+
+
+
+ELF file SHA256: f06626788
+
+Rebooting...
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0xc (RTC_SW_CPU_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x403756a7
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+ERASE_TEST: setup done
+[wdt] esp_task_wdt_deinit err=0 TG0_en=0 TG1_en=0
+
+=== SPIKE Bootloader ERASE test ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[erase] sector 1 begin
+Guru Meditation Error: Core  1 panic'ed (Double exception). 
+
+Core  1 register dump:
+PC      : 0x4038471e  PS      : 0x00040136  A0      : 0x00000004  A1      : 0x60100000  
+A2      : 0x00040136  A3      : 0x00040026  A4      : 0x00000000  A5      : 0x00000000  
+A6      : 0x3fc98875  A7      : 0x3fc949a4  A8      : 0x8037576f  A9      : 0x00000000  
+A10     : 0x00000000  A11     : 0x40375680  A12     : 0x00000000  A13     : 0x00000000  
+A14     : 0x00000001  A15     : 0x00000004  SAR     : 0x0000000a  EXCCAUSE: 0x00000002  
+EXCVADDR: 0x00000000  LBEG    : 0x40056fc5  LEND    : 0x40056fe7  LCOUNT  : 0x00000000  
+
+
+Backtrace: 0x4038471b:0x60100000 |<-CORRUPTED
+
+
+
+
+ELF file SHA256: f06626788
+
+Rebooting...
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0xc (RTC_SW_CPU_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x403756a1
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+ERASE_TEST: setup done
+[wdt] esp_task_wdt_deinit err=0 TG0_en=0 TG1_en=0
+
+=== SPIKE Bootloader ERASE test ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[erase] sector 1 begin
+Guru Meditation Error: Core  1 panic'ed (Double exception). 
+
+Core  1 register dump:
+PC      : 0x4038471e  PS      : 0x00040136  A0      : 0x00000004  A1      : 0x60100000  
+A2      : 0x00040136  A3      : 0x00040026  A4      : 0x00000000  A5      : 0x00000000  
+A6      : 0x3fc98875  A7      : 0x3fc949a4  A8      : 0x8037576f  A9      : 0x00000000  
+A10     : 0x00000000  A11     : 0x40375680  A12     : 0x00000000  A13     : 0x00000000  
+A14     : 0x00000001  A15     : 0x00000004  SAR     : 0x0000000a  EXCCAUSE: 0x00000002  
+EXCVADDR: 0x00000000  LBEG    : 0x40056fc5  LEND    : 0x40056fe7  LCOUNT  : 0x00000000  
+
+
+Backtrace: 0x4038471b:0x60100000 |<-CORRUPTED
+
+
+
+
+ELF file SHA256: f06626788
+
+Rebooting...
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0xc (RTC_SW_CPU_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x403756a1
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+ERASE_TEST: setup done
+[wdt] esp_task_wdt_deinit err=0 TG0_en=0 TG1_en=0
+
+=== SPIKE Bootloader ERASE test ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[erase] sector 1 begin
+Guru Meditation Error: Core  1 panic'ed (Double exception). 
+
+Core  1 register dump:
+PC      : 0x4038471e  PS      : 0x00040136  A0      : 0x00000004  A1      : 0x60100000  
+A2      : 0x00040136  A3      : 0x00040026  A4      : 0x00000000  A5      : 0x00000000  
+A6      : 0x3fc98875  A7      : 0x3fc949a4  A8      : 0x8037576f  A9      : 0x00000000  
+A10     : 0x00000000  A11     : 0x40375680  A12     : 0x00000000  A13     : 0x00000000  
+A14     : 0x00000001  A15     : 0x00000004  SAR     : 0x0000000a  EXCCAUSE: 0x00000002  
+EXCVADDR: 0x00000000  LBEG    : 0x40056fc5  LEND    : 0x40056fe7  LCOUNT  : 0x00000000  
+
+
+Backtrace: 0x4038471b:0x60100000 |<-CORRUPTED
+
+
+
+
+ELF file SHA256: f06626788
+
+Rebooting...
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0xc (RTC_SW_CPU_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x403756a7
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+ERASE_TEST: setup done
+[wdt] esp_task_wdt_deinit err=0 TG0_en=0 TG1_en=0
+
+=== SPIKE Bootloader ERASE test ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[erase] sector 1 begin
