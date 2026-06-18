@@ -226,7 +226,7 @@ struct HWCFGConfigStore {
 //set this when building the firmware
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-const char* SOFTWARE_VERSION_NUMBER = "4.0.17";
+const char* SOFTWARE_VERSION_NUMBER = "4.0.17.1";
 const char* FACTORY_SOFTWARE_DATE = "2026-06-18";
 const char* SOFTWARE_BUILD_DATE = __DATE__ " " __TIME__;
 

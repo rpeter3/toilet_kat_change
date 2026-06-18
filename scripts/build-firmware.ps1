@@ -108,7 +108,8 @@ $Metadata = [ordered]@{
     builtAt            = (Get-Date).ToUniversalTime().ToString("o")
 }
 $MetadataPath = Join-Path $BuildDir "build-metadata.json"
-$Metadata | ConvertTo-Json -Depth 4 | Set-Content -Path $MetadataPath -Encoding UTF8
+$utf8NoBom = New-Object System.Text.UTF8Encoding $false
+[System.IO.File]::WriteAllText($MetadataPath, ($Metadata | ConvertTo-Json -Depth 4), $utf8NoBom)
 
 Write-Host "Firmware built: $OutBin"
 Write-Host "Metadata: $MetadataPath"
