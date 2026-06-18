@@ -1,0 +1,34 @@
+{
+  "factory": {
+    "path": "FACTORY_BINARIES/factory_build.bin",
+    "expected_sw": "4.0.17.0",
+    "expected_build": "2026-06-01"
+  },
+  "ota": [
+    {
+      "path": "FACTORY_BINARIES/ota1_build.bin",
+      "expected_sw": "4.0.17.1",
+      "expected_build": "2026-06-02"
+    },
+    {
+      "path": "FACTORY_BINARIES/ota2_build.bin",
+      "expected_sw": "4.0.17.2",
+      "expected_build": "2026-06-03"
+    },
+    {
+      "path": "FACTORY_BINARIES/ota3_build.bin",
+      "expected_sw": "4.0.17.3",
+      "expected_build": "2026-06-04"
+    },
+    {
+      "path": "FACTORY_BINARIES/ota4_build.bin",
+      "expected_sw": "4.0.17.4",
+      "expected_build": "2026-06-05"
+    },
+    {
+      "path": "FACTORY_BINARIES/ota5_build.bin",
+      "expected_sw": "4.0.17.5",
+      "expected_build": "2026-06-06"
+    }
+  ]
+}

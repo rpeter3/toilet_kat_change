@@ -27,8 +27,11 @@ UPDATE_SERVICE_UUID = "5636340f-afc7-47b1-b0a8-15bcb9d7d29a6"
 UPDATE_CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea3"
 VERSION_CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea2"
 DEVICE_NAME = "ESP32 Toilet"
-CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea0"
+COMMAND_CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea0"
+RESPONSE_CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea4"
+CHARACTERISTIC_UUID = COMMAND_CHARACTERISTIC_UUID
 SERIAL_CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea1"
+OTA_ENABLE_WAIT_S = 4.0
 
 # BLE MTU is typically 20-512 bytes, we'll use 400 bytes per chunk for safety
 CHUNK_SIZE = 512
@@ -57,7 +60,7 @@ class OTAUpdater:
     async def scan_for_device(self) -> Optional[str]:
         """Scan for ESP32 Toilet device"""
         print("Scanning for ESP32 Toilet device...")
-        devices = await BleakScanner.discover(timeout=10.0)
+        devices = await BleakScanner.discover(timeout=20.0)
         
         for device in devices:
             if device.name == DEVICE_NAME:
@@ -67,28 +70,34 @@ class OTAUpdater:
         print("ESP32 Toilet device not found!")
         return None
     
-    async def connect(self, address: str) -> bool:
-        """Connect to ESP32 device"""
-        try:
-            self.client = BleakClient(address)
-            await self.client.connect()
-            # store address for potential reconnects
-            self.address = address
-            self.connected = True
-            print(f"Connected to {DEVICE_NAME} at {address}")
-            
-            # Enable notifications for version characteristic to receive progress updates
+    async def connect(self, address: str, max_retries: int = 5) -> bool:
+        """Connect to ESP32 device (Windows BLE often needs retries)."""
+        last_error = None
+        for attempt in range(1, max_retries + 1):
             try:
-                await self.client.start_notify(VERSION_CHARACTERISTIC_UUID, self.notification_handler)
+                if attempt > 1:
+                    print(f"Connect retry {attempt}/{max_retries}...")
+                    await asyncio.sleep(2.0)
+                self.client = BleakClient(address)
+                await self.client.connect()
+                self.address = address
+                self.connected = True
+                print(f"Connected to {DEVICE_NAME} at {address}")
+
+                try:
+                    await self.client.start_notify(VERSION_CHARACTERISTIC_UUID, self.notification_handler)
+                except Exception as e:
+                    print(f"Warning: Could not enable notifications: {e}")
+
+                await asyncio.sleep(1.0)
+                return True
             except Exception as e:
-                print(f"Warning: Could not enable notifications: {e}")
-            
-            # Wait for connection to stabilize
-            await asyncio.sleep(1.0)
-            return True
-        except Exception as e:
-            print(f"Failed to connect: {e}")
-            return False
+                last_error = e
+                self.connected = False
+                print(f"Failed to connect: {e}")
+
+        print(f"ERROR: Could not connect after {max_retries} attempts: {last_error}")
+        return False
     
     async def disconnect(self):
         """Disconnect from ESP32 device"""
@@ -323,6 +332,70 @@ class OTAUpdater:
         """Calculate MD5 hash of firmware"""
         md5_hash = hashlib.md5(data).hexdigest()
         return md5_hash
+
+    @staticmethod
+    def _services_have_update_char(services) -> bool:
+        if not services:
+            return False
+        for svc in services:
+            for char in svc.characteristics:
+                if str(char.uuid).lower() == UPDATE_CHARACTERISTIC_UUID.lower():
+                    return True
+        return False
+
+    async def _wait_for_device(self, addr: str, timeout: float = 20.0) -> bool:
+        deadline = asyncio.get_event_loop().time() + timeout
+        while asyncio.get_event_loop().time() < deadline:
+            print("Scanning for device...")
+            try:
+                devices = await BleakScanner.discover(timeout=3.0)
+            except Exception as e:
+                print(f"Scan failed: {e}")
+                devices = []
+            for device in devices:
+                if device.address.lower() == addr.lower():
+                    print(f"Device {addr} found")
+                    return True
+            await asyncio.sleep(0.5)
+        return False
+
+    async def _write_command_read_response(self, command: str, retries: int = 3) -> Optional[str]:
+        """Write command to fea0, read ack from fea4 (same as toilet_bluetooth_interface)."""
+        if not self.connected:
+            return None
+        payload = command.encode("utf-8")
+        for _ in range(retries):
+            await self.client.write_gatt_char(COMMAND_CHARACTERISTIC_UUID, payload)
+            await asyncio.sleep(0.15)
+            data = await self.client.read_gatt_char(RESPONSE_CHARACTERISTIC_UUID)
+            response = data.decode("utf-8", errors="replace").strip()
+            if response:
+                return response
+            await asyncio.sleep(0.1)
+        return None
+
+    async def enable_ota_mode(self) -> bool:
+        """Send ENABLE_OTA on fea0, confirm ENABLE_OTA_ACK on fea4, keep connection."""
+        print("Sending ENABLE_OTA...")
+        response = await self._write_command_read_response("ENABLE_OTA")
+        print(f"ENABLE_OTA response: {response or '(empty)'}")
+        if not response or "ENABLE_OTA_ACK" not in response:
+            print("ERROR: Device did not acknowledge ENABLE_OTA")
+            return False
+        print(f"Waiting {OTA_ENABLE_WAIT_S:.0f}s for OTA window...")
+        await asyncio.sleep(OTA_ENABLE_WAIT_S)
+
+        try:
+            services = getattr(self.client, "services", None)
+            if services is None:
+                services = await self.client.get_services()
+        except Exception:
+            services = None
+        if not self._services_have_update_char(services):
+            print("ERROR: Update characteristic (fea3) not found after ENABLE_OTA")
+            return False
+        print("OTA mode ready on current connection")
+        return True
     
     async def update_firmware(self, firmware_path: str) -> bool:
         """Complete OTA update process"""
@@ -351,122 +424,8 @@ class OTAUpdater:
         md5_hash = self.calculate_md5(firmware_data)
         print(f"MD5 hash: {md5_hash}")
 
-        # Request device to enter OTA mode
-        print("Requesting device to enter OTA mode via main characteristic...")
-        wrote_enable = False
-        # Try different write modes
-        try:
-            await self.log_services()
-        except Exception:
-            pass
-
-        try:
-            print("Attempting ENABLE_OTA (with response)")
-            await self.client.write_gatt_char(CHARACTERISTIC_UUID, b"ENABLE_OTA", response=True)
-            wrote_enable = True
-        except Exception:
-            try:
-                print("Attempting ENABLE_OTA (without response)")
-                await self.client.write_gatt_char(CHARACTERISTIC_UUID, b"ENABLE_OTA", response=False)
-                wrote_enable = True
-            except Exception:
-                try:
-                    print("Attempting ENABLE_OTA on serial characteristic as fallback")
-                    await self.client.write_gatt_char(SERIAL_CHARACTERISTIC_UUID, b"ENABLE_OTA", response=False)
-                    wrote_enable = True
-                except Exception as e:
-                    print(f"Fallback write failed: {e}")
-
-        if not wrote_enable:
-            print("Warning: could not request OTA enable via BLE characteristic")
+        if not await self.enable_ota_mode():
             return False
-
-        # Give device time to process and reset OTA state
-        print("Waiting for device to reset OTA state...")
-        await asyncio.sleep(4.0)  # Increased from 1.5s to 4.0s to allow full state reset
-
-        # Check if update characteristic is visible on current connection
-        try:
-            try:
-                services = await self.client.get_services()
-            except AttributeError:
-                services = getattr(self.client, 'services', None)
-        except Exception:
-            services = None
-
-        def find_update_char(svcs):
-            if not svcs:
-                return False
-            for svc in svcs:
-                for char in svc.characteristics:
-                    if str(char.uuid).lower() == UPDATE_CHARACTERISTIC_UUID.lower():
-                        return True
-            return False
-
-        if find_update_char(services):
-            print("Update characteristic available on current connection; proceeding")
-        else:
-            # Try scan/reconnect flow
-            print("Update characteristic not visible on current connection; waiting for device to re-advertise")
-
-            async def wait_for_device(addr: str, timeout: float = 15.0) -> bool:
-                deadline = asyncio.get_event_loop().time() + timeout
-                while asyncio.get_event_loop().time() < deadline:
-                    print("Scanning for device to reappear...")
-                    try:
-                        devices = await BleakScanner.discover(timeout=3.0)
-                    except Exception as e:
-                        print(f"Scan failed: {e}")
-                        devices = []
-                    for d in devices:
-                        if d.address.lower() == addr.lower():
-                            print(f"Device {addr} found again")
-                            return True
-                    await asyncio.sleep(0.5)
-                return False
-
-            # Disconnect current client and wait for device
-            try:
-                await self.disconnect()
-            except Exception:
-                pass
-
-            found = await wait_for_device(self.address, timeout=20.0)
-            if not found:
-                print("ERROR: Device did not reappear after requesting OTA mode")
-                return False
-
-            if not await self.connect(self.address):
-                print("ERROR: Failed to connect to device after it reappeared")
-                return False
-
-            # Poll for update characteristic
-            ota_found = False
-            deadline = asyncio.get_event_loop().time() + 15.0
-            while asyncio.get_event_loop().time() < deadline:
-                try:
-                    try:
-                        services = await self.client.get_services()
-                    except AttributeError:
-                        services = getattr(self.client, 'services', None)
-                except Exception:
-                    services = None
-
-                if find_update_char(services):
-                    ota_found = True
-                    break
-
-                await asyncio.sleep(0.8)
-
-            if not ota_found:
-                try:
-                    val = await self.client.read_gatt_char(CHARACTERISTIC_UUID)
-                    valstr = val.decode('utf-8', errors='ignore')
-                    print(f"Main characteristic value after enable attempt: {valstr}")
-                except Exception as e:
-                    print(f"Could not read main characteristic: {e}")
-                print("ERROR: Update characteristic did not appear on device after enable request")
-                return False
 
         # Check version (informational only; continue even if it fails)
         v = await self.check_version()

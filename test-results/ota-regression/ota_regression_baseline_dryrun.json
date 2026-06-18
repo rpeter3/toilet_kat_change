@@ -1,0 +1,191 @@
+{
+  "run_id": "20260618T160355Z",
+  "started_at": "2026-06-18T16:03:55.368713+00:00",
+  "ended_at": "2026-06-18T16:03:55.379733+00:00",
+  "passed": true,
+  "dry_run": true,
+  "port": "COM6",
+  "address": null,
+  "partition_sequence": [
+    "factory",
+    "ota_0",
+    "ota_1",
+    "ota_0",
+    "ota_1",
+    "ota_0",
+    "factory",
+    "ota_0"
+  ],
+  "steps": [
+    {
+      "name": "flash_factory",
+      "passed": true,
+      "expected_partition": "factory",
+      "observed_partition": "factory",
+      "version": null,
+      "ota_diag": {},
+      "boot_info": null,
+      "logs_excerpt": "",
+      "errors": [],
+      "started_at": "2026-06-18T16:03:55.379262+00:00",
+      "ended_at": "2026-06-18T16:03:55.379282+00:00",
+      "duration_s": 0.0
+    },
+    {
+      "name": "ota1",
+      "passed": true,
+      "expected_partition": "ota_0",
+      "observed_partition": "ota_0",
+      "version": null,
+      "ota_diag": {},
+      "boot_info": null,
+      "logs_excerpt": "",
+      "errors": [],
+      "started_at": "2026-06-18T16:03:55.379481+00:00",
+      "ended_at": "2026-06-18T16:03:55.379559+00:00",
+      "duration_s": 0.0
+    },
+    {
+      "name": "ota2",
+      "passed": true,
+      "expected_partition": "ota_1",
+      "observed_partition": "ota_1",
+      "version": null,
+      "ota_diag": {},
+      "boot_info": null,
+      "logs_excerpt": "",
+      "errors": [],
+      "started_at": "2026-06-18T16:03:55.379629+00:00",
+      "ended_at": "2026-06-18T16:03:55.379634+00:00",
+      "duration_s": 0.0
+    },
+    {
+      "name": "rollback_previous",
+      "passed": true,
+      "expected_partition": "ota_0",
+      "observed_partition": "ota_0",
+      "version": null,
+      "ota_diag": {},
+      "boot_info": null,
+      "logs_excerpt": "",
+      "errors": [],
+      "started_at": "2026-06-18T16:03:55.379657+00:00",
+      "ended_at": "2026-06-18T16:03:55.379660+00:00",
+      "duration_s": 0.0
+    },
+    {
+      "name": "ota3",
+      "passed": true,
+      "expected_partition": "ota_1",
+      "observed_partition": "ota_1",
+      "version": null,
+      "ota_diag": {},
+      "boot_info": null,
+      "logs_excerpt": "",
+      "errors": [],
+      "started_at": "2026-06-18T16:03:55.379675+00:00",
+      "ended_at": "2026-06-18T16:03:55.379677+00:00",
+      "duration_s": 0.0
+    },
+    {
+      "name": "ota4",
+      "passed": true,
+      "expected_partition": "ota_0",
+      "observed_partition": "ota_0",
+      "version": null,
+      "ota_diag": {},
+      "boot_info": null,
+      "logs_excerpt": "",
+      "errors": [],
+      "started_at": "2026-06-18T16:03:55.379691+00:00",
+      "ended_at": "2026-06-18T16:03:55.379693+00:00",
+      "duration_s": 0.0
+    },
+    {
+      "name": "factory_reset",
+      "passed": true,
+      "expected_partition": "factory",
+      "observed_partition": "factory",
+      "version": null,
+      "ota_diag": {},
+      "boot_info": null,
+      "logs_excerpt": "",
+      "errors": [],
+      "started_at": "2026-06-18T16:03:55.379709+00:00",
+      "ended_at": "2026-06-18T16:03:55.379712+00:00",
+      "duration_s": 0.0
+    },
+    {
+      "name": "ota5",
+      "passed": true,
+      "expected_partition": "ota_0",
+      "observed_partition": "ota_0",
+      "version": null,
+      "ota_diag": {},
+      "boot_info": null,
+      "logs_excerpt": "",
+      "errors": [],
+      "started_at": "2026-06-18T16:03:55.379724+00:00",
+      "ended_at": "2026-06-18T16:03:55.379727+00:00",
+      "duration_s": 0.0
+    }
+  ],
+  "failures": [],
+  "metadata": {
+    "preflight": {
+      "factory": {
+        "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\toilet_kat_change.ino.bin",
+        "size": 914624,
+        "md5": "77285c7d6cb52a4eb308dcc0d2ba4cc8",
+        "sha256": "5ba4908ef3458f9efba563b403943c3f9619dee59df1eeef30624db04aa029f2"
+      },
+      "ota": [
+        {
+          "label": "ota1",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\toilet_kat_change.ino.bin",
+          "size": 914624,
+          "md5": "77285c7d6cb52a4eb308dcc0d2ba4cc8",
+          "sha256": "5ba4908ef3458f9efba563b403943c3f9619dee59df1eeef30624db04aa029f2",
+          "expected_sw": "4.0.17.1",
+          "expected_build": "2026-06-18"
+        },
+        {
+          "label": "ota2",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\toilet_kat_change.ino.bin",
+          "size": 914624,
+          "md5": "77285c7d6cb52a4eb308dcc0d2ba4cc8",
+          "sha256": "5ba4908ef3458f9efba563b403943c3f9619dee59df1eeef30624db04aa029f2",
+          "expected_sw": "4.0.17.1",
+          "expected_build": "2026-06-18"
+        },
+        {
+          "label": "ota3",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\toilet_kat_change.ino.bin",
+          "size": 914624,
+          "md5": "77285c7d6cb52a4eb308dcc0d2ba4cc8",
+          "sha256": "5ba4908ef3458f9efba563b403943c3f9619dee59df1eeef30624db04aa029f2",
+          "expected_sw": "4.0.17.1",
+          "expected_build": "2026-06-18"
+        },
+        {
+          "label": "ota4",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\toilet_kat_change.ino.bin",
+          "size": 914624,
+          "md5": "77285c7d6cb52a4eb308dcc0d2ba4cc8",
+          "sha256": "5ba4908ef3458f9efba563b403943c3f9619dee59df1eeef30624db04aa029f2",
+          "expected_sw": "4.0.17.1",
+          "expected_build": "2026-06-18"
+        },
+        {
+          "label": "ota5",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\toilet_kat_change.ino.bin",
+          "size": 914624,
+          "md5": "77285c7d6cb52a4eb308dcc0d2ba4cc8",
+          "sha256": "5ba4908ef3458f9efba563b403943c3f9619dee59df1eeef30624db04aa029f2",
+          "expected_sw": "4.0.17.1",
+          "expected_build": "2026-06-18"
+        }
+      ]
+    }
+  }
+}

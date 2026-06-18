@@ -1,0 +1,34 @@
+{
+  "factory": {
+    "path": "toilet_kat_change/build/esp32.esp32.esp32s3/toilet_kat_change.ino.bin",
+    "expected_sw": "4.0.17.1",
+    "expected_build": "2026-06-18"
+  },
+  "ota": [
+    {
+      "path": "toilet_kat_change/build/esp32.esp32.esp32s3/toilet_kat_change.ino.bin",
+      "expected_sw": "4.0.17.1",
+      "expected_build": "2026-06-18"
+    },
+    {
+      "path": "toilet_kat_change/build/esp32.esp32.esp32s3/toilet_kat_change.ino.bin",
+      "expected_sw": "4.0.17.1",
+      "expected_build": "2026-06-18"
+    },
+    {
+      "path": "toilet_kat_change/build/esp32.esp32.esp32s3/toilet_kat_change.ino.bin",
+      "expected_sw": "4.0.17.1",
+      "expected_build": "2026-06-18"
+    },
+    {
+      "path": "toilet_kat_change/build/esp32.esp32.esp32s3/toilet_kat_change.ino.bin",
+      "expected_sw": "4.0.17.1",
+      "expected_build": "2026-06-18"
+    },
+    {
+      "path": "toilet_kat_change/build/esp32.esp32.esp32s3/toilet_kat_change.ino.bin",
+      "expected_sw": "4.0.17.1",
+      "expected_build": "2026-06-18"
+    }
+  ]
+}

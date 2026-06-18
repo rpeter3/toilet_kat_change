@@ -1,0 +1,43 @@
+OTA Partition Regression Report
+Run ID: 20260618T160355Z
+Started: 2026-06-18T16:03:55.368713+00:00
+Ended: 2026-06-18T16:03:55.379733+00:00
+Result: PASS
+Dry run: True
+Port: COM6
+BLE address: None
+
+Partition sequence: factory -> ota_0 -> ota_1 -> ota_0 -> ota_1 -> ota_0 -> factory -> ota_0
+Expected sequence: factory -> ota_0 -> ota_1 -> ota_0 -> ota_1 -> ota_0 -> factory -> ota_0
+
+[PASS] flash_factory (0.0s)
+  expected partition: factory
+  observed partition: factory
+
+[PASS] ota1 (0.0s)
+  expected partition: ota_0
+  observed partition: ota_0
+
+[PASS] ota2 (0.0s)
+  expected partition: ota_1
+  observed partition: ota_1
+
+[PASS] rollback_previous (0.0s)
+  expected partition: ota_0
+  observed partition: ota_0
+
+[PASS] ota3 (0.0s)
+  expected partition: ota_1
+  observed partition: ota_1
+
+[PASS] ota4 (0.0s)
+  expected partition: ota_0
+  observed partition: ota_0
+
+[PASS] factory_reset (0.0s)
+  expected partition: factory
+  observed partition: factory
+
+[PASS] ota5 (0.0s)
+  expected partition: ota_0
+  observed partition: ota_0
