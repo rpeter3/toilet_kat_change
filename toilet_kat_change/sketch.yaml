@@ -1,0 +1,6 @@
+profiles:
+  esp32s3:
+    notes: Production ESP32-S3 build (core 3.3.3, USB CDC on boot for startup Serial logs)
+    fqbn: esp32:esp32:esp32s3:CDCOnBoot=cdc,FlashSize=16M
+    platforms:
+      - platform: esp32:esp32 (3.3.3)

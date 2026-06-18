@@ -1,0 +1,408 @@
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x8 (TG1WDT_SYS_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x420089cb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+SPIKE_PIO: setup done
+[wdt] esp_task_wdt_deinit err=0
+
+=== SPIKE_PIO: ROM bootloader overwrite ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[info] embedded good BL len=19984 expected_md5=e536c176c97b5905286ed980da47abe8
+[erase] sector 1/8 begin
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x8 (TG1WDT_SYS_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x420089cb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+SPIKE_PIO: setup done
+[wdt] esp_task_wdt_deinit err=0
+
+=== SPIKE_PIO: ROM bootloader overwrite ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[info] embedded good BL len=19984 expected_md5=e536c176c97b5905286ed980da47abe8
+[erase] sector 1/8 begin
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x8 (TG1WDT_SYS_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x420089cb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+SPIKE_PIO: setup done
+[wdt] esp_task_wdt_deinit err=0
+
+=== SPIKE_PIO: ROM bootloader overwrite ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[info] embedded good BL len=19984 expected_md5=e536c176c97b5905286ed980da47abe8
+[erase] sector 1/8 begin
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x8 (TG1WDT_SYS_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x420089cb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+SPIKE_PIO: setup done
+[wdt] esp_task_wdt_deinit err=0
+
+=== SPIKE_PIO: ROM bootloader overwrite ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[info] embedded good BL len=19984 expected_md5=e536c176c97b5905286ed980da47abe8
+[erase] sector 1/8 begin
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x8 (TG1WDT_SYS_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x420089cb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+SPIKE_PIO: setup done
+[wdt] esp_task_wdt_deinit err=0
+
+=== SPIKE_PIO: ROM bootloader overwrite ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[info] embedded good BL len=19984 expected_md5=e536c176c97b5905286ed980da47abe8
+[erase] sector 1/8 begin
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x8 (TG1WDT_SYS_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x420089cb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+SPIKE_PIO: setup done
+[wdt] esp_task_wdt_deinit err=0
+
+=== SPIKE_PIO: ROM bootloader overwrite ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[info] embedded good BL len=19984 expected_md5=e536c176c97b5905286ed980da47abe8
+[erase] sector 1/8 begin
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x8 (TG1WDT_SYS_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x420089cb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+SPIKE_PIO: setup done
+[wdt] esp_task_wdt_deinit err=0
+
+=== SPIKE_PIO: ROM bootloader overwrite ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[info] embedded good BL len=19984 expected_md5=e536c176c97b5905286ed980da47abe8
+[erase] sector 1/8 begin
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x8 (TG1WDT_SYS_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x420089cb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+SPIKE_PIO: setup done
+[wdt] esp_task_wdt_deinit err=0
+
+=== SPIKE_PIO: ROM bootloader overwrite ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[info] embedded good BL len=19984 expected_md5=e536c176c97b5905286ed980da47abe8
+[erase] sector 1/8 begin
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x8 (TG1WDT_SYS_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x420089cb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+SPIKE_PIO: setup done
+[wdt] esp_task_wdt_deinit err=0
+
+=== SPIKE_PIO: ROM bootloader overwrite ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[info] embedded good BL len=19984 expected_md5=e536c176c97b5905286ed980da47abe8
+[erase] sector 1/8 begin
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x8 (TG1WDT_SYS_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x420089cb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+SPIKE_PIO: setup done
+[wdt] esp_task_wdt_deinit err=0
+
+=== SPIKE_PIO: ROM bootloader overwrite ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[info] embedded good BL len=19984 expected_md5=e536c176c97b5905286ed980da47abe8
+[erase] sector 1/8 begin
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x8 (TG1WDT_SYS_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x420089cb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+SPIKE_PIO: setup done
+[wdt] esp_task_wdt_deinit err=0
+
+=== SPIKE_PIO: ROM bootloader overwrite ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[info] embedded good BL len=19984 expected_md5=e536c176c97b5905286ed980da47abe8
+[erase] sector 1/8 begin
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x8 (TG1WDT_SYS_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x420089cb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+SPIKE_PIO: setup done
+[wdt] esp_task_wdt_deinit err=0
+
+=== SPIKE_PIO: ROM bootloader overwrite ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[info] embedded good BL len=19984 expected_md5=e536c176c97b5905286ed980da47abe8
+[erase] sector 1/8 begin
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x8 (TG1WDT_SYS_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x420089cb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+SPIKE_PIO: setup done
+[wdt] esp_task_wdt_deinit err=0
+
+=== SPIKE_PIO: ROM bootloader overwrite ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[info] embedded good BL len=19984 expected_md5=e536c176c97b5905286ed980da47abe8
+[erase] sector 1/8 begin
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x8 (TG1WDT_SYS_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x420089cb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+SPIKE_PIO: setup done
+[wdt] esp_task_wdt_deinit err=0
+
+=== SPIKE_PIO: ROM bootloader overwrite ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[info] embedded good BL len=19984 expected_md5=e536c176c97b5905286ed980da47abe8
+[erase] sector 1/8 begin
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x8 (TG1WDT_SYS_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x420089cb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+SPIKE_PIO: setup done
+[wdt] esp_task_wdt_deinit err=0
+
+=== SPIKE_PIO: ROM bootloader overwrite ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[info] embedded good BL len=19984 expected_md5=e536c176c97b5905286ed980da47abe8
+[erase] sector 1/8 begin
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x8 (TG1WDT_SYS_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x420089cb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+SPIKE_PIO: setup done
+[wdt] esp_task_wdt_deinit err=0
+
+=== SPIKE_PIO: ROM bootloader overwrite ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[info] embedded good BL len=19984 expected_md5=e536c176c97b5905286ed980da47abe8
+[erase] sector 1/8 begin
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x8 (TG1WDT_SYS_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x420089cb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+SPIKE_PIO: setup done
+[wdt] esp_task_wdt_deinit err=0
+
+=== SPIKE_PIO: ROM bootloader overwrite ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[info] embedded good BL len=19984 expected_md5=e536c176c97b5905286ed980da47abe8
+[erase] sector 1/8 begin
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x8 (TG1WDT_SYS_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x420089cb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+SPIKE_PIO: setup done
+[wdt] esp_task_wdt_deinit err=0
+
+=== SPIKE_PIO: ROM bootloader overwrite ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[info] embedded good BL len=19984 expected_md5=e536c176c97b5905286ed980da47abe8
+[erase] sector 1/8 begin
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x8 (TG1WDT_SYS_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x420089cb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+SPIKE_PIO: setup done
+[wdt] esp_task_wdt_deinit err=0
+
+=== SPIKE_PIO: ROM bootloader overwrite ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[info] embedded good BL len=19984 expected_md5=e536c176c97b5905286ed980da47abe8
+[erase] sector 1/8 begin
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x8 (TG1WDT_SYS_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x420089cb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+SPIKE_PIO: setup done
+[wdt] esp_task_wdt_deinit err=0
+
+=== SPIKE_PIO: ROM bootloader overwrite ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[info] embedded good BL len=19984 expected_md5=e536c176c97b5905286ed980da47abe8
+[erase] sector 1/8 begin
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x8 (TG1WDT_SYS_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x420089cb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+SPIKE_PIO: setup done
+[wdt] esp_task_wdt_deinit err=0
+
+=== SPIKE_PIO: ROM bootloader overwrite ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[info] embedded good BL len=19984 expected_md5=e536c176c97b5905286ed980da47abe8
+[erase] sector 1/8 begin
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x8 (TG1WDT_SYS_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x420089cb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+SPIKE_PIO: setup done
+[wdt] esp_task_wdt_deinit err=0
+
+=== SPIKE_PIO: ROM bootloader overwrite ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[info] embedded good BL len=19984 expected_md5=e536c176c97b5905286ed980da47abe8
+[erase] sector 1/8 begin
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x8 (TG1WDT_SYS_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x420089cb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+SPIKE_PIO: setup done
+[wdt] esp_task_wdt_deinit err=0
+
+=== SPIKE_PIO: ROM bootloader overwrite ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[info] embedded good BL len=19984 expected_md5=e536c176c97b5905286ed980da47abe8
+[erase] sector 1/8 begin
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x8 (TG1WDT_SYS_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+Saved PC:0x420089cb
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1050
+load:0x403c8700,len:0xaf4
+load:0x403cb700,len:0x2e7c
+entry 0x403c8898
+SPIKE_PIO: setup done
+[wdt] esp_task_wdt_deinit err=0
+
+=== SPIKE_PIO: ROM bootloader overwrite ===
+[info] running partition: label=factory offset=0x010000 subtype=0x00
+[info] embedded good BL len=19984 expected_md5=e536c176c97b5905286ed980da47abe8
+[erase] sector 1/8 begin
