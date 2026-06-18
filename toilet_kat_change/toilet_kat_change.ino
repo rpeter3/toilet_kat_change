@@ -660,6 +660,8 @@ inline bool otaTransferInProgress() {
 void publishOTAStatus(const String& status, bool notify = true);
 void publishOTAErrorStatus(const char* reasonCode, const char* detail = NULL);
 bool setOTAState(OTAState nextState, const char* reason);
+const char* formatOtaFsmState(OTAState state);
+bool isValidOtaFsmTransition(OTAState from, OTAState to);
 bool isKnownOTACommand(const String& command);
 void handleOTACommand(const String& command);
 void checkOTATimeouts();
@@ -4203,10 +4205,35 @@ void confirmOtaBootOk() {
   if (!diag.pending_verify || diag.good_boot_streak < OTA_GOOD_BOOT_STREAK_REQUIRED) {
     return;
   }
+
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  if (running == NULL ||
+      (running->subtype != ESP_PARTITION_SUBTYPE_APP_OTA_0 &&
+       running->subtype != ESP_PARTITION_SUBTYPE_APP_OTA_1)) {
+    return;
+  }
+  if (!isOnOtaTargetPartition()) {
+    return;
+  }
+
+  esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+  if (err != ESP_OK) {
+    Serial.printf("ERROR: esp_ota_mark_app_valid_cancel_rollback: %s\n", esp_err_to_name(err));
+    logError("ota_boot_ok", (int)err, "mark_app_valid_failed", false);
+    return;
+  }
+
+  char partLabel[8] = "?";
+  copyPartitionLabel(running, partLabel, sizeof(partLabel));
+  Serial.printf("OTA app marked valid on partition %s\n", partLabel);
+
   diag.pending_verify = 0;
   diag.boot_attempts = 0;
   saveOtaDiag(diag);
-  logError("ota_boot_ok", 0, "pending_cleared", false);
+
+  char okMsg[48];
+  snprintf(okMsg, sizeof(okMsg), "pending_cleared,part=%s", partLabel);
+  logError("ota_boot_ok", 0, okMsg, false);
 }
 
 void markOtaPendingVerify() {
@@ -7003,7 +7030,7 @@ void abortOtaSessionAndDisconnect(const char* reasonCode) {
   Serial.println("OTA aborted — BLE advertising restarted for normal connection");
 }
 
-const char* otaStateToString(OTAState state) {
+const char* formatOtaFsmState(OTAState state) {
   switch (state) {
     case OTA_IDLE: return "OTA_IDLE";
     case OTA_PREPARING: return "OTA_PREPARING";
@@ -7016,7 +7043,7 @@ const char* otaStateToString(OTAState state) {
   }
 }
 
-bool isValidOTATransition(OTAState from, OTAState to) {
+bool isValidOtaFsmTransition(OTAState from, OTAState to) {
   if (from == to) {
     return true;
   }
@@ -7040,14 +7067,14 @@ bool isValidOTATransition(OTAState from, OTAState to) {
 }
 
 bool setOTAState(OTAState nextState, const char* reason) {
-  if (!isValidOTATransition(otaState, nextState)) {
+  if (!isValidOtaFsmTransition(otaState, nextState)) {
     Serial.printf("WARN: Illegal OTA transition %s -> %s (%s)\n",
-                  otaStateToString(otaState), otaStateToString(nextState), reason);
+                  formatOtaFsmState(otaState), formatOtaFsmState(nextState), reason);
     return false;
   }
   otaState = nextState;
   otaStateEnteredAt = millis();
-  Serial.printf("OTA state: %s (%s)\n", otaStateToString(otaState), reason);
+  Serial.printf("OTA state: %s (%s)\n", formatOtaFsmState(otaState), reason);
   if (nextState == OTA_ERROR) {
     logError("ota", 0, reason, false);
   }

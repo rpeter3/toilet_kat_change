@@ -155,6 +155,14 @@ Command `GET_OTA_DIAG` returns a compact NVS snapshot of the last OTA boot/rollb
 
 Prepend `GET_OTA_DIAG` output to support log exports alongside chunked `GET_LOGS` data.
 
+### Otadata confirmation (flash)
+
+After OTA finalize, ESP-IDF sets flash `otadata` to `ota_state=NEW` (0) with an incremented `ota_seq` (e.g. `seq=1` for the first boot to `ota_0`). The `seq_label` field is often unspecified; that is normal — the bootloader uses `ota_seq`, not the label string.
+
+When `pending_verify=1` in NVS, firmware increments `good_boot_streak` on each normal boot. After `OTA_GOOD_BOOT_STREAK_REQUIRED` (2) successful boots, `confirmOtaBootOk()` calls `esp_ota_mark_app_valid_cancel_rollback()`, which sets flash `ota_state` to `ESP_OTA_IMG_VALID` (2) on the active otadata sector.
+
+`GET_OTA_DIAG` `pending=0` is set only after mark-valid succeeds and NVS pending verification is cleared. If mark-valid fails, `pending` stays set so auto-rollback remains armed.
+
 ---
 
 ## Battery Level (GET_BATTERY)
