@@ -48,11 +48,11 @@ Client implementations may use payload chunking to respect BLE MTU limits when w
 
 1. **Command channel (`...fea0`)**
    - Client writes command strings only.
-   - Examples: `TRUST_START`, `TRUST_STATUS`, `TRUST_CANCEL`, `GET_DEV_MODE`, `GET_FLUSH_COUNT`, `GET_BATTERY`, `SET_DEV_MODE:<0|1>`, `ENABLE_OTA`, `OTA_ROLLBACK_PREVIOUS`, `OTA_ROLLBACK_FACTORY`, `GET_LOGS`, `GET_LOGS:<offset>`, `GET_OTA_DIAG`
+   - Examples: `TRUST_START`, `TRUST_STATUS`, `TRUST_CANCEL`, `GET_DEV_MODE`, `GET_FLUSH_COUNT`, `GET_BATTERY`, `SET_DEV_MODE:<0|1>`, `ENABLE_OTA`, `OTA_ROLLBACK_PREVIOUS`, `OTA_ROLLBACK_FACTORY`, `GET_LOGS`, `GET_LOGS:<offset>`, `GET_OTA_DIAG`, `GET_TASK_WDT`, `DISABLE_TASK_WDT`, `ENABLE_TASK_WDT`
 
 2. **Response channel (`...fea4`)**
    - Client reads command responses only.
-   - Examples: `TRUST_WAITING`, `TRUST_CONFIRMED`, `TRUST_TIMEOUT`, `TRUST_CANCEL_ACK`, `AUTH_REQUIRED`, `DEV_MODE:0`, `FLUSH_COUNT:<n>`, `BATTERY:<n>`, `SET_DEV_MODE_ACK:1`, `OTA_ROLLBACK_ACK:REBOOTING`, `OTA_ROLLBACK_FACTORY_ACK:REBOOTING`, `LOGS:<offset>:<length>:<data>`, `LOGS_END`, etc.
+   - Examples: `TRUST_WAITING`, `TRUST_CONFIRMED`, `TRUST_TIMEOUT`, `TRUST_CANCEL_ACK`, `AUTH_REQUIRED`, `DEV_MODE:0`, `FLUSH_COUNT:<n>`, `BATTERY:<n>`, `SET_DEV_MODE_ACK:1`, `OTA_ROLLBACK_ACK:REBOOTING`, `OTA_ROLLBACK_FACTORY_ACK:REBOOTING`, `LOGS:<offset>:<length>:<data>`, `LOGS_END`, `TASK_WDT:<enabled|disabled|pending_flush>`, `DISABLE_TASK_WDT_ACK`, `DISABLE_TASK_WDT_ERR:FLUSH_ACTIVE`, `ENABLE_TASK_WDT_ACK:PENDING_FLUSH`, etc.
 
 3. **Parameter read channel (`...fea5`)**
    - Client reads current parameter snapshot only.

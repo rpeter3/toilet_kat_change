@@ -1,0 +1,359 @@
+{
+  "run_id": "20260619T133131Z",
+  "started_at": "2026-06-19T13:31:31.603857+00:00",
+  "ended_at": "2026-06-19T13:31:31.611995+00:00",
+  "passed": true,
+  "dry_run": true,
+  "fast_mode": false,
+  "auto_build": true,
+  "port": "COM6",
+  "address": null,
+  "partition_sequence": [
+    "factory",
+    "ota_0",
+    "ota_1",
+    "ota_0",
+    "ota_1",
+    "ota_0",
+    "factory",
+    "ota_0"
+  ],
+  "steps": [
+    {
+      "name": "flash_factory",
+      "passed": true,
+      "expected_partition": "factory",
+      "transport": "serial",
+      "pending_clear_required": false,
+      "expected_sw": "unknown",
+      "observed_sw": "unknown",
+      "observed_partition": "factory",
+      "version": null,
+      "ota_diag": {},
+      "boot_info": null,
+      "logs_excerpt": "",
+      "errors": [],
+      "started_at": "2026-06-19T13:31:31.611431+00:00",
+      "ended_at": "2026-06-19T13:31:31.611457+00:00",
+      "duration_s": 0.0
+    },
+    {
+      "name": "ota1",
+      "passed": true,
+      "expected_partition": "ota_0",
+      "transport": "ble",
+      "pending_clear_required": true,
+      "expected_sw": "4.0.17.1-regA",
+      "observed_sw": "4.0.17.1-regA",
+      "observed_partition": "ota_0",
+      "version": null,
+      "ota_diag": {},
+      "boot_info": null,
+      "logs_excerpt": "",
+      "errors": [],
+      "started_at": "2026-06-19T13:31:31.611505+00:00",
+      "ended_at": "2026-06-19T13:31:31.611509+00:00",
+      "duration_s": 0.0
+    },
+    {
+      "name": "ota2",
+      "passed": true,
+      "expected_partition": "ota_1",
+      "transport": "ble",
+      "pending_clear_required": true,
+      "expected_sw": "4.0.17.1-regB",
+      "observed_sw": "4.0.17.1-regB",
+      "observed_partition": "ota_1",
+      "version": null,
+      "ota_diag": {},
+      "boot_info": null,
+      "logs_excerpt": "",
+      "errors": [],
+      "started_at": "2026-06-19T13:31:31.611524+00:00",
+      "ended_at": "2026-06-19T13:31:31.611527+00:00",
+      "duration_s": 0.0
+    },
+    {
+      "name": "rollback_previous",
+      "passed": true,
+      "expected_partition": "ota_0",
+      "transport": "ble",
+      "pending_clear_required": false,
+      "expected_sw": "4.0.17.1-regA",
+      "observed_sw": "4.0.17.1-regA",
+      "observed_partition": "ota_0",
+      "version": null,
+      "ota_diag": {},
+      "boot_info": null,
+      "logs_excerpt": "",
+      "errors": [],
+      "started_at": "2026-06-19T13:31:31.611596+00:00",
+      "ended_at": "2026-06-19T13:31:31.611605+00:00",
+      "duration_s": 0.0
+    },
+    {
+      "name": "ota3",
+      "passed": true,
+      "expected_partition": "ota_1",
+      "transport": "ble",
+      "pending_clear_required": true,
+      "expected_sw": "4.0.17.1-regB",
+      "observed_sw": "4.0.17.1-regB",
+      "observed_partition": "ota_1",
+      "version": null,
+      "ota_diag": {},
+      "boot_info": null,
+      "logs_excerpt": "",
+      "errors": [],
+      "started_at": "2026-06-19T13:31:31.611703+00:00",
+      "ended_at": "2026-06-19T13:31:31.611709+00:00",
+      "duration_s": 0.0
+    },
+    {
+      "name": "ota4",
+      "passed": true,
+      "expected_partition": "ota_0",
+      "transport": "ble",
+      "pending_clear_required": true,
+      "expected_sw": "4.0.17.1-regA",
+      "observed_sw": "4.0.17.1-regA",
+      "observed_partition": "ota_0",
+      "version": null,
+      "ota_diag": {},
+      "boot_info": null,
+      "logs_excerpt": "",
+      "errors": [],
+      "started_at": "2026-06-19T13:31:31.611723+00:00",
+      "ended_at": "2026-06-19T13:31:31.611725+00:00",
+      "duration_s": 0.0
+    },
+    {
+      "name": "factory_reset",
+      "passed": true,
+      "expected_partition": "factory",
+      "transport": "ble",
+      "pending_clear_required": false,
+      "expected_sw": "unknown",
+      "observed_sw": "unknown",
+      "observed_partition": "factory",
+      "version": null,
+      "ota_diag": {},
+      "boot_info": null,
+      "logs_excerpt": "",
+      "errors": [],
+      "started_at": "2026-06-19T13:31:31.611801+00:00",
+      "ended_at": "2026-06-19T13:31:31.611806+00:00",
+      "duration_s": 0.0
+    },
+    {
+      "name": "ota5",
+      "passed": true,
+      "expected_partition": "ota_0",
+      "transport": "ble",
+      "pending_clear_required": true,
+      "expected_sw": "4.0.17.1-regB",
+      "observed_sw": "4.0.17.1-regB",
+      "observed_partition": "ota_0",
+      "version": null,
+      "ota_diag": {},
+      "boot_info": null,
+      "logs_excerpt": "",
+      "errors": [],
+      "started_at": "2026-06-19T13:31:31.611965+00:00",
+      "ended_at": "2026-06-19T13:31:31.611984+00:00",
+      "duration_s": 0.0
+    }
+  ],
+  "failures": [],
+  "metadata": {
+    "preflight": {
+      "fast_mode": false,
+      "auto_build": true,
+      "factory": {
+        "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\factory_sarah.bin",
+        "size": 4718592,
+        "md5": "ecb6d40150f0e21788ba7e25b5c8cca0",
+        "sha256": "697c3371dbb0e09183a046a28197f8debe0f0047ba60d861328d322772474bab"
+      },
+      "ota": [
+        {
+          "label": "ota1",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regA.bin",
+          "size": 914368,
+          "md5": "cdb137c8b463e9e6d54fdf5df55b9b02",
+          "sha256": "5d8d26a22291cc83b08eaad6d6c5967bd4987830ed259e1326a8a76fb28c2858",
+          "expected_sw": "4.0.17.1-regA",
+          "expected_build": "2026-06-18"
+        },
+        {
+          "label": "ota2",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regB.bin",
+          "size": 914368,
+          "md5": "f1f20ab3fdc8332d406418ceb82019fe",
+          "sha256": "c4bca98e6c723518d8b1cb3d23bf1424e3368be40e9f61931d814cd18c4243aa",
+          "expected_sw": "4.0.17.1-regB",
+          "expected_build": "2026-06-18"
+        },
+        {
+          "label": "ota3",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regB.bin",
+          "size": 914368,
+          "md5": "f1f20ab3fdc8332d406418ceb82019fe",
+          "sha256": "c4bca98e6c723518d8b1cb3d23bf1424e3368be40e9f61931d814cd18c4243aa",
+          "expected_sw": "4.0.17.1-regB",
+          "expected_build": "2026-06-18"
+        },
+        {
+          "label": "ota4",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regA.bin",
+          "size": 914368,
+          "md5": "cdb137c8b463e9e6d54fdf5df55b9b02",
+          "sha256": "5d8d26a22291cc83b08eaad6d6c5967bd4987830ed259e1326a8a76fb28c2858",
+          "expected_sw": "4.0.17.1-regA",
+          "expected_build": "2026-06-18"
+        },
+        {
+          "label": "ota5",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regB.bin",
+          "size": 914368,
+          "md5": "f1f20ab3fdc8332d406418ceb82019fe",
+          "sha256": "c4bca98e6c723518d8b1cb3d23bf1424e3368be40e9f61931d814cd18c4243aa",
+          "expected_sw": "4.0.17.1-regB",
+          "expected_build": "2026-06-18"
+        }
+      ],
+      "manifest": {
+        "auto_build": true,
+        "base_version": "4.0.17.1",
+        "build_date": "2026-06-18",
+        "sarah_merged": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\FACTORY_BINARIES\\SARAH_toilet_kat_change.ino.merged.bin",
+        "factory": {
+          "path": "test-builds/ota-regression/factory_sarah.bin",
+          "expected_sw": "unknown",
+          "expected_build": "2026-06-18",
+          "md5": "ecb6d40150f0e21788ba7e25b5c8cca0",
+          "size": 4718592
+        },
+        "variants": {
+          "regA": {
+            "path": "test-builds/ota-regression/ota_regA.bin",
+            "expected_sw": "4.0.17.1-regA",
+            "expected_build": "2026-06-18",
+            "md5": "cdb137c8b463e9e6d54fdf5df55b9b02",
+            "size": "914368"
+          },
+          "regB": {
+            "path": "test-builds/ota-regression/ota_regB.bin",
+            "expected_sw": "4.0.17.1-regB",
+            "expected_build": "2026-06-18",
+            "md5": "f1f20ab3fdc8332d406418ceb82019fe",
+            "size": "914368"
+          }
+        },
+        "ota": [
+          {
+            "label": "ota1",
+            "variant": "regA",
+            "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regA.bin",
+            "expected_sw": "4.0.17.1-regA",
+            "expected_build": "2026-06-18"
+          },
+          {
+            "label": "ota2",
+            "variant": "regB",
+            "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regB.bin",
+            "expected_sw": "4.0.17.1-regB",
+            "expected_build": "2026-06-18"
+          },
+          {
+            "label": "ota3",
+            "variant": "regB",
+            "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regB.bin",
+            "expected_sw": "4.0.17.1-regB",
+            "expected_build": "2026-06-18"
+          },
+          {
+            "label": "ota4",
+            "variant": "regA",
+            "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regA.bin",
+            "expected_sw": "4.0.17.1-regA",
+            "expected_build": "2026-06-18"
+          },
+          {
+            "label": "ota5",
+            "variant": "regB",
+            "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regB.bin",
+            "expected_sw": "4.0.17.1-regB",
+            "expected_build": "2026-06-18"
+          }
+        ]
+      }
+    },
+    "manifest": {
+      "auto_build": true,
+      "base_version": "4.0.17.1",
+      "build_date": "2026-06-18",
+      "sarah_merged": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\FACTORY_BINARIES\\SARAH_toilet_kat_change.ino.merged.bin",
+      "factory": {
+        "path": "test-builds/ota-regression/factory_sarah.bin",
+        "expected_sw": "unknown",
+        "expected_build": "2026-06-18",
+        "md5": "ecb6d40150f0e21788ba7e25b5c8cca0",
+        "size": 4718592
+      },
+      "variants": {
+        "regA": {
+          "path": "test-builds/ota-regression/ota_regA.bin",
+          "expected_sw": "4.0.17.1-regA",
+          "expected_build": "2026-06-18",
+          "md5": "cdb137c8b463e9e6d54fdf5df55b9b02",
+          "size": "914368"
+        },
+        "regB": {
+          "path": "test-builds/ota-regression/ota_regB.bin",
+          "expected_sw": "4.0.17.1-regB",
+          "expected_build": "2026-06-18",
+          "md5": "f1f20ab3fdc8332d406418ceb82019fe",
+          "size": "914368"
+        }
+      },
+      "ota": [
+        {
+          "label": "ota1",
+          "variant": "regA",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regA.bin",
+          "expected_sw": "4.0.17.1-regA",
+          "expected_build": "2026-06-18"
+        },
+        {
+          "label": "ota2",
+          "variant": "regB",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regB.bin",
+          "expected_sw": "4.0.17.1-regB",
+          "expected_build": "2026-06-18"
+        },
+        {
+          "label": "ota3",
+          "variant": "regB",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regB.bin",
+          "expected_sw": "4.0.17.1-regB",
+          "expected_build": "2026-06-18"
+        },
+        {
+          "label": "ota4",
+          "variant": "regA",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regA.bin",
+          "expected_sw": "4.0.17.1-regA",
+          "expected_build": "2026-06-18"
+        },
+        {
+          "label": "ota5",
+          "variant": "regB",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regB.bin",
+          "expected_sw": "4.0.17.1-regB",
+          "expected_build": "2026-06-18"
+        }
+      ]
+    }
+  }
+}

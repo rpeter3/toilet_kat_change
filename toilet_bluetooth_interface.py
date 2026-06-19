@@ -39,7 +39,7 @@ FRAME_HEADER_SIZE = 3
 MAX_FRAME_PAYLOAD = 0xFFFF
 # Stale fea4 payloads left by prior command-channel traffic (e.g. TRUST_STATUS after handshake).
 _STALE_PARAM_WRITE_RESPONSE_RE = re.compile(
-    r"^(FLUSH_COUNT|BATTERY|TRUST_|DEV_MODE|LOGS:|HW_|HWCFG_|SET_DEV_MODE_|UNKNOWN_COMMAND:|READY)"
+    r"^(FLUSH_COUNT|BATTERY|TRUST_|DEV_MODE|LOGS:|HW_|HWCFG_|SET_DEV_MODE_|TASK_WDT:|DISABLE_TASK_WDT|ENABLE_TASK_WDT|UNKNOWN_COMMAND:|READY)"
 )
 
 
@@ -807,6 +807,61 @@ class ToiletSystemInterface:
         except Exception as e:
             print(f"Failed to read DEV mode status: {e}")
             return None
+
+    async def get_task_wdt_status(self) -> Optional[str]:
+        """Read task watchdog status (enabled, disabled, or pending_flush)."""
+        if not self.connected:
+            print("Not connected to device")
+            return None
+        try:
+            response = await self._send_command_and_read_response("GET_TASK_WDT")
+            if response and response.startswith("TASK_WDT:"):
+                status = response.split(":", 1)[1].strip()
+                if status in ("enabled", "disabled", "pending_flush"):
+                    return status
+            print(f"Failed to read task watchdog status: {response or '(empty)'}")
+            return None
+        except Exception as e:
+            print(f"Failed to read task watchdog status: {e}")
+            return None
+
+    async def disable_task_wdt(self) -> bool:
+        """Disable the task watchdog (requires trusted connection)."""
+        if not self.connected:
+            print("Not connected to device")
+            return False
+        try:
+            response = await self._send_command_and_read_response("DISABLE_TASK_WDT")
+            if response == "DISABLE_TASK_WDT_ACK":
+                return True
+            if response == "AUTH_REQUIRED":
+                print("DISABLE_TASK_WDT requires trust handshake")
+            elif response == "DISABLE_TASK_WDT_ERR:FLUSH_ACTIVE":
+                print("DISABLE_TASK_WDT rejected: flush active")
+            else:
+                print(f"DISABLE_TASK_WDT failed: {response or '(empty)'}")
+            return False
+        except Exception as e:
+            print(f"DISABLE_TASK_WDT failed: {e}")
+            return False
+
+    async def enable_task_wdt(self) -> bool:
+        """Arm task watchdog re-init at next flush case 0 (requires trusted connection)."""
+        if not self.connected:
+            print("Not connected to device")
+            return False
+        try:
+            response = await self._send_command_and_read_response("ENABLE_TASK_WDT")
+            if response == "ENABLE_TASK_WDT_ACK:PENDING_FLUSH":
+                return True
+            if response == "AUTH_REQUIRED":
+                print("ENABLE_TASK_WDT requires trust handshake")
+            else:
+                print(f"ENABLE_TASK_WDT failed: {response or '(empty)'}")
+            return False
+        except Exception as e:
+            print(f"ENABLE_TASK_WDT failed: {e}")
+            return False
 
     async def get_logs(self) -> Optional[str]:
         """Retrieve persistent error logs from firmware (GET_LOGS). Returns None on failure."""

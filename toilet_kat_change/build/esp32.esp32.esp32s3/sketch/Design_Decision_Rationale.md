@@ -280,7 +280,7 @@ The firmware persists error codes, crashes, brownouts, and runtime faults to a f
 
 **Context for runtime errors**: Each runtime error log includes flush/feed state (`step`, `cut`, `feed`), sensor values (`bat`, `temp`, `m1A`, `heaterA`), and fan status (`off`, `forward`, `reverse`) to aid diagnostics.
 
-**Storage**: SPIFFS file `/errors.txt`. Max 8 KB; when full, oldest entries are dropped. Line length capped at 200 chars.
+**Storage**: SPIFFS file `/errors.txt`. Max 200 KB; when full, oldest entries are dropped at line boundaries. Line length capped at 200 chars. Boot checkpoints log one SPIFFS line per phase (phase + timing); sub-phase `boot_timing` lines are DEV-mode only. Routine `boot_battery_check` PASS paths log start + done only; failures retain per-step detail.
 
 **Retrieval**: BLE command `GET_LOGS` or `GET_LOGS:<offset>`. Response `LOGS:<offset>:<length>:<data>` (chunked, ~450 bytes per chunk) or `LOGS_END`. Also `GET_OTA_DIAG` for NVS OTA rollback metadata. No trust handshake required so diagnostics work even when the user cannot complete trust (e.g. broken flush button).
 

@@ -1,0 +1,91 @@
+OTA Partition Regression Report
+Run ID: 20260619T153910Z
+Started: 2026-06-19T15:39:10.524843+00:00
+Ended: 2026-06-19T15:39:10.535069+00:00
+Result: PASS
+Dry run: True
+Fast mode: False
+Auto-build: True
+Port: COM6
+BLE address: None
+
+Partition sequence: factory -> ota_0 -> ota_1 -> ota_0 -> ota_1 -> ota_0 -> factory -> ota_0
+Expected sequence: factory -> ota_0 -> ota_1 -> ota_0 -> ota_1 -> ota_0 -> factory -> ota_0
+
+Version evolution:
+Step                 Partition  Expected SW              Observed SW              Pass
+------------------------------------------------------------------------------------------
+flash_factory        factory    unknown                  unknown                  PASS
+ota1                 ota_0      4.0.17.1-regA            4.0.17.1-regA            PASS
+ota2                 ota_1      4.0.17.1-regB            4.0.17.1-regB            PASS
+rollback_previous    ota_0      4.0.17.1-regA            4.0.17.1-regA            PASS
+ota3                 ota_1      4.0.17.1-regB            4.0.17.1-regB            PASS
+ota4                 ota_0      4.0.17.1-regA            4.0.17.1-regA            PASS
+factory_reset        factory    unknown                  unknown                  PASS
+ota5                 ota_0      4.0.17.1-regB            4.0.17.1-regB            PASS
+
+Auto-build manifest:
+  base_version: 4.0.17.1
+  build_date: 2026-06-18
+  factory SW: unknown
+
+[PASS] flash_factory (0.0s)
+  transport: serial
+  expected partition: factory
+  observed partition: factory
+  expected SW: unknown
+  observed SW: unknown
+
+[PASS] ota1 (0.0s)
+  transport: ble
+  pending_clear_required: yes
+  expected partition: ota_0
+  observed partition: ota_0
+  expected SW: 4.0.17.1-regA
+  observed SW: 4.0.17.1-regA
+
+[PASS] ota2 (0.0s)
+  transport: ble
+  pending_clear_required: yes
+  expected partition: ota_1
+  observed partition: ota_1
+  expected SW: 4.0.17.1-regB
+  observed SW: 4.0.17.1-regB
+
+[PASS] rollback_previous (0.0s)
+  transport: ble
+  expected partition: ota_0
+  observed partition: ota_0
+  expected SW: 4.0.17.1-regA
+  observed SW: 4.0.17.1-regA
+
+[PASS] ota3 (0.0s)
+  transport: ble
+  pending_clear_required: yes
+  expected partition: ota_1
+  observed partition: ota_1
+  expected SW: 4.0.17.1-regB
+  observed SW: 4.0.17.1-regB
+
+[PASS] ota4 (0.0s)
+  transport: ble
+  pending_clear_required: yes
+  expected partition: ota_0
+  observed partition: ota_0
+  expected SW: 4.0.17.1-regA
+  observed SW: 4.0.17.1-regA
+
+[PASS] factory_reset (0.0s)
+  transport: ble
+  expected partition: factory
+  observed partition: factory
+  expected SW: unknown
+  observed SW: unknown
+
+[PASS] ota5 (0.0s)
+  transport: ble
+  pending_clear_required: yes
+  expected partition: ota_0
+  observed partition: ota_0
+  expected SW: 4.0.17.1-regB
+  observed SW: 4.0.17.1-regB

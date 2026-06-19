@@ -230,12 +230,12 @@ struct HWCFGConfigStore {
 #  if __has_include("software_version_build.h")
 #    include "software_version_build.h"
 #  else
-const char* SOFTWARE_VERSION_NUMBER = "4.1.4";
+const char* SOFTWARE_VERSION_NUMBER = "4.1.6";
 const char* FACTORY_SOFTWARE_DATE = "2026-06-18";
 const char* SOFTWARE_BUILD_DATE = "2026-06-19";  // YYYY-MM-DD — update with each build
 #  endif
 #else
-const char* SOFTWARE_VERSION_NUMBER = "4.1.4";
+const char* SOFTWARE_VERSION_NUMBER = "4.1.6";
 const char* FACTORY_SOFTWARE_DATE = "2026-06-18";
 const char* SOFTWARE_BUILD_DATE = "2026-06-19";  // YYYY-MM-DD — update with each build
 #endif
@@ -405,6 +405,10 @@ void clearHeaterRtcOnFlag();
 void configureMotorAndSensorPins();
 void checkHeaterBootSafety();
 void initTaskWatchdog();
+void disableTaskWatchdog();
+void reinitTaskWatchdog();
+void ensureTaskWatchdogForFlush();
+const char* getTaskWatchdogStatusString();
 void feedTaskWatchdog();
 void wdtCheckpoint();
 void wdtCheckpoint(const char* phase);
@@ -816,6 +820,9 @@ static const char* g_bootPhase = "start";
 static unsigned long g_bootTimingLastMs = 0;
 static size_t g_coredumpSize = 0;
 bool taskWatchdogInitialized = false;
+bool taskWatchdogPendingFlushReinit = false;
+static bool wdtShutdownHandlerRegistered = false;
+static TaskHandle_t taskWatchdogLoopHandle = NULL;
 unsigned long heaterOutputOnSinceMs = 0;
 unsigned long heaterRuntimeMismatchLastCheckMs = 0;
 int heaterRuntimeMismatchStrikes = 0;
@@ -924,6 +931,8 @@ struct BatteryAssessment {
 };
 
 static BatteryAssessment batteryAssessment = {0.0f, 0.0f, 0.0f, 0, 0, false, false, 0UL, false, false, 0, {}};
+static bool bootBatteryCheckDone = false;
+static unsigned long lastLoggedPoweronBootStatusMs = 0;
 static uint8_t runtimeSagStrikes = 0;
 static unsigned long runtimeSagLastStrikeMs = 0;
 
@@ -1429,6 +1438,43 @@ class command_characteristic_callbacks: public BLECharacteristicCallbacks {
       sendSerialToBLE("Processed GET_ACTIVE_PARTITION");
       return;
     }
+    if (cmd == "GET_TASK_WDT") {
+      String statusMessage = String("TASK_WDT:") + getTaskWatchdogStatusString();
+      writeResponseToChannel(statusMessage);
+      Serial.printf("Processed GET_TASK_WDT -> %s\n", statusMessage.c_str());
+      sendSerialToBLE("Processed GET_TASK_WDT");
+      return;
+    }
+    if (cmd == "DISABLE_TASK_WDT") {
+      if (!isTrustedConnection()) {
+        writeResponseToChannel("AUTH_REQUIRED");
+        Serial.println("DISABLE_TASK_WDT blocked - trust handshake required");
+        return;
+      }
+      if (isFlushing) {
+        writeResponseToChannel("DISABLE_TASK_WDT_ERR:FLUSH_ACTIVE");
+        Serial.println("Rejected DISABLE_TASK_WDT while flush active");
+        sendSerialToBLE("DISABLE_TASK_WDT rejected: flush active");
+        return;
+      }
+      disableTaskWatchdog();
+      writeResponseToChannel("DISABLE_TASK_WDT_ACK");
+      Serial.println("Task watchdog disabled via BLE");
+      sendSerialToBLE("DISABLE_TASK_WDT applied");
+      return;
+    }
+    if (cmd == "ENABLE_TASK_WDT") {
+      if (!isTrustedConnection()) {
+        writeResponseToChannel("AUTH_REQUIRED");
+        Serial.println("ENABLE_TASK_WDT blocked - trust handshake required");
+        return;
+      }
+      taskWatchdogPendingFlushReinit = true;
+      writeResponseToChannel("ENABLE_TASK_WDT_ACK:PENDING_FLUSH");
+      Serial.println("Task watchdog re-init pending at next flush case 0");
+      sendSerialToBLE("ENABLE_TASK_WDT armed for flush re-init");
+      return;
+    }
     if (cmd.startsWith("SET_DEV_MODE:")) {
       String valueString = cmd.substring(String("SET_DEV_MODE:").length());
       valueString.trim();
@@ -1932,9 +1978,6 @@ void initErrorLog() {
   errorLogInitialized = true;
   Serial.printf("SPIFFS mounted: total=%u used=%u bytes, log=%s\n",
                 (unsigned)SPIFFS.totalBytes(), (unsigned)SPIFFS.usedBytes(), LOG_FILE);
-  logError("boot_checkpoint", 0, "serial_ok", false);
-  logError("boot_checkpoint", 0, "gpio_safe", false);
-  logError("boot_checkpoint", 0, "nvs_ok", false);
   unsigned long flushStart = millis();
   flushPendingCrashLog();
   logBootTiming("crash_flush_done");
@@ -1957,7 +2000,7 @@ void logBootTiming(const char* phase) {
   char msg[96];
   snprintf(msg, sizeof(msg), "%s,+%lums,total=%lums", phase, delta, now);
   Serial.printf("Boot timing: %s\n", msg);
-  if (errorLogInitialized) {
+  if (errorLogInitialized && devModeEnabled) {
     logError("boot_timing", (int)delta, msg, false);
   }
 }
@@ -1967,11 +2010,19 @@ void logBootCheckpoint(const char* phase) {
     return;
   }
   g_bootPhase = phase;
+  unsigned long now = millis();
+  unsigned long delta = (g_bootTimingLastMs == 0) ? 0UL : (now - g_bootTimingLastMs);
+  g_bootTimingLastMs = now;
+
+  char timingMsg[96];
+  snprintf(timingMsg, sizeof(timingMsg), "%s,+%lums,total=%lums", phase, delta, now);
   Serial.printf("Boot checkpoint: %s\n", phase);
+  Serial.printf("Boot timing: %s\n", timingMsg);
   if (errorLogInitialized) {
-    logError("boot_checkpoint", 0, phase, false);
+    char msg[96];
+    snprintf(msg, sizeof(msg), "phase=%s,delta=%lu,total=%lu", phase, delta, now);
+    logError("boot_checkpoint", 0, msg, false);
   }
-  logBootTiming(phase);
 }
 
 void captureCrashPendingRtc() {
@@ -4459,6 +4510,7 @@ static const esp_partition_t* resolveRollbackTargetPartition(bool* usedAlternate
 }
 
 bool logOtaRollback(const char* trigger, const char* reason, String* errorCode) {
+  Serial.printf("OTA rollback handler (%s)\n", SOFTWARE_VERSION_NUMBER);
   running_partition = esp_ota_get_running_partition();
   bool usedAlternate = false;
   const esp_partition_t* rollback_partition = resolveRollbackTargetPartition(&usedAlternate);
@@ -5307,7 +5359,16 @@ void logBootStatus() {
                 errorLogInitialized ? "ok" : "off",
                 (unsigned)getErrorLogFileSize());
   if (errorLogInitialized) {
+    unsigned long now = millis();
+    if (resetReason == ESP_RST_POWERON &&
+        lastLoggedPoweronBootStatusMs != 0 &&
+        (now - lastLoggedPoweronBootStatusMs) < 60000UL) {
+      return;
+    }
     logError("boot_status", (int)resetReason, msg, false);
+    if (resetReason == ESP_RST_POWERON) {
+      lastLoggedPoweronBootStatusMs = now;
+    }
   }
 }
 
@@ -5389,11 +5450,17 @@ void wdtSafeDelay(unsigned long ms) {
   }
 }
 
-void initTaskWatchdog() {
-  if (taskWatchdogInitialized) {
-    return;
+static bool subscribeLoopTaskToWdt() {
+  esp_err_t err = esp_task_wdt_add(NULL);
+  if (err != ESP_OK) {
+    Serial.printf("WARNING: TWDT add failed: %d\n", (int)err);
+    return false;
   }
+  taskWatchdogLoopHandle = xTaskGetCurrentTaskHandle();
+  return true;
+}
 
+static void initTaskWatchdogCore() {
   esp_task_wdt_config_t wdtConfig = {};
   wdtConfig.timeout_ms = TASK_WDT_TIMEOUT_MS;
   wdtConfig.idle_core_mask = 0;
@@ -5408,10 +5475,63 @@ void initTaskWatchdog() {
     return;
   }
 
-  esp_task_wdt_add(NULL);
-  esp_register_shutdown_handler(heaterEmergencyShutdown);
+  if (!subscribeLoopTaskToWdt()) {
+    return;
+  }
+
+  if (!wdtShutdownHandlerRegistered) {
+    esp_register_shutdown_handler(heaterEmergencyShutdown);
+    wdtShutdownHandlerRegistered = true;
+  }
+
   taskWatchdogInitialized = true;
   Serial.printf("Task watchdog enabled (%lu ms timeout)\n", TASK_WDT_TIMEOUT_MS);
+}
+
+void initTaskWatchdog() {
+  if (taskWatchdogInitialized) {
+    return;
+  }
+  initTaskWatchdogCore();
+}
+
+void disableTaskWatchdog() {
+  if (taskWatchdogLoopHandle != NULL) {
+    esp_err_t err = esp_task_wdt_delete(taskWatchdogLoopHandle);
+    if (err != ESP_OK && err != ESP_ERR_NOT_FOUND) {
+      Serial.printf("WARNING: TWDT delete failed: %d\n", (int)err);
+    }
+  }
+  taskWatchdogInitialized = false;
+  taskWatchdogPendingFlushReinit = false;
+}
+
+void reinitTaskWatchdog() {
+  if (taskWatchdogLoopHandle != NULL) {
+    esp_err_t err = esp_task_wdt_delete(taskWatchdogLoopHandle);
+    if (err != ESP_OK && err != ESP_ERR_NOT_FOUND) {
+      Serial.printf("WARNING: TWDT delete failed: %d\n", (int)err);
+    }
+  }
+  taskWatchdogInitialized = false;
+  initTaskWatchdogCore();
+}
+
+void ensureTaskWatchdogForFlush() {
+  if (!taskWatchdogInitialized || taskWatchdogPendingFlushReinit) {
+    reinitTaskWatchdog();
+    taskWatchdogPendingFlushReinit = false;
+  }
+}
+
+const char* getTaskWatchdogStatusString() {
+  if (taskWatchdogPendingFlushReinit) {
+    return "pending_flush";
+  }
+  if (taskWatchdogInitialized) {
+    return "enabled";
+  }
+  return "disabled";
 }
 
 void latchHeaterFailsafeError(const char* msg) {
@@ -5597,7 +5717,7 @@ void testHeaterCurrent(bool lowBatteryAsError) {
     return;
   }
   snprintf(msg, sizeof(msg), "start context=%s", lowBatteryAsError ? "flush" : "boot");
-  logPowerTestEvent(tag, msg, true);
+  logPowerTestEvent(tag, msg, false);
 
   if (!batteryAssessment.valid || !batteryAssessment.assessPassed) {
     if (!assessBatteryUsable(tag, true, nullptr)) {
@@ -5630,9 +5750,6 @@ void testHeaterCurrent(bool lowBatteryAsError) {
       continue;
     }
     applyHeaterPwmDuty(duty);
-    snprintf(msg, sizeof(msg), "ramp_start idx=%d pwm=%d", rampIdx, duty);
-    logPowerTestEvent(tag, msg, false);
-
     unsigned long rampStart = millis();
     unsigned long lastCheckTime = 0;
     while ((millis() - rampStart) < perRampMaxMs) {
@@ -5670,7 +5787,8 @@ void testHeaterCurrent(bool lowBatteryAsError) {
         if (adcReading > HEATER_CURRENT_ADC_THRESHOLD) {
           currentDetected = true;
           snprintf(msg, sizeof(msg), "current_detected pwm=%d adc=%d v=%.2f", duty, adcReading, v);
-          logPowerTestEvent(tag, msg, true);
+          Serial.println(msg);
+          SerialBLE_println(msg);
           break;
         }
       }
@@ -5688,13 +5806,14 @@ void testHeaterCurrent(bool lowBatteryAsError) {
       logError("power_test", 5, "heater_current_not_detected", true);
     }
   } else {
-    logPowerTestEvent(tag, "PASS", true);
+    logPowerTestEvent(tag, "PASS", false);
   }
 }
 
 void setup() {
   Serial.begin(115200);
   delay(100);
+  bootBatteryCheckDone = false;
   resetBootTiming();
   logBootCheckpoint("serial_ok");
 
@@ -6446,6 +6565,7 @@ void flushSequence() {
   switch (flushStep) {
     case 0: {
       char preflightMsg[128];
+      ensureTaskWatchdogForFlush();
       ledLastUpdateMillis = millis();
       maxHeaterWallTimeMs = 0;  // Reset at start of each flush cycle before recomputing once.
       logPowerTestEvent("flush_preflight", "gate0 start", false);
@@ -7891,7 +8011,7 @@ bool assessBatteryUsable(const char* tag, bool forceRefresh, bool* outFlushAllow
   }
 
   snprintf(msg, sizeof(msg), "start vIdle=%.2f capDuty=%d steps=%d", vIdle, capDuty, dutyCount);
-  logPowerTestEvent(assessTag, msg, true);
+  logPowerTestEvent(assessTag, msg, false);
 
   float vLoadWorst = vIdle;
   float sagWorst = 0.0f;
@@ -7902,8 +8022,6 @@ bool assessBatteryUsable(const char* tag, bool forceRefresh, bool* outFlushAllow
 
   for (int i = 0; i < dutyCount; i++) {
     int duty = dutySteps[i];
-    snprintf(msg, sizeof(msg), "step duty=%d settle=%ums", duty, (unsigned)batteryAssessSettleMs);
-    logPowerTestEvent(assessTag, msg, false);
 
     applyHeaterPwmDuty(duty);
     unsigned long start = millis();
@@ -7935,10 +8053,6 @@ bool assessBatteryUsable(const char* tag, bool forceRefresh, bool* outFlushAllow
       step.heaterA = heaterA;
     }
 
-    snprintf(msg, sizeof(msg), "step_result duty=%d vLoad=%.2f sag=%.2f adc=%d I=%.2f",
-             duty, vLoad, sag, heaterAdc, heaterA);
-    logPowerTestEvent(assessTag, msg, false);
-
     stepIdle = readBatteryVoltageQuiet();
     wdtSafeDelay(20);
   }
@@ -7946,6 +8060,17 @@ bool assessBatteryUsable(const char* tag, bool forceRefresh, bool* outFlushAllow
   bool assessPassed = (highestDutyVLoad >= minLoadedBatteryV) && (highestDutySag <= maxBatterySagV);
   storeBatteryAssessment(vIdle, vLoadWorst, sagWorst, capDuty, assessPassed);
   batteryAssessment.inProgress = false;
+
+  if (!assessPassed) {
+    for (uint8_t i = 0; i < batteryAssessment.stepCount; i++) {
+      const BatteryAssessStep& step = batteryAssessment.steps[i];
+      snprintf(msg, sizeof(msg), "step duty=%d settle=%ums", step.duty, (unsigned)batteryAssessSettleMs);
+      logPowerTestEvent(assessTag, msg, true);
+      snprintf(msg, sizeof(msg), "step_result duty=%d vLoad=%.2f sag=%.2f adc=%d I=%.2f",
+               step.duty, step.vLoad, step.sag, step.heaterAdc, step.heaterA);
+      logPowerTestEvent(assessTag, msg, true);
+    }
+  }
 
   snprintf(msg, sizeof(msg),
            "done passed=%d usable=%d%% flushAllowed=%d vLoadWorst=%.2f sagWorst=%.2f capDuty=%d",
@@ -7955,7 +8080,7 @@ bool assessBatteryUsable(const char* tag, bool forceRefresh, bool* outFlushAllow
            vLoadWorst,
            sagWorst,
            capDuty);
-  logPowerTestEvent(assessTag, msg, false);
+  logPowerTestEvent(assessTag, msg, !assessPassed);
 
   if (outFlushAllowed) {
     *outFlushAllowed = batteryAssessment.flushAllowed;
@@ -7970,7 +8095,12 @@ bool isFlushAllowedByBattery(bool forceRefresh) {
 }
 
 bool isBatteryOkForHeaterTest() {
-  return assessBatteryUsable("boot_battery_check", true, nullptr);
+  if (bootBatteryCheckDone && batteryAssessment.valid) {
+    return batteryAssessment.assessPassed;
+  }
+  const bool forceRefresh = !bootBatteryCheckDone;
+  bootBatteryCheckDone = true;
+  return assessBatteryUsable("boot_battery_check", forceRefresh, nullptr);
 }
 
 void latchLowBatteryStop(const char* reason) {
