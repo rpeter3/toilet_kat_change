@@ -262,6 +262,7 @@ This is different from `HWCFG_ROLLBACK_LAST_GOOD`:
 - **Channel**: write command to `...fea0`, read response from `...fea4`
 - **Trust**: required
 - **When allowed**: device must be idle, not flushing, not homing/running mechanism motors, and not in an OTA transfer/finalize state
+- **Execution**: firmware validates the command in the BLE write callback, then runs rollback on the next main-loop iteration (typically &lt;5 ms). Poll `...fea4` for the response as usual; `OTA_ROLLBACK_ACK:REBOOTING` is sent only after `esp_ota_set_boot_partition()` succeeds.
 
 ### Responses
 
@@ -269,6 +270,7 @@ This is different from `HWCFG_ROLLBACK_LAST_GOOD`:
 - `OTA_ROLLBACK_ERR:AUTH_REQUIRED` -> trust handshake is not complete
 - `OTA_ROLLBACK_ERR:BUSY_OTA` -> OTA transfer/finalize is active
 - `OTA_ROLLBACK_ERR:BUSY_FLUSH` -> flush or critical motor action is active
+- `OTA_ROLLBACK_ERR:BUSY_ROLLBACK` -> a rollback request is already pending or executing
 - `OTA_ROLLBACK_ERR:NO_ROLLBACK_INFO` -> firmware has no recorded previous partition
 - `OTA_ROLLBACK_ERR:NO_ROLLBACK_PARTITION` -> recorded previous partition could not be found
 - `OTA_ROLLBACK_ERR:SET_BOOT_FAILED` -> ESP-IDF failed to set the rollback boot partition
@@ -305,6 +307,7 @@ The factory slot holds whatever app image was last written to the `factory` part
 - **Channel**: write command to `...fea0`, read response from `...fea4`
 - **Trust**: required
 - **When allowed**: device must be idle, not flushing, not homing/running mechanism motors, and not in an OTA transfer/finalize state
+- **Execution**: same deferred main-loop execution as `OTA_ROLLBACK_PREVIOUS` (see above). Response arrives on `...fea4` after partition switch succeeds.
 
 ### Responses
 
@@ -312,6 +315,7 @@ The factory slot holds whatever app image was last written to the `factory` part
 - `OTA_ROLLBACK_FACTORY_ERR:AUTH_REQUIRED` -> trust handshake is not complete
 - `OTA_ROLLBACK_FACTORY_ERR:BUSY_OTA` -> OTA transfer/finalize is active
 - `OTA_ROLLBACK_FACTORY_ERR:BUSY_FLUSH` -> flush or critical motor action is active
+- `OTA_ROLLBACK_FACTORY_ERR:BUSY_ROLLBACK` -> a rollback request is already pending or executing
 - `OTA_ROLLBACK_FACTORY_ERR:NO_FACTORY_PARTITION` -> factory partition missing from partition table
 - `OTA_ROLLBACK_FACTORY_ERR:ALREADY_ON_FACTORY` -> device is already running from factory
 - `OTA_ROLLBACK_FACTORY_ERR:INVALID_FACTORY_IMAGE` -> factory slot is empty (`0xFF` header) or ESP-IDF `image_validate` rejected the image (checksum, chip ID, revision); see Serial for `esp_err` detail

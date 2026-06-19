@@ -1,0 +1,19 @@
+{
+  "run_id": "20260618T171952Z",
+  "started_at": "2026-06-18T17:19:52.695477+00:00",
+  "ended_at": "2026-06-18T17:22:01.161517+00:00",
+  "passed": false,
+  "dry_run": false,
+  "fast_mode": true,
+  "auto_build": true,
+  "port": "COM5",
+  "address": "58:E6:C5:6C:AF:81",
+  "partition_sequence": [],
+  "steps": [],
+  "failures": [
+    "preflight: Failed to connect for DEV mode setup: Failed to connect to enable DEV mode"
+  ],
+  "metadata": {
+    "preflight_error": "Failed to connect for DEV mode setup: Failed to connect to enable DEV mode"
+  }
+}

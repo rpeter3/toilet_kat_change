@@ -1,0 +1,209 @@
+{
+  "run_id": "20260618T162821Z",
+  "started_at": "2026-06-18T16:28:21.898223+00:00",
+  "ended_at": "2026-06-18T16:28:21.910100+00:00",
+  "passed": true,
+  "dry_run": true,
+  "fast_mode": true,
+  "port": "COM6",
+  "address": null,
+  "partition_sequence": [
+    "factory",
+    "ota_0",
+    "ota_1",
+    "ota_0",
+    "ota_1",
+    "ota_0",
+    "factory",
+    "ota_0"
+  ],
+  "steps": [
+    {
+      "name": "flash_factory",
+      "passed": true,
+      "expected_partition": "factory",
+      "transport": "serial",
+      "pending_clear_required": false,
+      "observed_partition": "factory",
+      "version": null,
+      "ota_diag": {},
+      "boot_info": null,
+      "logs_excerpt": "",
+      "errors": [],
+      "started_at": "2026-06-18T16:28:21.909920+00:00",
+      "ended_at": "2026-06-18T16:28:21.909941+00:00",
+      "duration_s": 0.0
+    },
+    {
+      "name": "ota1",
+      "passed": true,
+      "expected_partition": "ota_0",
+      "transport": "ble",
+      "pending_clear_required": true,
+      "observed_partition": "ota_0",
+      "version": null,
+      "ota_diag": {},
+      "boot_info": null,
+      "logs_excerpt": "",
+      "errors": [],
+      "started_at": "2026-06-18T16:28:21.909990+00:00",
+      "ended_at": "2026-06-18T16:28:21.909995+00:00",
+      "duration_s": 0.0
+    },
+    {
+      "name": "ota2",
+      "passed": true,
+      "expected_partition": "ota_1",
+      "transport": "ble",
+      "pending_clear_required": true,
+      "observed_partition": "ota_1",
+      "version": null,
+      "ota_diag": {},
+      "boot_info": null,
+      "logs_excerpt": "",
+      "errors": [],
+      "started_at": "2026-06-18T16:28:21.910016+00:00",
+      "ended_at": "2026-06-18T16:28:21.910019+00:00",
+      "duration_s": 0.0
+    },
+    {
+      "name": "rollback_previous",
+      "passed": true,
+      "expected_partition": "ota_0",
+      "transport": "serial_sim",
+      "pending_clear_required": false,
+      "observed_partition": "ota_0",
+      "version": null,
+      "ota_diag": {},
+      "boot_info": null,
+      "logs_excerpt": "",
+      "errors": [],
+      "started_at": "2026-06-18T16:28:21.910034+00:00",
+      "ended_at": "2026-06-18T16:28:21.910036+00:00",
+      "duration_s": 0.0
+    },
+    {
+      "name": "ota3",
+      "passed": true,
+      "expected_partition": "ota_1",
+      "transport": "serial_sim",
+      "pending_clear_required": false,
+      "observed_partition": "ota_1",
+      "version": null,
+      "ota_diag": {},
+      "boot_info": null,
+      "logs_excerpt": "",
+      "errors": [],
+      "started_at": "2026-06-18T16:28:21.910050+00:00",
+      "ended_at": "2026-06-18T16:28:21.910052+00:00",
+      "duration_s": 0.0
+    },
+    {
+      "name": "ota4",
+      "passed": true,
+      "expected_partition": "ota_0",
+      "transport": "serial_sim",
+      "pending_clear_required": false,
+      "observed_partition": "ota_0",
+      "version": null,
+      "ota_diag": {},
+      "boot_info": null,
+      "logs_excerpt": "",
+      "errors": [],
+      "started_at": "2026-06-18T16:28:21.910067+00:00",
+      "ended_at": "2026-06-18T16:28:21.910069+00:00",
+      "duration_s": 0.0
+    },
+    {
+      "name": "factory_reset",
+      "passed": true,
+      "expected_partition": "factory",
+      "transport": "serial_sim",
+      "pending_clear_required": false,
+      "observed_partition": "factory",
+      "version": null,
+      "ota_diag": {},
+      "boot_info": null,
+      "logs_excerpt": "",
+      "errors": [],
+      "started_at": "2026-06-18T16:28:21.910080+00:00",
+      "ended_at": "2026-06-18T16:28:21.910082+00:00",
+      "duration_s": 0.0
+    },
+    {
+      "name": "ota5",
+      "passed": true,
+      "expected_partition": "ota_0",
+      "transport": "serial_sim",
+      "pending_clear_required": false,
+      "observed_partition": "ota_0",
+      "version": null,
+      "ota_diag": {},
+      "boot_info": null,
+      "logs_excerpt": "",
+      "errors": [],
+      "started_at": "2026-06-18T16:28:21.910093+00:00",
+      "ended_at": "2026-06-18T16:28:21.910095+00:00",
+      "duration_s": 0.0
+    }
+  ],
+  "failures": [],
+  "metadata": {
+    "preflight": {
+      "fast_mode": true,
+      "factory": {
+        "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\toilet_kat_change.ino.bin",
+        "size": 914624,
+        "md5": "77285c7d6cb52a4eb308dcc0d2ba4cc8",
+        "sha256": "5ba4908ef3458f9efba563b403943c3f9619dee59df1eeef30624db04aa029f2"
+      },
+      "ota": [
+        {
+          "label": "ota1",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\toilet_kat_change.ino.bin",
+          "size": 914624,
+          "md5": "77285c7d6cb52a4eb308dcc0d2ba4cc8",
+          "sha256": "5ba4908ef3458f9efba563b403943c3f9619dee59df1eeef30624db04aa029f2",
+          "expected_sw": "4.0.17.1",
+          "expected_build": "2026-06-18"
+        },
+        {
+          "label": "ota2",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\toilet_kat_change.ino.bin",
+          "size": 914624,
+          "md5": "77285c7d6cb52a4eb308dcc0d2ba4cc8",
+          "sha256": "5ba4908ef3458f9efba563b403943c3f9619dee59df1eeef30624db04aa029f2",
+          "expected_sw": "4.0.17.1",
+          "expected_build": "2026-06-18"
+        },
+        {
+          "label": "ota3",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\toilet_kat_change.ino.bin",
+          "size": 914624,
+          "md5": "77285c7d6cb52a4eb308dcc0d2ba4cc8",
+          "sha256": "5ba4908ef3458f9efba563b403943c3f9619dee59df1eeef30624db04aa029f2",
+          "expected_sw": "4.0.17.1",
+          "expected_build": "2026-06-18"
+        },
+        {
+          "label": "ota4",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\toilet_kat_change.ino.bin",
+          "size": 914624,
+          "md5": "77285c7d6cb52a4eb308dcc0d2ba4cc8",
+          "sha256": "5ba4908ef3458f9efba563b403943c3f9619dee59df1eeef30624db04aa029f2",
+          "expected_sw": "4.0.17.1",
+          "expected_build": "2026-06-18"
+        },
+        {
+          "label": "ota5",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\toilet_kat_change.ino.bin",
+          "size": 914624,
+          "md5": "77285c7d6cb52a4eb308dcc0d2ba4cc8",
+          "sha256": "5ba4908ef3458f9efba563b403943c3f9619dee59df1eeef30624db04aa029f2",
+          "expected_sw": "4.0.17.1",
+          "expected_build": "2026-06-18"
+        }
+      ]
+    }
+  }
+}

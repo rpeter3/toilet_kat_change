@@ -1,0 +1,15 @@
+OTA Partition Regression Report
+Run ID: 20260618T162822Z
+Started: 2026-06-18T16:28:22.540400+00:00
+Ended: 2026-06-18T16:29:19.695890+00:00
+Result: FAIL
+Dry run: False
+Fast mode: True
+Port: COM5
+BLE address: 58:E6:C5:6C:AF:81
+
+Partition sequence: 
+Expected sequence: factory -> ota_0 -> ota_1 -> ota_0 -> ota_1 -> ota_0 -> factory -> ota_0
+
+Failures:
+  - preflight: Failed to connect for diagnostics

@@ -1,13 +1,13 @@
 Parameter,Description,1.5mil High Barrier Plastic,Compostable 1.5mil
 batteryThreshold,Minimum usable battery percent before flush,7,7
-K,Temperature setpoint,150,100
+K,Temperature setpoint,140,90
 F,How long to feed the bag at the START of a flush,8,8
 T,Cooling Time,60,40
 backupTime,How long to back up the bag when re-opening,1,1
 fanDuration,How long to run the fan after feeding at the end of a flush,5,5
 H,Heater On time,30,20
 continueFeeder,How long to feed the bag at the END of a flush,6,6
-maxOpeningTime,Max opening time,12,12
+maxOpeningTime,Max opening time,16.5,16.5
 typicalOpeningTime,Typical opening time,10,10
 MOTOR_CUT_TIME,Motor cut duration,0.5,0.5
 CUT_MODE_HEAT_TIME,Additional heater time in cut mode,15,10
@@ -16,7 +16,7 @@ preFeedFan,Fan duration before feed motor starts in case 1 and button 2,2,1.5
 fanReverseTime,Duration M3 runs in reverse after starting,12,9
 fanReverseStartTime,Delay before M3 reverse starts as percentage of typicalOpeningTime after M1 begins closing,0,0
 backupTimeAfterReopen,Feed bag backup duration after mechanism motor finishes opening,1.7,1.7
-CUT_MODE_TEMP,Temperature to maintain for CUT_MODE_HEAT_TIME after cut motor,150,100
+CUT_MODE_TEMP,Temperature to maintain for CUT_MODE_HEAT_TIME after cut motor,140,90
 heaterLowerToleranceC,Heater ON threshold below target (temp <= target - lower),0,0
 heaterUpperToleranceC,Heater OFF threshold above target (temp >= target + upper can be negative),2,2
 COOL_OPEN_TEMP_C,Open sealer when thermistor cools below this temperature °C,80,80

@@ -50,14 +50,14 @@ The system supports 30 configurable parameters over BLE. Default values are set 
 | Parameter | Description | Units | Default |
 |-----------|-------------|-------|---------|
 | batteryThreshold | Minimum usable battery percent before flush | % | 7 |
-| K | Temperature setpoint for PID control | °C | 150.0 |
+| K | Temperature setpoint for PID control | °C | 140.0 |
 | F | How long to feed the bag at the START of a flush | seconds | 8 |
 | T | Cooling Time | seconds | 60 |
 | backupTime | How long to back up the bag when re-opening | seconds | 1.0 |
 | fanDuration | How long to run the fan after feeding at the end of a flush | seconds | 5 |
 | H | Heater On time | seconds | 30 |
 | continueFeeder | How long to feed the bag at the END of a flush | seconds | 6.0 |
-| maxOpeningTime | Max opening time | seconds | 12 |
+| maxOpeningTime | Max opening time | seconds | 16.5 |
 | typicalOpeningTime | Typical opening time | seconds | 10 |
 | MOTOR_CUT_TIME | Motor cut duration | seconds | 0.5 |
 | CUT_MODE_HEAT_TIME | Additional heater time in cut mode | seconds | 15.0 |
@@ -66,7 +66,7 @@ The system supports 30 configurable parameters over BLE. Default values are set 
 | fanReverseTime | Duration M3 runs in reverse after starting | seconds | 12.0 |
 | fanReverseStartTime | Delay before M3 reverse starts (% of typicalOpeningTime) | % | 0.0 |
 | backupTimeAfterReopen | Feed bag backup duration after mechanism motor finishes opening | seconds | 1.7 |
-| CUT_MODE_TEMP | Temperature to maintain for CUT_MODE_HEAT_TIME after cut motor | °C | 150.0 |
+| CUT_MODE_TEMP | Temperature to maintain for CUT_MODE_HEAT_TIME after cut motor | °C | 140.0 |
 | heaterLowerToleranceC | Heater ON threshold below target | °C | 0.0 |
 | heaterUpperToleranceC | Heater OFF threshold above target | °C | 2.0 |
 | COOL_OPEN_TEMP_C | Open sealer when thermistor cools below this temperature | °C | 80.0 |
@@ -131,7 +131,7 @@ Parameters are saved in JSON format with all 30 parameters:
   "fanDuration": 5,
   "H": 40,
   "continueFeeder": 7.0,
-  "maxOpeningTime": 12,
+  "maxOpeningTime": 16.5,
   "typicalOpeningTime": 10,
   "MOTOR_CUT_TIME": 0.5,
   "CUT_MODE_HEAT_TIME": 25.0,

@@ -1,6 +1,6 @@
 Parameter,Description,1mil High Barrier Plastic,1.5mil High Barrier Plastic,Compostable 1.5mil
 batteryThreshold,Battery voltage threshold,5,5,5
-K,Temperature setpoint,120,150,90
+K,Temperature setpoint,120,140,90
 F,How long to feed the bag at the START of a flush,6,6,6
 T,Cooling Time,60,60,40
 r1,Thermistor resistance 1,5,5,5
@@ -10,7 +10,7 @@ r4,Thermistor resistance 4,2,2,2
 fanDuration,How long to run the fan after feeding at the end of a flush,5,5,5
 H,Heater On time,40,40,22
 continueFeeder,Feeder continue time,7,7,7
-maxOpeningTime,Max opening time,12,12,12
+maxOpeningTime,Max opening time,16.5,16.5,16.5
 typicalOpeningTime,Typical opening time,10,10,10
 MOTOR_CUT_TIME,Motor cut duration,0.5,0.5,0.5
 CUT_MODE_HEAT_TIME,Additional heater time in cut mode,25,25,20

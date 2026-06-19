@@ -197,7 +197,7 @@ During the post-cooling open phase, firmware uses `openSwitchLatched` to record 
 
 - The close microswitch near the heater **must be closed and held closed** for safe sealing and heating. Case 5 requires the switch to read LOW and additionally confirms M1 load current (`> 0.5 A`) before stopping the close motor and advancing.
 - If the close switch opens again, the mechanism is no longer in a verified sealed state; firmware should not treat a momentary close as completion. A latch on the close side would incorrectly allow progression after the mechanism had opened.
-- Close-phase timeout is enforced in case 5 via `motorStartMillis` and `TIMEOUT` (15 s).
+- Close-phase timeout is enforced in case 5 via `motorStartMillis` and `maxOpeningTime` (default 16.5 s).
 
 ## Flush cancel recovery
 

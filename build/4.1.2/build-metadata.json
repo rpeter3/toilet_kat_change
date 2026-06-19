@@ -1,0 +1,10 @@
+﻿{
+    "softwareVersion":  "4.1.2",
+    "arduinoEsp32Core":  "3.3.3",
+    "espIdfVersion":  "v5.5.1-418-gf1a1df9b2e",
+    "espIdfLibsTag":  "f1a1df9b",
+    "appBinMd5":  "29c7800d26328b279cdf3b722bfb2ce6",
+    "appBinSize":  914496,
+    "promotedFrom":  "c:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3",
+    "promotedAt":  "2026-06-18T19:54:06.2759710Z"
+}

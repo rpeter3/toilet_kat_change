@@ -1,0 +1,2 @@
+E (19943) task_wdt: esp_task_wdt_init(517): TWDT already initialized
+E (21032) phy_init: store_cal_data_to_nvs_handle: store calibration data failed(0xffffffff)

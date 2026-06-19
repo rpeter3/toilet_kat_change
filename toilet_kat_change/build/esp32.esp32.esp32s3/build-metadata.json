@@ -3,8 +3,8 @@
     "arduinoEsp32Core":  "3.3.3",
     "espIdfVersion":  "v5.5.1-418-gf1a1df9b2e",
     "espIdfLibsTag":  "f1a1df9b",
-    "appBinSize":  914624,
-    "appBinMd5":  "77285c7d6cb52a4eb308dcc0d2ba4cc8",
+    "appBinSize":  915312,
+    "appBinMd5":  "cd03505ff98eb8b397ee1f02a5bb20d7",
     "factoryOffset":  "0x10000",
-    "builtAt":  "2026-06-18T14:16:44.7865738Z"
+    "builtAt":  "2026-06-19T11:16:38.1934986Z"
 }

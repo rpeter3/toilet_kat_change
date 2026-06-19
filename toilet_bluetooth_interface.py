@@ -27,12 +27,20 @@ RESPONSE_CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea4"
 PARAM_READ_CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea5"
 PARAM_WRITE_CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea6"
 SERIAL_CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea1"
+UPDATE_CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea3"
+OTA_ENABLE_WAIT_S = 4.0
+OTA_ROLLBACK_RESPONSE_TIMEOUT_S = 5.0
+OTA_ROLLBACK_POLL_INTERVAL_S = 0.15
 # Legacy: pre-refactor firmware used fea0 for commands, responses, and params
 CHARACTERISTIC_UUID = COMMAND_CHARACTERISTIC_UUID
 DEVICE_NAME = "ESP32 Toilet"
 FRAME_START_BYTE = 0x7E
 FRAME_HEADER_SIZE = 3
 MAX_FRAME_PAYLOAD = 0xFFFF
+# Stale fea4 payloads left by prior command-channel traffic (e.g. TRUST_STATUS after handshake).
+_STALE_PARAM_WRITE_RESPONSE_RE = re.compile(
+    r"^(FLUSH_COUNT|BATTERY|TRUST_|DEV_MODE|LOGS:|HW_|HWCFG_|SET_DEV_MODE_|UNKNOWN_COMMAND:|READY)"
+)
 
 
 def _normalize_uuid(uuid_val: Any) -> str:
@@ -121,18 +129,19 @@ class ToiletSystemInterface:
         self.trusted = False  # Trust handshake state; cleared on disconnect per BLE_APP_MIGRATION_SPEC
         self.trust_timeout_s = 60.0  # Per spec recommended timeout
         self.trust_poll_interval_s = 0.25  # Per BLE_HANDSHAKE_INTERFACE_SPEC
+        self.ble_address: Optional[str] = None
 
         # Parameter definitions with descriptions and units (defaults = 1.5mil High Barrier Plastic from material_parameters.csv)
         self.param_definitions = {
             "batteryThreshold": {"description": "Minimum usable battery percent before flush", "units": "%", "default": 7.0},
-            "K": {"description": "Temperature setpoint", "units": "°C", "default": 150.0},
+            "K": {"description": "Temperature setpoint", "units": "°C", "default": 140.0},
             "F": {"description": "How long to feed the bag at the START of a flush", "units": "sec", "default": 6.0},
             "T": {"description": "Cooling Time", "units": "sec", "default": 60.0},
             "backupTime": {"description": "How long to back up the bag when re-opening", "units": "sec", "default": 1.0},
             "fanDuration": {"description": "How long to run the fan after feeding at the end of a flush", "units": "sec", "default": 5.0},
             "H": {"description": "Heater On time", "units": "sec", "default": 30.0},
             "continueFeeder": {"description": "How long to feed the bag at the END of a flush", "units": "sec", "default": 6.0},
-            "maxOpeningTime": {"description": "Max opening time", "units": "sec", "default": 12.0},
+            "maxOpeningTime": {"description": "Max opening time", "units": "sec", "default": 16.5},
             "typicalOpeningTime": {"description": "Typical opening time", "units": "sec", "default": 10.0},
             "MOTOR_CUT_TIME": {"description": "Motor cut duration", "units": "sec", "default": 0.5},
             "CUT_MODE_HEAT_TIME": {"description": "Additional heater time in cut mode", "units": "sec", "default": 15.0},
@@ -141,7 +150,7 @@ class ToiletSystemInterface:
             "fanReverseTime": {"description": "Duration M3 runs in reverse after starting", "units": "sec", "default": 12.0},
             "fanReverseStartTime": {"description": "Delay before M3 reverse starts as percentage of typicalOpeningTime after M1 begins closing", "units": "%", "default": 0.0},
             "backupTimeAfterReopen": {"description": "Feed bag backup duration after mechanism motor finishes opening", "units": "sec", "default": 1.7},
-            "CUT_MODE_TEMP": {"description": "Temperature to maintain for CUT_MODE_HEAT_TIME after cut motor", "units": "°C", "default": 150.0},
+            "CUT_MODE_TEMP": {"description": "Temperature to maintain for CUT_MODE_HEAT_TIME after cut motor", "units": "°C", "default": 140.0},
             "heaterLowerToleranceC": {"description": "Heater ON threshold below target (temp <= target - lower)", "units": "°C", "default": 0.0},
             "heaterUpperToleranceC": {"description": "Heater OFF threshold above target (temp >= target + upper can be negative)", "units": "°C", "default": 2.0},
             "COOL_OPEN_TEMP_C": {"description": "Open sealer when thermistor cools below this temperature", "units": "°C", "default": 80.0},
@@ -160,14 +169,14 @@ class ToiletSystemInterface:
         self.parameter_sets = {
             "1.5mil High Barrier Plastic": {
                 "batteryThreshold": 7.0,
-                "K": 150.0,
+                "K": 140.0,
                 "F": 6.0,
                 "T": 60.0,
                 "backupTime": 1.0,
                 "fanDuration": 5.0,
                 "H": 30.0,
                 "continueFeeder": 6.0,
-                "maxOpeningTime": 12.0,
+                "maxOpeningTime": 16.5,
                 "typicalOpeningTime": 10.0,
                 "MOTOR_CUT_TIME": 0.5,
                 "CUT_MODE_HEAT_TIME": 15.0,
@@ -176,7 +185,7 @@ class ToiletSystemInterface:
                 "fanReverseTime": 12.0,
                 "fanReverseStartTime": 0.0,
                 "backupTimeAfterReopen": 1.7,
-                "CUT_MODE_TEMP": 150.0,
+                "CUT_MODE_TEMP": 140.0,
                 "heaterLowerToleranceC": 0.0,
                 "heaterUpperToleranceC": 2.0,
                 "COOL_OPEN_TEMP_C": 80.0,
@@ -192,14 +201,14 @@ class ToiletSystemInterface:
             },
             "Compostable 1.5mil": {
                 "batteryThreshold": 7.0,
-                "K": 100.0,
+                "K": 90.0,
                 "F": 6.0,
                 "T": 40.0,
                 "backupTime": 1.0,
                 "fanDuration": 5.0,
                 "H": 20.0,
                 "continueFeeder": 6.0,
-                "maxOpeningTime": 12.0,
+                "maxOpeningTime": 16.5,
                 "typicalOpeningTime": 10.0,
                 "MOTOR_CUT_TIME": 0.5,
                 "CUT_MODE_HEAT_TIME": 10.0,
@@ -208,7 +217,7 @@ class ToiletSystemInterface:
                 "fanReverseTime": 9.0,
                 "fanReverseStartTime": 0.0,
                 "backupTimeAfterReopen": 1.7,
-                "CUT_MODE_TEMP": 100.0,
+                "CUT_MODE_TEMP": 90.0,
                 "heaterLowerToleranceC": 0.0,
                 "heaterUpperToleranceC": 2.0,
                 "COOL_OPEN_TEMP_C": 80.0,
@@ -388,6 +397,7 @@ class ToiletSystemInterface:
     async def connect(self, address: str, *, require_trust: bool = True) -> bool:
         """Connect to ESP32 device. Set require_trust=False for diagnostic-only commands."""
         try:
+            self.ble_address = address
             self.client = BleakClient(address)
             await self.client.connect()
             await self._request_preferred_mtu()
@@ -498,6 +508,22 @@ class ToiletSystemInterface:
             print(f"Parameter update rejected: invalid tolerance values ({validation_error}).")
             return False
 
+    def _is_stale_param_write_response(self, response: str) -> bool:
+        """True when fea4 still holds a prior command-channel response, not param-write ack."""
+        return not response or bool(_STALE_PARAM_WRITE_RESPONSE_RE.match(response))
+
+    async def _read_param_write_response(self, *, retries: int = 5, delay_s: float = 0.1) -> str:
+        """Read fea4 after param write, retrying past stale command-channel payloads."""
+        response = ""
+        for attempt in range(retries):
+            if attempt > 0:
+                await asyncio.sleep(delay_s)
+            data = await self.client.read_gatt_char(RESPONSE_CHARACTERISTIC_UUID)
+            response = data.decode("utf-8", errors="replace").strip()
+            if not self._is_stale_param_write_response(response):
+                return response
+        return response
+
     async def update_params(self, new_params: Dict[str, Any]) -> bool:
         """Update parameters on ESP32"""
         if not self.connected:
@@ -523,10 +549,13 @@ class ToiletSystemInterface:
                 if not await self.trust_handshake():
                     print("Parameter update aborted: trust handshake failed or timed out.")
                     return False
-            await self.client.write_gatt_char(PARAM_WRITE_CHARACTERISTIC_UUID, message.encode("utf-8"))
-            await asyncio.sleep(0.15)
-            data = await self.client.read_gatt_char(RESPONSE_CHARACTERISTIC_UUID)
-            response = data.decode("utf-8", errors="replace").strip()
+            await self.client.write_gatt_char(
+                PARAM_WRITE_CHARACTERISTIC_UUID,
+                message.encode("utf-8"),
+                response=True,
+            )
+            await asyncio.sleep(0.2)
+            response = await self._read_param_write_response()
             if response == "PARAM_WRITE_ACK":
                 print("Parameters updated successfully")
                 return True
@@ -837,6 +866,43 @@ class ToiletSystemInterface:
             return None
         return flush_count
 
+    async def get_active_partition(self) -> Optional[dict]:
+        """Read the app partition the firmware is currently running from."""
+        response = await self._send_command_and_read_response("GET_ACTIVE_PARTITION")
+        if not response:
+            print("No response from firmware for GET_ACTIVE_PARTITION")
+            return None
+        if response.startswith("ACTIVE_PARTITION_ERR:"):
+            print(f"Firmware error for GET_ACTIVE_PARTITION: {response}")
+            return None
+        if not response.startswith("ACTIVE_PARTITION:"):
+            print(f"Unexpected GET_ACTIVE_PARTITION response: {response}")
+            return None
+
+        payload = response.split(":", 1)[1]
+        result: dict = {}
+        for part in payload.split("|"):
+            if "=" not in part:
+                continue
+            key, value = part.split("=", 1)
+            result[key.strip()] = value.strip()
+
+        if "label" not in result:
+            print(f"Malformed GET_ACTIVE_PARTITION payload: {response}")
+            return None
+
+        if "subtype" in result:
+            try:
+                result["subtype"] = int(result["subtype"])
+            except ValueError:
+                pass
+        if "offset" in result:
+            try:
+                result["offset"] = int(result["offset"], 0)
+            except ValueError:
+                pass
+        return result
+
     async def get_battery(self) -> Optional[int]:
         """Read battery charge level (0-100%) from firmware. Returns int or None on failure."""
         response = await self._send_command_and_read_response("GET_BATTERY")
@@ -912,6 +978,57 @@ class ToiletSystemInterface:
                 print(f"Command failed ({command}): {e}")
             return None
 
+    async def _read_response_channel(self) -> Optional[str]:
+        """Read fea4 response characteristic without sending a command."""
+        if not self.connected or not self.client:
+            return None
+        try:
+            data = await self.client.read_gatt_char(RESPONSE_CHARACTERISTIC_UUID)
+            return data.decode("utf-8", errors="replace").strip()
+        except Exception as e:
+            err_str = str(e).lower()
+            if "not connected" in err_str or "disconnected" in err_str:
+                return None
+            print(f"Response read failed: {e}")
+            return None
+
+    async def _send_command_and_poll_response(
+        self,
+        command: str,
+        *,
+        success_responses: tuple[str, ...],
+        error_prefixes: tuple[str, ...],
+        timeout_s: float = OTA_ROLLBACK_RESPONSE_TIMEOUT_S,
+        poll_interval_s: float = OTA_ROLLBACK_POLL_INTERVAL_S,
+    ) -> Optional[str]:
+        """
+        Write command and poll fea4 until an expected ACK/ERR or timeout.
+        Ignores stale unrelated values left on fea4 by prior commands.
+        """
+        if not self.connected or not self.client:
+            return None
+        try:
+            await self.client.write_gatt_char(COMMAND_CHARACTERISTIC_UUID, command.encode("utf-8"))
+        except Exception as e:
+            print(f"Command failed ({command}): {e}")
+            return None
+
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            await asyncio.sleep(poll_interval_s)
+            response = await self._read_response_channel()
+            if not response:
+                continue
+            if response == "AUTH_REQUIRED":
+                self.trusted = False
+                return response
+            if response in success_responses:
+                return response
+            for prefix in error_prefixes:
+                if response.startswith(prefix):
+                    return response
+        return None
+
     # --- Trust handshake (BLE_APP_MIGRATION_SPEC, BLE_HANDSHAKE_INTERFACE_SPEC) ---
     async def trust_start(self) -> Optional[str]:
         """Send TRUST_START, read response from fea4. Returns TRUST_WAITING, TRUST_CONFIRMED, or error."""
@@ -929,6 +1046,7 @@ class ToiletSystemInterface:
         """
         Run full trust flow: TRUST_START, poll TRUST_STATUS until TRUST_CONFIRMED or timeout.
         Per spec: user presses a control panel button (GPIO2 wake line) during TRUST_WAITING to confirm.
+        When firmware DEV mode is on, trust is auto-granted without a button press.
         Returns True if trusted, False on timeout/cancel/error.
         """
         timeout = timeout_s if timeout_s is not None else self.trust_timeout_s
@@ -938,7 +1056,11 @@ class ToiletSystemInterface:
             return False
         if start_resp == "TRUST_CONFIRMED":
             self.trusted = True
-            print("Already trusted for this connection.")
+            dev_mode = await self.get_dev_mode_status()
+            if dev_mode == 1:
+                print("Trust granted (DEV mode bypass).")
+            else:
+                print("Already trusted for this connection.")
             return True
         if start_resp != "TRUST_WAITING":
             print(f"Trust handshake failed: unexpected TRUST_START response: {start_resp}")
@@ -1142,15 +1264,29 @@ class ToiletSystemInterface:
         self._print_hwcfg_failure("Rollback", response)
         return False
 
+    async def prepare_ota_for_update(self) -> bool:
+        """ENABLE_OTA + PREPARE_UPDATE (no firmware transfer). For OTA updates or explicit NVS seed."""
+        if not self.trusted:
+            if not await self.trust_handshake():
+                print("PREPARE_UPDATE aborted: trust handshake required.")
+                return False
+        if not await self.enable_ota_mode():
+            return False
+        return await self.prepare_ota_update()
+
     async def ota_rollback_previous(self) -> bool:
         """Request firmware rollback to the previous OTA partition. Device reboots on success."""
         if not self.trusted:
             if not await self.trust_handshake():
                 print("OTA rollback aborted: trust handshake required.")
                 return False
-        response = await self._send_command_and_read_response("OTA_ROLLBACK_PREVIOUS")
+        response = await self._send_command_and_poll_response(
+            "OTA_ROLLBACK_PREVIOUS",
+            success_responses=("OTA_ROLLBACK_ACK:REBOOTING",),
+            error_prefixes=("OTA_ROLLBACK_ERR:",),
+        )
         if not response:
-            print("No response from firmware for OTA_ROLLBACK_PREVIOUS")
+            print("No rollback ACK from firmware for OTA_ROLLBACK_PREVIOUS (timed out waiting on fea4)")
             return False
         if response == "OTA_ROLLBACK_ACK:REBOOTING":
             print("Firmware accepted OTA rollback. Device is rebooting to previous partition.")
@@ -1160,8 +1296,38 @@ class ToiletSystemInterface:
         if response.startswith("OTA_ROLLBACK_ERR:"):
             print(f"Firmware rejected OTA rollback: {response}")
             return False
+        if response == "AUTH_REQUIRED":
+            print("Firmware rejected OTA rollback: trust handshake required.")
+            return False
         print(f"Unexpected OTA rollback response: {response}")
         return False
+
+    async def enable_ota_mode(self) -> bool:
+        response = await self._send_command_and_read_response("ENABLE_OTA")
+        if not response or "ENABLE_OTA_ACK" not in response:
+            print(f"ENABLE_OTA failed: {response or '(no response)'}")
+            return False
+        await asyncio.sleep(OTA_ENABLE_WAIT_S)
+        return True
+
+    async def prepare_ota_update(self) -> bool:
+        """PREPARE_UPDATE only — records current partition in rollback NVS; does not transfer firmware."""
+        if not self.client or not self.connected:
+            print("Not connected to device")
+            return False
+        try:
+            await self.client.write_gatt_char(UPDATE_CHARACTERISTIC_UUID, b"PREPARE_UPDATE")
+            await asyncio.sleep(1.5)
+            response = await self.client.read_gatt_char(UPDATE_CHARACTERISTIC_UUID)
+            response_str = response.decode("utf-8", errors="replace")
+            if "UPDATE_PREPARED" in response_str:
+                print("PREPARE_UPDATE OK")
+                return True
+            print(f"PREPARE_UPDATE failed: {response_str}")
+            return False
+        except Exception as exc:
+            print(f"PREPARE_UPDATE failed: {exc}")
+            return False
 
     async def ota_rollback_factory(self) -> bool:
         """Request firmware rollback to the factory partition. Device reboots on success."""
@@ -1169,9 +1335,13 @@ class ToiletSystemInterface:
             if not await self.trust_handshake():
                 print("OTA factory rollback aborted: trust handshake required.")
                 return False
-        response = await self._send_command_and_read_response("OTA_ROLLBACK_FACTORY")
+        response = await self._send_command_and_poll_response(
+            "OTA_ROLLBACK_FACTORY",
+            success_responses=("OTA_ROLLBACK_FACTORY_ACK:REBOOTING",),
+            error_prefixes=("OTA_ROLLBACK_FACTORY_ERR:",),
+        )
         if not response:
-            print("No response from firmware for OTA_ROLLBACK_FACTORY")
+            print("No rollback ACK from firmware for OTA_ROLLBACK_FACTORY (timed out waiting on fea4)")
             return False
         if response == "OTA_ROLLBACK_FACTORY_ACK:REBOOTING":
             print("Firmware accepted factory rollback. Device is rebooting to factory partition.")
@@ -1180,6 +1350,9 @@ class ToiletSystemInterface:
             return True
         if response.startswith("OTA_ROLLBACK_FACTORY_ERR:"):
             print(f"Firmware rejected OTA factory rollback: {response}")
+            return False
+        if response == "AUTH_REQUIRED":
+            print("Firmware rejected OTA factory rollback: trust handshake required.")
             return False
         print(f"Unexpected OTA factory rollback response: {response}")
         return False
@@ -1343,8 +1516,10 @@ async def main():
             print("21. Trust handshake (press control panel button / GPIO2 wake line to confirm)")
             print("22. Manual OTA rollback to previous firmware")
             print("23. Manual OTA rollback to factory firmware")
+            print("24. Prepare OTA update (ENABLE_OTA + PREPARE_UPDATE, no transfer)")
+            print("25. Read active OTA/factory partition (GET_ACTIVE_PARTITION)")
             
-            choice = input("\nEnter your choice (1-23): ").strip()
+            choice = input("\nEnter your choice (1-25): ").strip()
             
             if choice == "1":
                 print("\nReading current parameters...")
@@ -1698,7 +1873,8 @@ async def main():
 
             elif choice == "22":
                 print("\nManual OTA rollback")
-                print("This will reboot the device to the previous firmware partition.")
+                print("This will reboot the device to the previous OTA partition.")
+                print("Firmware auto-seeds rollback NVS from the other OTA slot if missing.")
                 confirm = input("Type ROLLBACK to continue: ").strip()
                 if confirm != "ROLLBACK":
                     print("OTA rollback cancelled.")
@@ -1720,8 +1896,27 @@ async def main():
                 if ok:
                     break
 
+            elif choice == "24":
+                print("\nPrepare OTA update (PREPARE_UPDATE)")
+                print("Records current partition for rollback NVS before a BLE OTA transfer.")
+                ok = await interface.prepare_ota_for_update()
+                print("PREPARE_UPDATE succeeded." if ok else "PREPARE_UPDATE failed.")
+
+            elif choice == "25":
+                print("\nReading active partition...")
+                partition = await interface.get_active_partition()
+                if partition is None:
+                    print("Failed to read active partition")
+                else:
+                    print(
+                        f"Active partition: {partition.get('label')} "
+                        f"(subtype={partition.get('subtype')}, "
+                        f"offset={partition.get('offset', 'n/a')}, "
+                        f"version={partition.get('version', 'unknown')})"
+                    )
+
             else:
-                print("Invalid choice. Please enter 1-23.")
+                print("Invalid choice. Please enter 1-25.")
     
     except KeyboardInterrupt:
         print("\nProgram interrupted by user")

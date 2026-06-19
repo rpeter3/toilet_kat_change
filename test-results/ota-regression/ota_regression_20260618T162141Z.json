@@ -1,0 +1,17 @@
+{
+  "run_id": "20260618T162141Z",
+  "started_at": "2026-06-18T16:21:41.731174+00:00",
+  "ended_at": "2026-06-18T16:22:33.690009+00:00",
+  "passed": false,
+  "dry_run": false,
+  "port": "COM5",
+  "address": null,
+  "partition_sequence": [],
+  "steps": [],
+  "failures": [
+    "preflight: BLE device not found; provide --address or power on the toilet"
+  ],
+  "metadata": {
+    "preflight_error": "BLE device not found; provide --address or power on the toilet"
+  }
+}

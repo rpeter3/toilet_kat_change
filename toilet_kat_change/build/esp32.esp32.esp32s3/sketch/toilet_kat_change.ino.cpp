@@ -226,9 +226,19 @@ struct HWCFGConfigStore {
 //set this when building the firmware
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-const char* SOFTWARE_VERSION_NUMBER = "4.0.17.1";
+#if defined(__has_include)
+#  if __has_include("software_version_build.h")
+#    include "software_version_build.h"
+#  else
+const char* SOFTWARE_VERSION_NUMBER = "4.1.4";
 const char* FACTORY_SOFTWARE_DATE = "2026-06-18";
-const char* SOFTWARE_BUILD_DATE = __DATE__ " " __TIME__;
+const char* SOFTWARE_BUILD_DATE = "2026-06-19";  // YYYY-MM-DD — update with each build
+#  endif
+#else
+const char* SOFTWARE_VERSION_NUMBER = "4.1.4";
+const char* FACTORY_SOFTWARE_DATE = "2026-06-18";
+const char* SOFTWARE_BUILD_DATE = "2026-06-19";  // YYYY-MM-DD — update with each build
+#endif
 
 // Forward declarations
 // sendSerialToBLEImpl: setValue+notify (ungated) — use only for AUTH or internal plumbing.
@@ -326,12 +336,38 @@ void maintainEEPROMErrorIndicator();
 void startEEPROMWakeAlert();
 bool prepareForOTA();
 void notifyUpdateProgress(int percentage);
+
+enum FirmwareRollbackKind : uint8_t {
+  FIRMWARE_ROLLBACK_NONE = 0,
+  FIRMWARE_ROLLBACK_PREVIOUS,
+  FIRMWARE_ROLLBACK_FACTORY,
+};
+
+struct PendingFirmwareRollback {
+  char trigger[16];
+  char reason[32];
+};
+
+static volatile FirmwareRollbackKind g_pendingFirmwareRollback = FIRMWARE_ROLLBACK_NONE;
+static PendingFirmwareRollback g_pendingFirmwareRollbackInfo;
+static uint8_t s_otaLogTailCaptureBuf[OTA_LOG_TAIL_MAX_BYTES];
+
+static bool tryArmBleFirmwareRollback(FirmwareRollbackKind kind,
+                                      const char* trigger,
+                                      const char* reason,
+                                      bool factory,
+                                      char* errOut,
+                                      size_t errOutLen);
+
 bool rollbackOTAUpdate();
 bool rollbackOTAUpdateWithReason(String* errorCode);
 bool rollbackOTAUpdateToFactoryWithReason(String* errorCode);
 bool logOtaFactoryRollback(const char* trigger, const char* reason, String* errorCode);
-String handleManualOTARollback();
-String handleManualOTAFactoryRollback();
+bool executeFirmwareRollback(FirmwareRollbackKind kind,
+                             const char* trigger,
+                             const char* reason,
+                             String* errorCode);
+void processPendingFirmwareRollback();
 void executeFactoryRollbackFromHardware();
 bool validateFirmware();
 void handleOTAChunk(uint8_t* data, size_t length);
@@ -346,6 +382,7 @@ void mergeNvsLogTailToSpiffs();
 void markOtaPendingVerify();
 bool logOtaRollback(const char* trigger, const char* reason, String* errorCode);
 String buildOtaDiagResponse();
+String buildActivePartitionResponse();
 bool isOnOtaTargetPartition();
 void enableOTA();
 void disableOTA();
@@ -472,7 +509,7 @@ const int typicalOpeningTime = 5; //parameters_list[12] */
 // Parameters (defaults: 1.5mil High Barrier Plastic from material_parameters.csv)
 // Can't have global constant variables in C
 int batteryThreshold = 7; //parameters_list[0] minimum usable % before flush
-float K = 150.0; //parameters_list[1]
+float K = 140.0; //parameters_list[1]
 int F = 8; //parameters_list[2]
 long T = 60; //parameters_list[3] - Estimated cooling time for LED pacing (seconds)
 float thermistorResistance = 10000.0; // constant, not in BLE
@@ -482,7 +519,7 @@ int r4 = 2; // constant, not in BLE
 int fanDuration = 5; //parameters_list[5]
 long H = 30; //parameters_list[6] - Time (seconds) thermistor must be above K
 float continueFeeder = 6.0; //parameters_list[7]
-int maxOpeningTime = 12; //parameters_list[8]
+float maxOpeningTime = 16.5f; //parameters_list[8] — open/close mechanism phase timeout (seconds)
 int typicalOpeningTime = 10; //parameters_list[9]
 float MOTOR_CUT_TIME = 0.5; //parameters_list[10]
 float CUT_MODE_HEAT_TIME = 15.0; //parameters_list[11] - Additional time (seconds) above K in cut mode
@@ -491,7 +528,7 @@ float preFeedFan = 2.0; //parameters_list[13]
 float fanReverseTime = 12.0; //parameters_list[14]
 float fanReverseStartTime = 0.0; //parameters_list[15]
 float backupTimeAfterReopen = 1.7; //parameters_list[16]
-float CUT_MODE_TEMP = 150.0;      //parameters_list[17] - Temp to maintain for CUT_MODE_HEAT_TIME after cut
+float CUT_MODE_TEMP = 140.0;      //parameters_list[17] - Temp to maintain for CUT_MODE_HEAT_TIME after cut
 float heaterLowerToleranceC = 0.0; //parameters_list[18] - Turn heater ON at target-lower
 float heaterUpperToleranceC = 2.0; //parameters_list[19] - Turn heater OFF at target+upper (can be negative)
 float COOL_OPEN_TEMP_C = 80.0f; //parameters_list[20] - Open sealer below this thermistor temp
@@ -517,7 +554,7 @@ uint16_t batteryAssessSettleMs = kBatteryAssessDefaultSettleMs; //parameters_lis
 float heaterCapV255 = kBatteryAssessDefaultHeaterCapV255; //parameters_list[27]
 float heaterCapV170 = kBatteryAssessDefaultHeaterCapV170; //parameters_list[28]
 float heaterCapV100 = kBatteryAssessDefaultHeaterCapV100; //parameters_list[29]
-float heaterTargetTemp = 150.0;    // Active heater target (K or CUT_MODE_TEMP)
+float heaterTargetTemp = 140.0;    // Active heater target (K or CUT_MODE_TEMP)
 
 const int FLUSH_STEP_CANCEL_COOL = 14;
 
@@ -619,217 +656,231 @@ unsigned long suppressedM12RecoveryCycles = 0;
 unsigned long lastActivityMillis = 0;
 bool bleEnabled = true;
 
-#line 620 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 657 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void noteBleDiagnosticActivity();
-#line 656 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 693 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool otaTransferInProgress();
-#line 902 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 762 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+static unsigned long maxOpeningTimeMs();
+#line 941 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool enforceHeaterToleranceGap(const char* sourceTag, bool notifyBle);
-#line 1569 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 1624 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void mcp_setup();
-#line 1615 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 1670 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void mcp_digitalWrite(int pin, int value);
-#line 1623 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 1678 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 int mcp_digitalRead(int pin);
-#line 1947 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2002 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static bool detectCoredump(size_t* outSize);
-#line 1988 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2043 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static String base64EncodeBuffer(const uint8_t* data, size_t len);
-#line 2061 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2116 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static String getCurrentContextString();
-#line 2118 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2173 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void logDevFlush(const char* type, int code, const char* msg, bool includeContext);
-#line 2138 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2193 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void setFlushStep(int newStep, bool logTransition);
-#line 2434 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2504 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void copyBoundedString(char* dest, size_t destSize, const char* src);
-#line 2446 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2516 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool isIso8601DateOrEmpty(const char* dateValue);
-#line 2474 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2544 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool isSafeFieldString(const char* text, bool allowEmpty);
-#line 2494 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2564 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 uint32_t computeHardwareMatrixCRC(const HardwareMatrix& matrix);
-#line 2508 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2578 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void refreshHardwareMatrixCRC(HardwareMatrix& matrix);
-#line 2512 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2582 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void setHardwareComponentDefaults(HardwareComponentEntry& entry, const char* version, const char* description, const char* installDate);
-#line 2521 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2591 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void initializeDefaultHardwareMatrix(HardwareMatrix& matrix);
-#line 2540 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2610 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool syncSoftwareVersionMatrixEntry(HardwareMatrix& matrix);
-#line 2558 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2628 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool tryLoadHardwareMatrixFromNvs(const char* key, HardwareMatrix& outMatrix, String& validationError, bool* outRepaired);
-#line 2569 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2639 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool validateHardwareMatrix(const HardwareMatrix& matrix, String* errorCode);
-#line 2629 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2699 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool loadHardwareMatrixBlob(const char* key, HardwareMatrix& outMatrix);
-#line 2648 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2718 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool saveHardwareMatrixBlob(const HardwareMatrix& matrix, bool updateLastKnownGood);
-#line 2846 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2916 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 uint32_t computeCRC32Bytes(const uint8_t* bytes, size_t len);
-#line 2858 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2928 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 uint32_t computeHWCFGCRC(const HWCFGConfigStore& store);
-#line 2863 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2933 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void refreshHWCFGCRC(HWCFGConfigStore& store);
-#line 2867 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2937 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool parseStrictFloat(const String& input, float& out);
-#line 2888 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2958 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool isKnownParameterKey(const String& key);
-#line 2901 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2971 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool validateParameterBlob(const String& componentName, const String& paramsBlob, String& errorCode);
-#line 3002 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3072 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool applyParameterBlobToRuntime(const String& paramsBlob, String& errorCode);
-#line 3080 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3150 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 int findHWCFGProfileIndex(const String& componentName, const String& componentVersion);
-#line 3091 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3161 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 int allocateHWCFGProfileSlot();
-#line 3100 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3170 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 const char * hwcfgFilePathForKey(const char* key);
-#line 3110 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3180 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool loadHWCFGBlobFromNVS(const char* key, HWCFGConfigStore& outStore);
-#line 3127 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3197 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool loadHWCFGBlobFromSPIFFS(const char* path, HWCFGConfigStore& outStore);
-#line 3144 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3214 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool loadHWCFGBlob(const char* key, HWCFGConfigStore& outStore);
-#line 3152 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3222 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool saveHWCFGBlobFile(const char* path, const HWCFGConfigStore& store);
-#line 3190 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
-bool saveHWCFGBlob(const HWCFGConfigStore& store, bool updateLastGood);
-#line 3201 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
-bool migrateHWCFGBlobFromNVSToSPIFFS(const char* key, const HWCFGConfigStore& store);
-#line 3213 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
-bool validateHWCFGStore(const HWCFGConfigStore& store, String& errorCode);
 #line 3260 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+bool saveHWCFGBlob(const HWCFGConfigStore& store, bool updateLastGood);
+#line 3271 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+bool migrateHWCFGBlobFromNVSToSPIFFS(const char* key, const HWCFGConfigStore& store);
+#line 3283 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+bool validateHWCFGStore(const HWCFGConfigStore& store, String& errorCode);
+#line 3330 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void initializeDefaultHWCFG(HWCFGConfigStore& store);
-#line 3336 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3406 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 String buildHWCFGActiveSummary(bool lastGood);
-#line 3360 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3430 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool validateCandidateChange(const String& componentName, const String& newVersion, int& outProfileIndex, String& reason);
-#line 3941 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 4011 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static void initDefaultOtaDiag(OtaDiagStore& diag);
-#line 3950 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 4020 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static void copyPartitionLabel(const esp_partition_t* part, char* buf, size_t len);
-#line 3962 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 4032 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static const esp_partition_t* findPartitionBySubtype(uint8_t subtype);
-#line 3972 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 4042 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static const char * otaResetReasonToString(esp_reset_reason_t reason);
-#line 3988 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 4058 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static bool otaIsAbnormalResetReason(esp_reset_reason_t reason);
-#line 3993 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 4063 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static void loadOtaDiag(OtaDiagStore& diag);
-#line 4023 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 4093 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static bool saveOtaDiag(const OtaDiagStore& diag);
-#line 4059 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 4129 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static bool captureSpiffsLogTailToNvs(OtaDiagStore& diag);
-#line 4492 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 4341 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+static bool otaPartitionHasAppImage(const esp_partition_t* part);
+#line 4352 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+static const esp_partition_t* findAlternateOtaSlotPartition();
+#line 4372 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+static bool persistRollbackSubtype(uint8_t subtype);
+#line 4389 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+static bool applyRollbackBootPartition(const esp_partition_t* rollback_partition, String* errorCode);
+#line 4420 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+static const esp_partition_t* resolveRollbackTargetPartition(bool* usedAlternateOut);
+#line 4648 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static String getFirmwareRollbackBusyError();
-#line 4845 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 4658 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+static const char * getFirmwareRollbackBusyErrorCode();
+#line 5048 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void heaterEmergencyShutdown();
-#line 4925 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 5128 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void enableM12Drivers();
-#line 4930 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 5133 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void disableM12Drivers();
-#line 4935 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 5138 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool getM1Fault();
-#line 4939 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 5142 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool getM2Fault();
-#line 4943 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 5146 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool getM12Fault();
-#line 4947 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 5150 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void clearHeaterRtcSession();
-#line 4987 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 5190 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static size_t getErrorLogFileSize();
-#line 5212 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 5415 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void latchHeaterFailsafeError(const char* msg);
-#line 5386 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 5589 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void testHeaterCurrent(bool lowBatteryAsError);
-#line 5490 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 5693 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void setup();
-#line 5652 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 5855 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void loop();
-#line 6231 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 6435 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void flushSequence();
-#line 6808 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 7012 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void flashLowBattLeds(int n);
-#line 6831 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 7035 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void circleLeds();
-#line 6842 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 7046 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void resetFeedButtonLeds();
-#line 6851 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 7055 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void updateFeedButtonLeds(bool forceImmediate);
-#line 7084 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 7288 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void publishOTAStatus(const String& status, bool notify);
-#line 7094 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 7298 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void publishOTAErrorStatus(const char* reasonCode, const char* detail);
-#line 7358 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 7562 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static float batteryVoltageFromAdc(int analogValue);
-#line 7363 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 7567 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static int batteryChargeLevelFromVoltage(float batteryVoltage);
-#line 7418 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 7622 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static int usablePercentFromVLoad(float vLoad);
-#line 7428 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 7632 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static bool shouldRefreshBatteryCache(bool forceRefresh);
-#line 7441 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 7645 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static void storeBatteryAssessment(float vIdle, float vLoadWorst, float sagWorst, int capDuty, bool assessPassed);
-#line 7454 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 7658 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static void resetRuntimeSagStrikes();
-#line 7459 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 7663 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static bool checkRuntimeSagDebounced(float v, const char* reason);
-#line 7482 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 7686 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static float heaterCurrentFromAdc(int analogValue);
-#line 7491 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 7695 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static void emitBatteryReportLine(const char* line);
-#line 7544 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 7748 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void logPowerTestEvent(const char* phase, const char* msg, bool includeContext);
-#line 7557 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 7761 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool measureBatteryUnderLoad(float* vIdle, float* vLoad, int testDuty, uint16_t settleMs, const char* testTag);
-#line 7627 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 7831 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool assessBatteryUsable(const char* tag, bool forceRefresh, bool* outFlushAllowed);
-#line 7760 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 7964 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool isFlushAllowedByBattery(bool forceRefresh);
-#line 8030 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8234 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 float readBatteryTemperature();
-#line 8070 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8274 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 int getBatteryChargeLevel();
-#line 8108 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8312 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void displayBatteryChargeLevel();
-#line 8136 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8340 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void flashLEDsAcknowledgment();
-#line 8147 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8351 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void flushStartLEDAnimation();
-#line 8350 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8554 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 float clampLedProgress(float value);
-#line 8356 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8560 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 int clampLedIndex(int index);
-#line 8378 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8582 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void allocateLedStepsFromDurations(const unsigned long durationsMs[5], int totalSteps);
-#line 8447 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8651 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void rebuildLedSectionBoundaries();
-#line 8457 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8661 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 int computeSectionTargetLedIndex(int section, float progress);
-#line 8477 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8681 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void determineLedSectionAndProgress(unsigned long currentMillis, float currentTemp, int &section, float &progress);
-#line 8575 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8779 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void calculateSequenceTiming();
-#line 8629 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8833 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void updateLEDs();
-#line 8684 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8888 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void locateMotorPos();
-#line 8698 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8902 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void startMotorHoming(bool batteryPreflightPassed);
-#line 8837 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 9041 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void checkMotorFaults();
-#line 8923 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 9127 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void setFanSpeed(int speed);
-#line 8942 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 9146 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool getM3Fault();
-#line 9025 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 9229 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void checkAllMotorFaults();
-#line 9228 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 9432 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void captureSerialOutput();
-#line 9234 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 9438 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void streamSerialToBLE();
-#line 620 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 657 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void noteBleDiagnosticActivity() {
   lastActivityMillis = millis();
   bleIdleStartTime = millis();
@@ -935,7 +986,9 @@ float ledHeatTargetTempC = 0.0f;
 float ledCoolStartTempC = 0.0f;
 float ledCoolStartRefTempC = 0.0f;
 
-const unsigned int TIMEOUT = 15000;
+static unsigned long maxOpeningTimeMs() {
+  return (unsigned long)(maxOpeningTime * 1000.0f);
+}
 
 int ERROR_CODE = 0;
 //ERROR_CODE = 1 ==> Mechanism Motor Timeout
@@ -1104,7 +1157,7 @@ static unsigned long runtimeSagLastStrikeMs = 0;
 DualMAX14870MotorShield motors(M1DIR_PIN, M1PWM_PIN, M2DIR_PIN, M2PWM_PIN, M2NEN_PIN, M2NFAULT_PIN);
 
 // Heater PID (Kp=65, Ki=0.005, Kd=5.0, sample=250ms)
-double heaterSetpoint = 150.0;
+double heaterSetpoint = 140.0;
 double heaterInput = 0.0;
 double heaterOutput = 0.0;
 double heaterKp = 65.0;
@@ -1185,6 +1238,9 @@ void updateTrustTimeout() {
 }
 
 bool isTrustedConnection() {
+  if (devModeEnabled) {
+    return true;
+  }
   return g_trustState == TRUST_STATE_TRUSTED;
 }
 
@@ -1193,6 +1249,10 @@ class server_callbacks: public BLEServerCallbacks {
   void onConnect(BLEServer * blue_server) {
     is_device_connected = true;
     resetTrustState();
+    if (devModeEnabled) {
+      g_trustState = TRUST_STATE_TRUSTED;
+      Serial.println("DEV mode on: BLE trust auto-granted on connect");
+    }
     Serial.println("Device connected!");
     sendSerialToBLE("BLE Device Connected!");
     
@@ -1243,7 +1303,7 @@ class server_callbacks: public BLEServerCallbacks {
       fanDuration = (int)parameters_list[5];
       H = (long)parameters_list[6];
       continueFeeder = parameters_list[7];
-      maxOpeningTime = (int)parameters_list[8];
+      maxOpeningTime = parameters_list[8];
       typicalOpeningTime = (int)parameters_list[9];
       MOTOR_CUT_TIME = parameters_list[10];
       CUT_MODE_HEAT_TIME = parameters_list[11];
@@ -1394,24 +1454,20 @@ class command_characteristic_callbacks: public BLECharacteristicCallbacks {
       return;
     }
     if (cmd == "OTA_ROLLBACK_PREVIOUS") {
-      String rollbackResponse = handleManualOTARollback();
-      writeResponseToChannel(rollbackResponse);
-      Serial.printf("Processed OTA_ROLLBACK_PREVIOUS -> %s\n", rollbackResponse.c_str());
-      sendSerialToBLE("Processed OTA_ROLLBACK_PREVIOUS");
-      if (rollbackResponse == "OTA_ROLLBACK_ACK:REBOOTING") {
-        delay(500);
-        esp_restart();
+      char errBuf[48];
+      if (!tryArmBleFirmwareRollback(FIRMWARE_ROLLBACK_PREVIOUS, "manual", "manual_support_request",
+                                     false, errBuf, sizeof(errBuf))) {
+        writeResponseToChannel(errBuf);
+        Serial.printf("Rejected OTA_ROLLBACK_PREVIOUS -> %s\n", errBuf);
       }
       return;
     }
     if (cmd == "OTA_ROLLBACK_FACTORY") {
-      String rollbackResponse = handleManualOTAFactoryRollback();
-      writeResponseToChannel(rollbackResponse);
-      Serial.printf("Processed OTA_ROLLBACK_FACTORY -> %s\n", rollbackResponse.c_str());
-      sendSerialToBLE("Processed OTA_ROLLBACK_FACTORY");
-      if (rollbackResponse == "OTA_ROLLBACK_FACTORY_ACK:REBOOTING") {
-        delay(500);
-        esp_restart();
+      char errBuf[56];
+      if (!tryArmBleFirmwareRollback(FIRMWARE_ROLLBACK_FACTORY, "manual", "factory_request",
+                                     true, errBuf, sizeof(errBuf))) {
+        writeResponseToChannel(errBuf);
+        Serial.printf("Rejected OTA_ROLLBACK_FACTORY -> %s\n", errBuf);
       }
       return;
     }
@@ -1509,6 +1565,11 @@ class command_characteristic_callbacks: public BLECharacteristicCallbacks {
     }
     updateTrustTimeout();
     if (cmd == "TRUST_START") {
+      if (devModeEnabled) {
+        g_trustState = TRUST_STATE_TRUSTED;
+        writeResponseToChannel("TRUST_CONFIRMED");
+        return;
+      }
       if (g_trustState == TRUST_STATE_TRUSTED) {
         writeResponseToChannel("TRUST_CONFIRMED");
         return;
@@ -1518,7 +1579,7 @@ class command_characteristic_callbacks: public BLECharacteristicCallbacks {
       return;
     }
     if (cmd == "TRUST_STATUS") {
-      if (g_trustState == TRUST_STATE_TRUSTED) {
+      if (devModeEnabled || g_trustState == TRUST_STATE_TRUSTED) {
         writeResponseToChannel("TRUST_CONFIRMED");
         return;
       }
@@ -1583,6 +1644,14 @@ class command_characteristic_callbacks: public BLECharacteristicCallbacks {
       writeResponseToChannel(response);
       Serial.printf("Processed GET_OTA_DIAG -> %s\n", response.substring(0, 80).c_str());
       sendSerialToBLE("Processed GET_OTA_DIAG");
+      return;
+    }
+    if (cmd == "GET_ACTIVE_PARTITION") {
+      noteBleDiagnosticActivity();
+      String response = buildActivePartitionResponse();
+      writeResponseToChannel(response);
+      Serial.printf("Processed GET_ACTIVE_PARTITION -> %s\n", response.c_str());
+      sendSerialToBLE("Processed GET_ACTIVE_PARTITION");
       return;
     }
     if (cmd.startsWith("SET_DEV_MODE:")) {
@@ -1676,7 +1745,7 @@ class param_write_characteristic_callbacks: public BLECharacteristicCallbacks {
     fanDuration = (int)parameters_list[5];
     H = (long)parameters_list[6];
     continueFeeder = parameters_list[7];
-    maxOpeningTime = (int)parameters_list[8];
+    maxOpeningTime = parameters_list[8];
     typicalOpeningTime = (int)parameters_list[9];
     MOTOR_CUT_TIME = parameters_list[10];
     CUT_MODE_HEAT_TIME = parameters_list[11];
@@ -2433,7 +2502,22 @@ void loadParametersFromEEPROM() {
     EEPROM.get(addr, fanDuration); addr += sizeof(fanDuration);
     EEPROM.get(addr, H); addr += sizeof(H);
     EEPROM.get(addr, continueFeeder); addr += sizeof(continueFeeder);
-    EEPROM.get(addr, maxOpeningTime); addr += sizeof(maxOpeningTime);
+    {
+      // Legacy EEPROM stored maxOpeningTime as int32; current firmware uses float.
+      union {
+        int32_t legacyInt;
+        float asFloat;
+      } maxOpenRaw;
+      EEPROM.get(addr, maxOpenRaw.asFloat);
+      addr += sizeof(maxOpenRaw.asFloat);
+      if (maxOpenRaw.asFloat >= 1.0f && maxOpenRaw.asFloat <= 120.0f && maxOpenRaw.asFloat == maxOpenRaw.asFloat) {
+        maxOpeningTime = maxOpenRaw.asFloat;
+      } else if (maxOpenRaw.legacyInt >= 1 && maxOpenRaw.legacyInt <= 120) {
+        maxOpeningTime = (float)maxOpenRaw.legacyInt;
+      } else {
+        maxOpeningTime = 16.5f;
+      }
+    }
     EEPROM.get(addr, typicalOpeningTime); addr += sizeof(typicalOpeningTime);
     EEPROM.get(addr, MOTOR_CUT_TIME); addr += sizeof(MOTOR_CUT_TIME);
     EEPROM.get(addr, CUT_MODE_HEAT_TIME); addr += sizeof(CUT_MODE_HEAT_TIME);
@@ -2745,7 +2829,7 @@ void initializeDefaultHardwareMatrix(HardwareMatrix& matrix) {
   setHardwareComponentDefaults(matrix.components[HW_THERMISTOR], "1", "VERSION OF THE THERMISTOR IN THE HEATING ELEMENT", "2026-02-28");
   setHardwareComponentDefaults(matrix.components[HW_BATTERY], "1", "VERSION OF THE BATTERY POWER SUPPLY", "2026-02-28");
   setHardwareComponentDefaults(matrix.components[HW_FACTORY_SOFTWARE_DATE], FACTORY_SOFTWARE_DATE, "DATE OF THE FACTORY SOFTWARE", FACTORY_SOFTWARE_DATE);
-  setHardwareComponentDefaults(matrix.components[HW_SOFTWARE_VERSION_NUMBER], SOFTWARE_VERSION_NUMBER, "SOFTWARE VERSION NUMBER", FACTORY_SOFTWARE_DATE);
+  setHardwareComponentDefaults(matrix.components[HW_SOFTWARE_VERSION_NUMBER], SOFTWARE_VERSION_NUMBER, "SOFTWARE VERSION NUMBER", SOFTWARE_BUILD_DATE);
   refreshHardwareMatrixCRC(matrix);
 }
 
@@ -2759,7 +2843,7 @@ bool syncSoftwareVersionMatrixEntry(HardwareMatrix& matrix) {
     changed = true;
   }
   if (!isIso8601DateOrEmpty(entry.install_date) || entry.install_date[0] == '\0') {
-    copyBoundedString(entry.install_date, sizeof(entry.install_date), FACTORY_SOFTWARE_DATE);
+    copyBoundedString(entry.install_date, sizeof(entry.install_date), SOFTWARE_BUILD_DATE);
     changed = true;
   }
   if (changed) {
@@ -3245,7 +3329,7 @@ bool applyParameterBlobToRuntime(const String& paramsBlob, String& errorCode) {
       else if (key == "fanDuration") fanDuration = (int)numericValue;
       else if (key == "H") H = (long)numericValue;
       else if (key == "continueFeeder") continueFeeder = numericValue;
-      else if (key == "maxOpeningTime") maxOpeningTime = (int)numericValue;
+      else if (key == "maxOpeningTime") maxOpeningTime = numericValue;
       else if (key == "typicalOpeningTime") typicalOpeningTime = (int)numericValue;
       else if (key == "MOTOR_CUT_TIME") MOTOR_CUT_TIME = numericValue;
       else if (key == "CUT_MODE_HEAT_TIME") CUT_MODE_HEAT_TIME = numericValue;
@@ -3788,7 +3872,7 @@ String handleHWCFGCommand(const String& cmd) {
     int oldFanDuration = fanDuration;
     long oldH = H;
     float oldContinueFeeder = continueFeeder;
-    int oldMaxOpeningTime = maxOpeningTime;
+    float oldMaxOpeningTime = maxOpeningTime;
     int oldTypicalOpeningTime = typicalOpeningTime;
     float oldMotorCutTime = MOTOR_CUT_TIME;
     float oldCutModeHeatTime = CUT_MODE_HEAT_TIME;
@@ -4275,7 +4359,6 @@ static bool captureSpiffsLogTailToNvs(OtaDiagStore& diag) {
     return false;
   }
 
-  uint8_t tail[OTA_LOG_TAIL_MAX_BYTES];
   size_t tailLen = 0;
 
   if (errorLogInitialized) {
@@ -4284,7 +4367,7 @@ static bool captureSpiffsLogTailToNvs(OtaDiagStore& diag) {
       size_t fileSize = f.size();
       size_t offset = (fileSize > OTA_LOG_TAIL_MAX_BYTES) ? (fileSize - OTA_LOG_TAIL_MAX_BYTES) : 0;
       f.seek(offset, SeekSet);
-      tailLen = f.read(tail, OTA_LOG_TAIL_MAX_BYTES);
+      tailLen = f.read(s_otaLogTailCaptureBuf, OTA_LOG_TAIL_MAX_BYTES);
       f.close();
     }
   }
@@ -4293,7 +4376,7 @@ static bool captureSpiffsLogTailToNvs(OtaDiagStore& diag) {
   diag.log_tail_mirrored = 0;
 
   if (tailLen > 0) {
-    nvs_set_blob(nvs_handle, "ota_log_tail", tail, tailLen);
+    nvs_set_blob(nvs_handle, "ota_log_tail", s_otaLogTailCaptureBuf, tailLen);
   } else {
     nvs_erase_key(nvs_handle, "ota_log_tail");
   }
@@ -4326,11 +4409,10 @@ void mergeNvsLogTailToSpiffs() {
     return;
   }
 
-  uint8_t tail[OTA_LOG_TAIL_MAX_BYTES];
-  if (blobSize > sizeof(tail)) {
-    blobSize = sizeof(tail);
+  if (blobSize > OTA_LOG_TAIL_MAX_BYTES) {
+    blobSize = OTA_LOG_TAIL_MAX_BYTES;
   }
-  if (nvs_get_blob(nvs_handle, "ota_log_tail", tail, &blobSize) != ESP_OK) {
+  if (nvs_get_blob(nvs_handle, "ota_log_tail", s_otaLogTailCaptureBuf, &blobSize) != ESP_OK) {
     nvs_close(nvs_handle);
     return;
   }
@@ -4340,7 +4422,7 @@ void mergeNvsLogTailToSpiffs() {
   snprintf(header, sizeof(header), "len=%u,seq=%u", (unsigned)blobSize, (unsigned)diag.event_seq);
   logError("ota_spiffs_capture", 0, header, false);
 
-  const char* start = (const char*)tail;
+  const char* start = (const char*)s_otaLogTailCaptureBuf;
   const char* end = start + blobSize;
   while (start < end) {
     const char* nl = (const char*)memchr(start, '\n', (size_t)(end - start));
@@ -4483,20 +4565,55 @@ static void recordOtaRollbackDiag(const char* trigger,
                                   const char* reason,
                                   const esp_partition_t* target_partition);
 
-bool logOtaRollback(const char* trigger, const char* reason, String* errorCode) {
-  running_partition = esp_ota_get_running_partition();
-  uint8_t rollback_subtype = OTA_SUBTYPE_UNSET;
-  nvs_handle_t nvs_handle;
-  if (nvs_open("ota", NVS_READONLY, &nvs_handle) != ESP_OK) {
-    if (errorCode != NULL) {
-      *errorCode = "NVS_OPEN_FAILED";
-    }
+static bool otaPartitionHasAppImage(const esp_partition_t* part) {
+  if (part == NULL) {
     return false;
   }
-  nvs_get_u8(nvs_handle, "rollback_subtype", &rollback_subtype);
-  nvs_close(nvs_handle);
+  uint8_t magic = 0;
+  if (esp_partition_read(part, 0, &magic, 1) != ESP_OK) {
+    return false;
+  }
+  return magic == ESP_IMAGE_HEADER_MAGIC;
+}
 
-  const esp_partition_t* rollback_partition = findPartitionBySubtype(rollback_subtype);
+static const esp_partition_t* findAlternateOtaSlotPartition() {
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  if (running == NULL) {
+    return NULL;
+  }
+  const esp_partition_t* alt = NULL;
+  if (running->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0) {
+    alt = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, NULL);
+  } else if (running->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_1) {
+    alt = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0, NULL);
+  } else {
+    return NULL;
+  }
+  if (alt == NULL || alt == running || !otaPartitionHasAppImage(alt)) {
+    return NULL;
+  }
+  return alt;
+}
+
+// When NVS rollback metadata is missing (esptool flash), seed from the other OTA slot.
+static bool persistRollbackSubtype(uint8_t subtype) {
+  nvs_handle_t nvs_handle;
+  esp_err_t err = nvs_open("ota", NVS_READWRITE, &nvs_handle);
+  if (err != ESP_OK) {
+    return false;
+  }
+  err = nvs_set_u8(nvs_handle, "rollback_subtype", subtype);
+  if (err == ESP_OK) {
+    err = nvs_set_u8(nvs_handle, "rollback_flag", 0);
+  }
+  if (err == ESP_OK) {
+    err = nvs_commit(nvs_handle);
+  }
+  nvs_close(nvs_handle);
+  return err == ESP_OK;
+}
+
+static bool applyRollbackBootPartition(const esp_partition_t* rollback_partition, String* errorCode) {
   if (rollback_partition == NULL) {
     if (errorCode != NULL) {
       *errorCode = "NO_ROLLBACK_PARTITION";
@@ -4504,8 +4621,84 @@ bool logOtaRollback(const char* trigger, const char* reason, String* errorCode) 
     return false;
   }
 
+  esp_err_t err = esp_ota_set_boot_partition(rollback_partition);
+  if (err != ESP_OK) {
+    Serial.printf("ERROR: Failed to set boot partition: %s\n", esp_err_to_name(err));
+    if (errorCode != NULL) {
+      *errorCode = "SET_BOOT_FAILED";
+    }
+    return false;
+  }
+
+  nvs_handle_t nvs_handle;
+  if (nvs_open("ota", NVS_READWRITE, &nvs_handle) == ESP_OK) {
+    nvs_set_u8(nvs_handle, "rollback_flag", 0);
+    nvs_commit(nvs_handle);
+    nvs_close(nvs_handle);
+  }
+
+  Serial.printf("Rollback successful to partition: %s\n", rollback_partition->label);
+  if (errorCode != NULL) {
+    *errorCode = "";
+  }
+  return true;
+}
+
+static const esp_partition_t* resolveRollbackTargetPartition(bool* usedAlternateOut) {
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  const esp_partition_t* rollback_partition = NULL;
+  uint8_t rollback_subtype = OTA_SUBTYPE_UNSET;
+
+  nvs_handle_t nvs_handle;
+  if (nvs_open("ota", NVS_READONLY, &nvs_handle) == ESP_OK) {
+    if (nvs_get_u8(nvs_handle, "rollback_subtype", &rollback_subtype) == ESP_OK) {
+      rollback_partition = findPartitionBySubtype(rollback_subtype);
+    }
+    nvs_close(nvs_handle);
+  }
+
+  const esp_partition_t* alternate = findAlternateOtaSlotPartition();
+  if (rollback_partition == NULL || (running != NULL && rollback_partition == running)) {
+    if (alternate == NULL) {
+      if (usedAlternateOut != NULL) {
+        *usedAlternateOut = false;
+      }
+      return NULL;
+    }
+    if (usedAlternateOut != NULL) {
+      *usedAlternateOut = true;
+    }
+    if (!persistRollbackSubtype(alternate->subtype)) {
+      Serial.println("WARN: rollback NVS persist failed; continuing with direct partition switch");
+    } else {
+      Serial.printf("Rollback NVS recorded: subtype=%u (%s)\n",
+                    (unsigned)alternate->subtype, alternate->label);
+    }
+    return alternate;
+  }
+
+  if (usedAlternateOut != NULL) {
+    *usedAlternateOut = false;
+  }
+  return rollback_partition;
+}
+
+bool logOtaRollback(const char* trigger, const char* reason, String* errorCode) {
+  running_partition = esp_ota_get_running_partition();
+  bool usedAlternate = false;
+  const esp_partition_t* rollback_partition = resolveRollbackTargetPartition(&usedAlternate);
+  if (rollback_partition == NULL) {
+    if (errorCode != NULL) {
+      *errorCode = "NO_ROLLBACK_INFO";
+    }
+    return false;
+  }
+  if (usedAlternate) {
+    Serial.println("Rollback: using alternate OTA slot (NVS missing or pointed at current slot)");
+  }
+
   recordOtaRollbackDiag(trigger, reason, rollback_partition);
-  return rollbackOTAUpdateWithReason(errorCode);
+  return applyRollbackBootPartition(rollback_partition, errorCode);
 }
 
 String buildOtaDiagResponse() {
@@ -4580,6 +4773,32 @@ String buildOtaDiagResponse() {
   return resp;
 }
 
+String buildActivePartitionResponse() {
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  if (running == NULL) {
+    return "ACTIVE_PARTITION_ERR:NO_RUNNING_PARTITION";
+  }
+
+  char label[20];
+  copyPartitionLabel(running, label, sizeof(label));
+
+  char version[32] = "unknown";
+  esp_app_desc_t app_desc;
+  if (esp_ota_get_partition_description(running, &app_desc) == ESP_OK) {
+    strncpy(version, app_desc.version, sizeof(version) - 1);
+    version[sizeof(version) - 1] = '\0';
+  }
+
+  char buf[128];
+  snprintf(buf, sizeof(buf),
+           "ACTIVE_PARTITION:label=%s|subtype=%u|offset=0x%08X|version=%s",
+           label,
+           (unsigned)running->subtype,
+           (unsigned)running->address,
+           version);
+  return String(buf);
+}
+
 // Save rollback information to NVS
 void saveRollbackInfo() {
   running_partition = esp_ota_get_running_partition();
@@ -4634,68 +4853,19 @@ void checkBootFailure() {
 // Rollback to previous partition
 bool rollbackOTAUpdateWithReason(String* errorCode) {
   Serial.println("Attempting OTA rollback...");
-  
-  nvs_handle_t nvs_handle;
-  esp_err_t err = nvs_open("ota", NVS_READWRITE, &nvs_handle);
-  if (err != ESP_OK) {
-    Serial.println("ERROR: Failed to open NVS for rollback");
-    if (errorCode != NULL) {
-      *errorCode = "NVS_OPEN_FAILED";
-    }
-    return false;
-  }
-  
-  uint8_t rollback_subtype;
-  err = nvs_get_u8(nvs_handle, "rollback_subtype", &rollback_subtype);
-  if (err != ESP_OK) {
-    Serial.println("ERROR: Failed to get rollback partition info");
-    nvs_close(nvs_handle);
+  bool usedAlternate = false;
+  const esp_partition_t* rollback_partition = resolveRollbackTargetPartition(&usedAlternate);
+  if (rollback_partition == NULL) {
+    Serial.println("ERROR: No rollback partition available");
     if (errorCode != NULL) {
       *errorCode = "NO_ROLLBACK_INFO";
     }
     return false;
   }
-  
-  // Find the rollback partition
-  const esp_partition_t *rollback_partition = NULL;
-  if (rollback_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0) {
-    rollback_partition = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0, NULL);
-  } else if (rollback_subtype == ESP_PARTITION_SUBTYPE_APP_OTA_1) {
-    rollback_partition = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, NULL);
-  } else {
-    rollback_partition = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
+  if (usedAlternate) {
+    Serial.println("Rollback: using alternate OTA slot (NVS missing or pointed at current slot)");
   }
-  
-  if (rollback_partition == NULL) {
-    Serial.println("ERROR: Cannot find rollback partition");
-    nvs_close(nvs_handle);
-    if (errorCode != NULL) {
-      *errorCode = "NO_ROLLBACK_PARTITION";
-    }
-    return false;
-  }
-  
-  // Set boot partition to rollback partition
-  err = esp_ota_set_boot_partition(rollback_partition);
-  if (err != ESP_OK) {
-    Serial.printf("ERROR: Failed to set boot partition: %s\n", esp_err_to_name(err));
-    nvs_close(nvs_handle);
-    if (errorCode != NULL) {
-      *errorCode = "SET_BOOT_FAILED";
-    }
-    return false;
-  }
-  
-  // Clear rollback flag (boot counters cleared in logOtaRollback / confirmOtaBootOk)
-  nvs_set_u8(nvs_handle, "rollback_flag", 0);
-  nvs_commit(nvs_handle);
-  nvs_close(nvs_handle);
-  
-  Serial.printf("Rollback successful to partition: %s\n", rollback_partition->label);
-  if (errorCode != NULL) {
-    *errorCode = "";
-  }
-  return true;
+  return applyRollbackBootPartition(rollback_partition, errorCode);
 }
 
 bool rollbackOTAUpdate() {
@@ -4710,6 +4880,99 @@ static String getFirmwareRollbackBusyError() {
     return "BUSY_FLUSH";
   }
   return "";
+}
+
+static const char* getFirmwareRollbackBusyErrorCode() {
+  if (otaTransferInProgress() || updateInProgress || ota_handle != 0) {
+    return "BUSY_OTA";
+  }
+  if (isFlushing || motorHomingActive || mechanismMotorRunning || manualFeedActive) {
+    return "BUSY_FLUSH";
+  }
+  return NULL;
+}
+
+static bool tryArmBleFirmwareRollback(FirmwareRollbackKind kind,
+                                      const char* trigger,
+                                      const char* reason,
+                                      bool factory,
+                                      char* errOut,
+                                      size_t errOutLen) {
+  const char* errPrefix = factory ? "OTA_ROLLBACK_FACTORY_ERR:" : "OTA_ROLLBACK_ERR:";
+  if (errOutLen > 0) {
+    errOut[0] = '\0';
+  }
+  if (!isTrustedConnection()) {
+    snprintf(errOut, errOutLen, "%sAUTH_REQUIRED", errPrefix);
+    return false;
+  }
+  const char* busyCode = getFirmwareRollbackBusyErrorCode();
+  if (busyCode != NULL) {
+    snprintf(errOut, errOutLen, "%s%s", errPrefix, busyCode);
+    return false;
+  }
+  if (g_pendingFirmwareRollback != FIRMWARE_ROLLBACK_NONE) {
+    snprintf(errOut, errOutLen, "%sBUSY_ROLLBACK", errPrefix);
+    return false;
+  }
+  strncpy(g_pendingFirmwareRollbackInfo.trigger, trigger != NULL ? trigger : "",
+          sizeof(g_pendingFirmwareRollbackInfo.trigger) - 1);
+  g_pendingFirmwareRollbackInfo.trigger[sizeof(g_pendingFirmwareRollbackInfo.trigger) - 1] = '\0';
+  strncpy(g_pendingFirmwareRollbackInfo.reason, reason != NULL ? reason : "",
+          sizeof(g_pendingFirmwareRollbackInfo.reason) - 1);
+  g_pendingFirmwareRollbackInfo.reason[sizeof(g_pendingFirmwareRollbackInfo.reason) - 1] = '\0';
+  g_pendingFirmwareRollback = kind;
+  return true;
+}
+
+bool executeFirmwareRollback(FirmwareRollbackKind kind,
+                             const char* trigger,
+                             const char* reason,
+                             String* errorCode) {
+  if (kind == FIRMWARE_ROLLBACK_PREVIOUS) {
+    return logOtaRollback(trigger, reason, errorCode);
+  }
+  if (kind == FIRMWARE_ROLLBACK_FACTORY) {
+    return logOtaFactoryRollback(trigger, reason, errorCode);
+  }
+  if (errorCode != NULL) {
+    *errorCode = "FAILED";
+  }
+  return false;
+}
+
+void processPendingFirmwareRollback() {
+  FirmwareRollbackKind kind = g_pendingFirmwareRollback;
+  if (kind == FIRMWARE_ROLLBACK_NONE) {
+    return;
+  }
+  g_pendingFirmwareRollback = FIRMWARE_ROLLBACK_NONE;
+
+  PendingFirmwareRollback info = g_pendingFirmwareRollbackInfo;
+  const bool factory = (kind == FIRMWARE_ROLLBACK_FACTORY);
+
+  logError("ota", 0, factory ? "manual_factory_rollback_requested" : "manual_rollback_requested", false);
+
+  String rollbackError = "";
+  if (!executeFirmwareRollback(kind, info.trigger, info.reason, &rollbackError)) {
+    if (rollbackError.length() == 0) {
+      rollbackError = "FAILED";
+    }
+    logError("ota", 0, rollbackError.c_str(), false);
+    const char* errPrefix = factory ? "OTA_ROLLBACK_FACTORY_ERR:" : "OTA_ROLLBACK_ERR:";
+    String response = String(errPrefix) + rollbackError;
+    writeResponseToChannel(response);
+    Serial.printf("Deferred %s failed -> %s\n", factory ? "OTA_ROLLBACK_FACTORY" : "OTA_ROLLBACK_PREVIOUS",
+                  response.c_str());
+    return;
+  }
+
+  logError("ota", 0, factory ? "manual_factory_rollback_rebooting" : "manual_rollback_rebooting", false);
+  const char* ack = factory ? "OTA_ROLLBACK_FACTORY_ACK:REBOOTING" : "OTA_ROLLBACK_ACK:REBOOTING";
+  writeResponseToChannel(ack);
+  Serial.printf("Deferred %s -> %s\n", factory ? "OTA_ROLLBACK_FACTORY" : "OTA_ROLLBACK_PREVIOUS", ack);
+  delay(500);
+  esp_restart();
 }
 
 bool rollbackOTAUpdateToFactoryWithReason(String* errorCode) {
@@ -4855,52 +5118,6 @@ bool logOtaFactoryRollback(const char* trigger, const char* reason, String* erro
   return rollbackOTAUpdateToFactoryWithReason(errorCode);
 }
 
-String handleManualOTARollback() {
-  if (!isTrustedConnection()) {
-    return "OTA_ROLLBACK_ERR:AUTH_REQUIRED";
-  }
-  String busyError = getFirmwareRollbackBusyError();
-  if (busyError.length() > 0) {
-    return String("OTA_ROLLBACK_ERR:") + busyError;
-  }
-
-  logError("ota", 0, "manual_rollback_requested", false);
-  String rollbackError = "";
-  if (!logOtaRollback("manual", "manual_support_request", &rollbackError)) {
-    if (rollbackError.length() == 0) {
-      rollbackError = "FAILED";
-    }
-    logError("ota", 0, rollbackError.c_str(), false);
-    return String("OTA_ROLLBACK_ERR:") + rollbackError;
-  }
-
-  logError("ota", 0, "manual_rollback_rebooting", false);
-  return "OTA_ROLLBACK_ACK:REBOOTING";
-}
-
-String handleManualOTAFactoryRollback() {
-  if (!isTrustedConnection()) {
-    return "OTA_ROLLBACK_FACTORY_ERR:AUTH_REQUIRED";
-  }
-  String busyError = getFirmwareRollbackBusyError();
-  if (busyError.length() > 0) {
-    return String("OTA_ROLLBACK_FACTORY_ERR:") + busyError;
-  }
-
-  logError("ota", 0, "manual_factory_rollback_requested", false);
-  String rollbackError = "";
-  if (!logOtaFactoryRollback("manual", "factory_request", &rollbackError)) {
-    if (rollbackError.length() == 0) {
-      rollbackError = "FAILED";
-    }
-    logError("ota", 0, rollbackError.c_str(), false);
-    return String("OTA_ROLLBACK_FACTORY_ERR:") + rollbackError;
-  }
-
-  logError("ota", 0, "manual_factory_rollback_rebooting", false);
-  return "OTA_ROLLBACK_FACTORY_ACK:REBOOTING";
-}
-
 void executeFactoryRollbackFromHardware() {
   if (!devModeEnabled) {
     Serial.println("Factory rollback blocked: DEV mode is off");
@@ -4918,7 +5135,7 @@ void executeFactoryRollbackFromHardware() {
 
   logError("ota", 0, "hardware_factory_rollback_requested", false);
   String rollbackError = "";
-  if (!logOtaFactoryRollback("manual", "hardware_factory_hold", &rollbackError)) {
+  if (!executeFirmwareRollback(FIRMWARE_ROLLBACK_FACTORY, "manual", "hardware_factory_hold", &rollbackError)) {
     if (rollbackError.length() == 0) {
       rollbackError = "FAILED";
     }
@@ -5867,6 +6084,7 @@ void loop() {
   if (lastActivityMillis == 0) {
     lastActivityMillis = millis();
   }
+  processPendingFirmwareRollback();
   maintainEEPROMErrorIndicator();
 
   // OTA mode handling
@@ -6618,7 +6836,7 @@ void flushSequence() {
       break;
 
     case 5: {
-      if (mechanismMotorRunning && (currentMillis - motorStartMillis > TIMEOUT) && ERROR_CODE == 0) {
+      if (mechanismMotorRunning && (currentMillis - motorStartMillis > maxOpeningTimeMs()) && ERROR_CODE == 0) {
         SerialBLE_println("Mechanism close timeout in case 5");
         ERROR_CODE = 1;
         stopEverything();
@@ -6833,7 +7051,7 @@ void flushSequence() {
 
     case 8: {
       if (!openSwitchLatched &&
-          (currentMillis - motorStartMillis > (unsigned long)maxOpeningTime * 1000UL) &&
+          (currentMillis - motorStartMillis > maxOpeningTimeMs()) &&
           ERROR_CODE == 0) {
         SerialBLE_println("Mechanism open timeout in case 8");
         motors.setM1Speed(0);
@@ -6871,7 +7089,7 @@ void flushSequence() {
 
     case 10: {
       if (!openSwitchLatched &&
-          (currentMillis - motorStartMillis > (unsigned long)maxOpeningTime * 1000UL) &&
+          (currentMillis - motorStartMillis > maxOpeningTimeMs()) &&
           ERROR_CODE == 0) {
         SerialBLE_println("Mechanism open timeout in case 10");
         motors.setM1Speed(0);
@@ -8948,7 +9166,7 @@ void updateMotorHoming() {
       break;
     }
     case HOMING_PARTIAL_CLOSE: {
-      if (millis() - motorHomingPhaseStartMillis > TIMEOUT) {
+      if (millis() - motorHomingPhaseStartMillis > maxOpeningTimeMs()) {
         if (ERROR_CODE == 0) {
           ERROR_CODE = 1;
           flashLeds();
@@ -8981,7 +9199,7 @@ void updateMotorHoming() {
       break;
     }
     case HOMING_OPEN_FULL: {
-      if (millis() - motorHomingPhaseStartMillis > TIMEOUT) {
+      if (millis() - motorHomingPhaseStartMillis > maxOpeningTimeMs()) {
         if (ERROR_CODE == 0) {
           ERROR_CODE = 1;
           flashLeds();
@@ -9368,7 +9586,7 @@ String buildParamCSV() {
          String(fanDuration) + "," +
          String(H) + "," +
          String(continueFeeder) + "," +
-         String(maxOpeningTime) + "," +
+         String(maxOpeningTime, 1) + "," +
          String(typicalOpeningTime) + "," +
          String(MOTOR_CUT_TIME) + "," +
          String(CUT_MODE_HEAT_TIME) + "," +

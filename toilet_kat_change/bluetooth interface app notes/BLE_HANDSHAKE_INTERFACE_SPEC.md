@@ -136,6 +136,16 @@ On timeout:
 5. Enable write controls only after confirmation.
 6. On disconnect, clear local trusted state.
 
+## DEV Mode Trust Bypass
+
+When persisted **DEV mode** is enabled (`GET_DEV_MODE` returns `DEV_MODE:1`):
+
+- New BLE connections are trusted immediately on connect.
+- `TRUST_START` and `TRUST_STATUS` return `TRUST_CONFIRMED` without a control-panel button press.
+- Privileged commands (parameter writes, OTA rollback, HWCFG apply, etc.) proceed without physical confirmation.
+
+DEV mode is intended for field debugging and automated test harnesses. Production units should run with DEV mode off so the physical trust handshake remains required.
+
 ## Error Codes
 
 Standard reason codes used in `*_ERR:<reason>` responses:

@@ -10,7 +10,7 @@
   "fanDuration": 7,
   "H": 16,
   "continueFeeder": 5,
-  "maxOpeningTime": 12,
+  "maxOpeningTime": 16.5,
   "typicalOpeningTime": 10,
   "MOTOR_CUT_TIME": 0,
   "CUT_MODE_HEAT_TIME": 14,
