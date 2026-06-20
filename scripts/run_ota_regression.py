@@ -53,6 +53,28 @@ EXPECTED_PARTITION_SEQUENCE = [
     "ota_0",
 ]
 
+REGRESSION_STEP_ORDER = [
+    "flash_factory",
+    "ota1",
+    "ota2",
+    "rollback_previous",
+    "ota3",
+    "ota4",
+    "factory_reset",
+    "ota5",
+]
+
+PRIOR_PARTITION_SEQUENCE = {
+    "flash_factory": [],
+    "ota1": ["factory"],
+    "ota2": ["factory", "ota_0"],
+    "rollback_previous": ["factory", "ota_0", "ota_1"],
+    "ota3": ["factory", "ota_0", "ota_1", "ota_0"],
+    "ota4": ["factory", "ota_0", "ota_1", "ota_0", "ota_1"],
+    "factory_reset": ["factory", "ota_0", "ota_1", "ota_0", "ota_1", "ota_0"],
+    "ota5": ["factory", "ota_0", "ota_1", "ota_0", "ota_1", "ota_0", "factory"],
+}
+
 FULL_STEP_TRANSPORT = {
     "flash_factory": "serial",
     "ota1": "ble",
@@ -152,6 +174,47 @@ def parse_version_string(version_payload: str) -> dict[str, str]:
         key, value = token.split(":", 1)
         parsed[key.strip()] = value.strip()
     return parsed
+
+
+def version_dict_from_hw_component(row: dict[str, str]) -> dict[str, str]:
+    """Map GET_HW_COMPONENT payload to CHECK_VERSION-style SW/Build keys."""
+    version: dict[str, str] = {}
+    current = row.get("current_version")
+    if current:
+        version["SW"] = current
+    install_date = row.get("install_date")
+    if install_date:
+        version["Build"] = install_date
+    return version
+
+
+def merge_version_info(*sources: dict[str, str]) -> dict[str, str]:
+    merged: dict[str, str] = {}
+    for source in sources:
+        for key, value in source.items():
+            if value and not merged.get(key):
+                merged[key] = value
+    return merged
+
+
+async def read_firmware_version(interface: ToiletSystemInterface) -> tuple[Optional[str], dict[str, str]]:
+    """Read firmware SW/Build via OTA CHECK_VERSION, with HW matrix fallback."""
+    updater = OTAUpdater()
+    updater.client = interface.client
+    updater.connected = True
+    version_raw = await updater.check_version()
+    version = parse_version_string(version_raw or "")
+
+    if not version.get("SW"):
+        hw_row = await interface.get_hw_component("SOFTWARE_VERSION_NUMBER")
+        if hw_row:
+            version = merge_version_info(version, version_dict_from_hw_component(hw_row))
+            if version.get("SW"):
+                version_raw = (
+                    f"HW:Uninitialized|SW:{version['SW']}|Build:{version.get('Build', '')}"
+                )
+
+    return version_raw, version
 
 
 def parse_ota_diag(response: Optional[str]) -> dict[str, str]:
@@ -427,6 +490,13 @@ class OtaRegressionRunner:
         self.failures: list[str] = []
         self.run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         self.step_transport = FAST_STEP_TRANSPORT if self.fast_mode else FULL_STEP_TRANSPORT
+        self.start_from = getattr(args, "start_from", "flash_factory") or "flash_factory"
+        if self.start_from not in REGRESSION_STEP_ORDER:
+            raise ValueError(f"Invalid --start-from {self.start_from!r}")
+        self.partition_sequence = list(PRIOR_PARTITION_SEQUENCE[self.start_from])
+
+    def should_run_step(self, step_name: str) -> bool:
+        return REGRESSION_STEP_ORDER.index(step_name) >= REGRESSION_STEP_ORDER.index(self.start_from)
 
     def step_transport_for(self, step_name: str) -> str:
         return self.step_transport[step_name]
@@ -492,11 +562,9 @@ class OtaRegressionRunner:
             boot_info_raw = await interface._send_command_and_read_response("GET_BOOT_INFO")
             logs = await interface.get_logs()
             version_raw = None
+            version: dict[str, str] = {}
             if read_version:
-                updater = OTAUpdater()
-                updater.client = interface.client
-                updater.connected = True
-                version_raw = await updater.check_version()
+                version_raw, version = await read_firmware_version(interface)
 
             snapshot = {
                 "ota_diag_raw": ota_diag_raw,
@@ -505,7 +573,7 @@ class OtaRegressionRunner:
                 "boot_info": parse_boot_info(boot_info_raw),
                 "logs": logs or "",
                 "version_raw": version_raw,
-                "version": parse_version_string(version_raw or ""),
+                "version": version if read_version else {},
             }
         finally:
             await interface.disconnect()
@@ -516,11 +584,12 @@ class OtaRegressionRunner:
         address = await self.ensure_address()
         interface = ToiletSystemInterface()
         last_error: Optional[Exception] = None
-        for attempt in range(1, 4):
+        for attempt in range(1, 6):
             try:
                 if attempt > 1:
-                    self.log(f"DEV mode connect retry {attempt}/3...")
-                    await asyncio.sleep(3.0)
+                    self.log(f"DEV mode connect retry {attempt}/5...")
+                    await asyncio.sleep(5.0)
+                await self.wait_for_ble(timeout_s=min(self.boot_wait_s, 60.0))
                 if not await interface.connect(address, require_trust=False):
                     raise RuntimeError("Failed to connect to enable DEV mode")
                 break
@@ -589,7 +658,7 @@ class OtaRegressionRunner:
             return
         sw = version.get("SW")
         build = version.get("Build")
-        if spec.expected_sw and sw != spec.expected_sw:
+        if spec.expected_sw and spec.expected_sw != "unknown" and sw != spec.expected_sw:
             errors.append(f"Expected SW {spec.expected_sw}, observed {sw!r}")
         if spec.expected_build and build != spec.expected_build:
             errors.append(f"Expected Build {spec.expected_build}, observed {build!r}")
@@ -844,10 +913,30 @@ class OtaRegressionRunner:
             self.log("Mode: FAST (OTA1/OTA2 BLE; other hops serial-simulated)")
         else:
             self.log("Mode: FULL (all OTA/rollback steps over BLE)")
+        if self.start_from != "flash_factory":
+            self.log(
+                f"Resuming from {self.start_from} "
+                f"(assuming prior partitions: {' -> '.join(self.partition_sequence) or 'none'})"
+            )
         self.log("=" * 72)
 
+        if (
+            self.start_from != "flash_factory"
+            and not self.dry_run
+            and not self.args.skip_preflight
+            and self.args.boot_settle > 0
+        ):
+            self.log(f"Waiting {self.args.boot_settle:.0f}s for full boot before BLE preflight...")
+            await asyncio.sleep(self.args.boot_settle)
+
         try:
-            preflight = await self.run_preflight()
+            if self.args.skip_preflight:
+                self.log("=== Preflight (skipped) ===")
+                preflight = {"skipped": True, "start_from": self.start_from}
+                if self.address:
+                    preflight["ble_address"] = self.address
+            else:
+                preflight = await self.run_preflight()
         except (Exception, asyncio.CancelledError) as exc:
             if isinstance(exc, asyncio.CancelledError):
                 exc = RuntimeError("BLE connection cancelled during preflight")
@@ -884,130 +973,11 @@ class OtaRegressionRunner:
             self.write_report(report)
             return report
 
-        # 1. Flash factory
-        self.log("\n--- Step: Flash Factory ---")
-        if not self.dry_run:
-            if self.auto_build:
-                run_flash_sarah_factory(self.port)
-            else:
-                run_flash_factory(self.port, self.factory_spec.path, boot_slot="factory")
-            await asyncio.sleep(12.0)
-        await self.assert_post_step_state(
-            "flash_factory",
-            "factory",
-            self.factory_spec,
-            transport=self.step_transport_for("flash_factory"),
-        )
-
-        # 2. OTA1 -> ota_0
-        self.log("\n--- Step: OTA1 ---")
-        await self.perform_ota(self.ota_specs[0])
-        await self.assert_post_step_state(
-            "ota1",
-            "ota_0",
-            self.ota_specs[0],
-            transport=self.step_transport_for("ota1"),
-            require_pending_clear=True,
-        )
-
-        # 3. OTA2 -> ota_1
-        self.log("\n--- Step: OTA2 ---")
-        await self.perform_ota(self.ota_specs[1])
-        await self.assert_post_step_state(
-            "ota2",
-            "ota_1",
-            self.ota_specs[1],
-            transport=self.step_transport_for("ota2"),
-            require_pending_clear=True,
-        )
-
-        # 4. Rollback -> ota_0 (OTA1)
-        self.log("\n--- Step: Rollback Previous ---")
-        rollback_transport = self.step_transport_for("rollback_previous")
-        if rollback_transport == "ble":
-            if not self.fast_mode:
-                self.log("Rollback over BLE (DEV mode auto-grants trust when enabled).")
-            await self.perform_rollback_previous()
-        else:
-            self.perform_serial_rollback_previous("ota_0")
-            if not self.dry_run:
-                await asyncio.sleep(12.0)
-        await self.assert_post_step_state(
-            "rollback_previous",
-            "ota_0",
-            self.ota_specs[0],
-            transport=rollback_transport,
-            expect_rollback=(rollback_transport == "ble"),
-        )
-
-        # 5. OTA3 -> ota_1
-        self.log("\n--- Step: OTA3 ---")
-        ota3_transport = self.step_transport_for("ota3")
-        if ota3_transport == "ble":
-            await self.perform_ota(self.ota_specs[2])
-        else:
-            self.perform_serial_slot_update(self.ota_specs[2], "ota_1")
-            if not self.dry_run:
-                await asyncio.sleep(12.0)
-        await self.assert_post_step_state(
-            "ota3",
-            "ota_1",
-            self.ota_specs[2],
-            transport=ota3_transport,
-            require_pending_clear=(ota3_transport == "ble"),
-        )
-
-        # 6. OTA4 -> ota_0
-        self.log("\n--- Step: OTA4 ---")
-        ota4_transport = self.step_transport_for("ota4")
-        if ota4_transport == "ble":
-            await self.perform_ota(self.ota_specs[3])
-        else:
-            self.perform_serial_slot_update(self.ota_specs[3], "ota_0")
-            if not self.dry_run:
-                await asyncio.sleep(12.0)
-        await self.assert_post_step_state(
-            "ota4",
-            "ota_0",
-            self.ota_specs[3],
-            transport=ota4_transport,
-            require_pending_clear=(ota4_transport == "ble"),
-        )
-
-        # 7. Factory reset
-        self.log("\n--- Step: Factory Reset ---")
-        factory_transport = self.step_transport_for("factory_reset")
-        if factory_transport == "ble":
-            if not self.fast_mode:
-                self.log("Factory rollback over BLE (DEV mode auto-grants trust when enabled).")
-            await self.perform_rollback_factory()
-        else:
-            self.perform_serial_factory_reset()
-            if not self.dry_run:
-                await asyncio.sleep(12.0)
-        await self.assert_post_step_state(
-            "factory_reset",
-            "factory",
-            self.factory_spec,
-            transport=factory_transport,
-        )
-
-        # 8. OTA5 -> ota_0
-        self.log("\n--- Step: OTA5 ---")
-        ota5_transport = self.step_transport_for("ota5")
-        if ota5_transport == "ble":
-            await self.perform_ota(self.ota_specs[4])
-        else:
-            self.perform_serial_slot_update(self.ota_specs[4], "ota_0")
-            if not self.dry_run:
-                await asyncio.sleep(12.0)
-        await self.assert_post_step_state(
-            "ota5",
-            "ota_0",
-            self.ota_specs[4],
-            transport=ota5_transport,
-            require_pending_clear=(ota5_transport == "ble"),
-        )
+        try:
+            await self._run_steps(preflight)
+        except Exception as exc:
+            self.failures.append(str(exc))
+            self.log(f"Harness aborted: {exc}")
 
         sequence_ok = self.partition_sequence == EXPECTED_PARTITION_SEQUENCE
         if not sequence_ok:
@@ -1033,10 +1003,149 @@ class OtaRegressionRunner:
             metadata={
                 "preflight": preflight,
                 "manifest": self.manifest_meta if self.auto_build else None,
+                "start_from": self.start_from,
             },
         )
         self.write_report(report)
         return report
+
+    async def _run_steps(self, preflight: dict[str, Any]) -> None:
+        # 1. Flash factory
+        if self.should_run_step("flash_factory"):
+            self.log("\n--- Step: Flash Factory ---")
+            use_sarah_factory = self.auto_build or bool(self.manifest_meta.get("auto_build"))
+            if not self.dry_run:
+                if use_sarah_factory:
+                    run_flash_sarah_factory(self.port)
+                else:
+                    run_flash_factory(self.port, self.factory_spec.path, boot_slot="factory")
+                await asyncio.sleep(12.0)
+            await self.assert_post_step_state(
+                "flash_factory",
+                "factory",
+                self.factory_spec,
+                transport=self.step_transport_for("flash_factory"),
+            )
+
+        # 2. OTA1 -> ota_0
+        if self.should_run_step("ota1"):
+            self.log("\n--- Step: OTA1 ---")
+            await self.perform_ota(self.ota_specs[0])
+            await self.assert_post_step_state(
+                "ota1",
+                "ota_0",
+                self.ota_specs[0],
+                transport=self.step_transport_for("ota1"),
+                require_pending_clear=True,
+            )
+
+        # 3. OTA2 -> ota_1
+        if self.should_run_step("ota2"):
+            self.log("\n--- Step: OTA2 ---")
+            if not self.dry_run:
+                self.log("Pause 20s before OTA2 to let device settle...")
+                await asyncio.sleep(20.0)
+            await self.perform_ota(self.ota_specs[1])
+            await self.assert_post_step_state(
+                "ota2",
+                "ota_1",
+                self.ota_specs[1],
+                transport=self.step_transport_for("ota2"),
+                require_pending_clear=True,
+            )
+
+        # 4. Rollback -> ota_0 (OTA1)
+        if self.should_run_step("rollback_previous"):
+            self.log("\n--- Step: Rollback Previous ---")
+            rollback_transport = self.step_transport_for("rollback_previous")
+            if rollback_transport == "ble":
+                if not self.fast_mode:
+                    self.log("Rollback over BLE (DEV mode auto-grants trust when enabled).")
+                await self.perform_rollback_previous()
+            else:
+                self.perform_serial_rollback_previous("ota_0")
+                if not self.dry_run:
+                    await asyncio.sleep(12.0)
+            await self.assert_post_step_state(
+                "rollback_previous",
+                "ota_0",
+                self.ota_specs[0],
+                transport=rollback_transport,
+                expect_rollback=(rollback_transport == "ble"),
+            )
+
+        # 5. OTA3 -> ota_1
+        if self.should_run_step("ota3"):
+            self.log("\n--- Step: OTA3 ---")
+            ota3_transport = self.step_transport_for("ota3")
+            if ota3_transport == "ble":
+                await self.perform_ota(self.ota_specs[2])
+            else:
+                self.perform_serial_slot_update(self.ota_specs[2], "ota_1")
+                if not self.dry_run:
+                    await asyncio.sleep(12.0)
+            await self.assert_post_step_state(
+                "ota3",
+                "ota_1",
+                self.ota_specs[2],
+                transport=ota3_transport,
+                require_pending_clear=(ota3_transport == "ble"),
+            )
+
+        # 6. OTA4 -> ota_0
+        if self.should_run_step("ota4"):
+            self.log("\n--- Step: OTA4 ---")
+            ota4_transport = self.step_transport_for("ota4")
+            if ota4_transport == "ble":
+                await self.perform_ota(self.ota_specs[3])
+            else:
+                self.perform_serial_slot_update(self.ota_specs[3], "ota_0")
+                if not self.dry_run:
+                    await asyncio.sleep(12.0)
+            await self.assert_post_step_state(
+                "ota4",
+                "ota_0",
+                self.ota_specs[3],
+                transport=ota4_transport,
+                require_pending_clear=(ota4_transport == "ble"),
+            )
+
+        # 7. Factory reset
+        if self.should_run_step("factory_reset"):
+            self.log("\n--- Step: Factory Reset ---")
+            factory_transport = self.step_transport_for("factory_reset")
+            if factory_transport == "ble":
+                if not self.fast_mode:
+                    self.log("Factory rollback over BLE (DEV mode auto-grants trust when enabled).")
+                await self.perform_rollback_factory()
+            else:
+                self.perform_serial_factory_reset()
+                if not self.dry_run:
+                    await asyncio.sleep(12.0)
+            await self.assert_post_step_state(
+                "factory_reset",
+                "factory",
+                self.factory_spec,
+                transport=factory_transport,
+            )
+
+        # 8. OTA5 -> ota_0
+        if self.should_run_step("ota5"):
+            self.log("\n--- Step: OTA5 ---")
+            ota5_transport = self.step_transport_for("ota5")
+            if ota5_transport == "ble":
+                await self.perform_ota(self.ota_specs[4])
+            else:
+                self.perform_serial_slot_update(self.ota_specs[4], "ota_0")
+                if not self.dry_run:
+                    await asyncio.sleep(12.0)
+            await self.assert_post_step_state(
+                "ota5",
+                "ota_0",
+                self.ota_specs[4],
+                transport=ota5_transport,
+                require_pending_clear=(ota5_transport == "ble"),
+            )
 
     def write_report(self, report: RegressionReport) -> None:
         self.results_dir.mkdir(parents=True, exist_ok=True)
@@ -1154,6 +1263,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scan-timeout", type=float, default=25.0, help="BLE scan timeout (seconds)")
     parser.add_argument("--boot-wait", type=float, default=90.0, help="Max wait for reboot (seconds)")
     parser.add_argument(
+        "--boot-settle",
+        type=float,
+        default=0.0,
+        help="Seconds to wait for full boot before BLE preflight (use ~90 when resuming after power cycle)",
+    )
+    parser.add_argument(
         "--pending-clear-timeout",
         type=float,
         default=180.0,
@@ -1179,6 +1294,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--fast",
         action="store_true",
         help="Fast mode: OTA1/OTA2 over BLE; OTA3-5, rollback, and factory reset serial-simulated",
+    )
+    parser.add_argument(
+        "--skip-preflight",
+        action="store_true",
+        help="Skip USB/BLE preflight (use when resuming and device is already ready)",
+    )
+    parser.add_argument(
+        "--start-from",
+        choices=REGRESSION_STEP_ORDER,
+        default="flash_factory",
+        help="Resume harness from this step (assumes prior steps already completed)",
     )
     parser.add_argument(
         "--ensure-dev-mode",

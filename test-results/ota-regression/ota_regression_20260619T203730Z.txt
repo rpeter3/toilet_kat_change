@@ -1,0 +1,99 @@
+OTA Partition Regression Report
+Run ID: 20260619T203730Z
+Started: 2026-06-19T20:37:30.917216+00:00
+Ended: 2026-06-19T21:14:09.703115+00:00
+Result: FAIL
+Dry run: False
+Fast mode: True
+Auto-build: False
+Port: COM5
+BLE address: 58:E6:C5:6C:AF:81
+
+Partition sequence: factory -> ota_0
+Expected sequence: factory -> ota_0 -> ota_1 -> ota_0 -> ota_1 -> ota_0 -> factory -> ota_0
+
+Version evolution:
+Step                 Partition  Expected SW              Observed SW              Pass
+------------------------------------------------------------------------------------------
+ota2                 ota_1      4.1.7-regB               -                        FAIL
+rollback_previous    ota_0      4.1.7-regA               -                        FAIL
+ota3                 ota_1      4.1.7-regB               -                        FAIL
+ota4                 ota_0      4.1.7-regA               -                        FAIL
+factory_reset        factory    unknown                  -                        FAIL
+ota5                 ota_0      4.1.7-regB               -                        FAIL
+
+Failures:
+  - ota2: Expected SW 4.1.7-regB, observed None
+  - ota2: Expected Build 2026-06-19, observed None
+  - rollback_previous: Expected SW 4.1.7-regA, observed None
+  - rollback_previous: Expected Build 2026-06-19, observed None
+  - ota3: Expected SW 4.1.7-regB, observed None
+  - ota3: Expected Build 2026-06-19, observed None
+  - ota4: Expected SW 4.1.7-regA, observed None
+  - ota4: Expected Build 2026-06-19, observed None
+  - factory_reset: Expected SW unknown, observed None
+  - factory_reset: Expected Build 2026-06-19, observed None
+  - ota5: Expected SW 4.1.7-regB, observed None
+  - ota5: Expected Build 2026-06-19, observed None
+  - Partition sequence mismatch: expected ['factory', 'ota_0', 'ota_1', 'ota_0', 'ota_1', 'ota_0', 'factory', 'ota_0'], observed ['factory', 'ota_0']
+
+[FAIL] ota2 (259.86s)
+  transport: ble
+  pending_clear_required: yes
+  expected partition: ota_1
+  observed partition: ota_1
+  expected SW: 4.1.7-regB
+  observed SW: None
+  version: v1.0
+  error: Expected SW 4.1.7-regB, observed None
+  error: Expected Build 2026-06-19, observed None
+
+[FAIL] rollback_previous (130.18s)
+  transport: serial_sim
+  expected partition: ota_0
+  observed partition: ota_0
+  expected SW: 4.1.7-regA
+  observed SW: None
+  version: v1.0
+  error: Expected SW 4.1.7-regA, observed None
+  error: Expected Build 2026-06-19, observed None
+
+[FAIL] ota3 (132.91s)
+  transport: serial_sim
+  expected partition: ota_1
+  observed partition: ota_1
+  expected SW: 4.1.7-regB
+  observed SW: None
+  version: v1.0
+  error: Expected SW 4.1.7-regB, observed None
+  error: Expected Build 2026-06-19, observed None
+
+[FAIL] ota4 (137.89s)
+  transport: serial_sim
+  expected partition: ota_0
+  observed partition: ota_0
+  expected SW: 4.1.7-regA
+  observed SW: None
+  version: v1.0
+  error: Expected SW 4.1.7-regA, observed None
+  error: Expected Build 2026-06-19, observed None
+
+[FAIL] factory_reset (10.46s)
+  transport: serial_sim
+  expected partition: factory
+  observed partition: factory
+  expected SW: unknown
+  observed SW: None
+  version: v1.0
+  error: Expected SW unknown, observed None
+  error: Expected Build 2026-06-19, observed None
+
+[FAIL] ota5 (143.49s)
+  transport: serial_sim
+  expected partition: ota_0
+  observed partition: ota_0
+  expected SW: 4.1.7-regB
+  observed SW: None
+  version: v1.0
+  error: Expected SW 4.1.7-regB, observed None
+  error: Expected Build 2026-06-19, observed None

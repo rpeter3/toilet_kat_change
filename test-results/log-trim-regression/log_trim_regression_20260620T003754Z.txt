@@ -1,0 +1,59 @@
+Log Trim Regression Report
+Run ID: 20260620T003754Z
+Started: 2026-06-20T00:37:54.038196+00:00
+Ended: 2026-06-20T00:45:13.255660+00:00
+Result: FAIL
+Dry run: False
+Port: COM5
+Chip: esp32s3
+BLE address: 58:E6:C5:6C:AF:81
+SPIFFS backup: C:\Users\richa\Documents\GitHub\toilet_kat_change\test-builds\log-trim-regression\spiffs_backup_20260620T003754Z.bin
+
+Failures:
+  - write_trim: write_trim: log size 76699 exceeds max 51200 (+ slack 512)
+  - ota_trim: ota_trim: expected marker 'TRIM_MARKER_NEW_999999' not found
+  - sleep_trim: esptool run failed (exit 2): 
+A fatal error occurred: Could not open COM5, the port is busy or doesn't exist.
+(could not open port 'COM5': FileNotFoundError(2, 'The system cannot find the file specified.', None, 2))
+
+Hint: Check if the port is correct and ESP connected
+
+
+  - restore: esptool write-flash SPIFFS failed (exit 2): 
+A fatal error occurred: Could not open COM5, the port is busy or doesn't exist.
+(could not open port 'COM5': FileNotFoundError(2, 'The system cannot find the file specified.', None, 2))
+
+Hint: Check if the port is correct and ESP connected
+
+
+
+[PASS] no_trim (58.31s)
+  seeded bytes: 30000
+  observed log bytes: 29999
+
+[FAIL] write_trim (109.09s)
+  seeded bytes: 76700
+  error: write_trim: log size 76699 exceeds max 51200 (+ slack 512)
+
+[FAIL] ota_trim (47.17s)
+  seeded bytes: 45000
+  error: ota_trim: expected marker 'TRIM_MARKER_NEW_999999' not found
+
+[FAIL] sleep_trim (161.4s)
+  seeded bytes: 67000
+  error: esptool run failed (exit 2): 
+A fatal error occurred: Could not open COM5, the port is busy or doesn't exist.
+(could not open port 'COM5': FileNotFoundError(2, 'The system cannot find the file specified.', None, 2))
+
+Hint: Check if the port is correct and ESP connected
+
+
+
+[FAIL] restore (0.6s)
+  error: esptool write-flash SPIFFS failed (exit 2): 
+A fatal error occurred: Could not open COM5, the port is busy or doesn't exist.
+(could not open port 'COM5': FileNotFoundError(2, 'The system cannot find the file specified.', None, 2))
+
+Hint: Check if the port is correct and ESP connected
+
+

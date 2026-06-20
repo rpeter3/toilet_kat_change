@@ -1,0 +1,29 @@
+Log Trim Regression Report
+Run ID: 20260620T011849Z
+Started: 2026-06-20T01:18:49.570454+00:00
+Ended: 2026-06-20T01:18:50.518591+00:00
+Result: FAIL
+Dry run: False
+Port: COM5
+Chip: esp32s3
+BLE address: 58:E6:C5:6C:AF:81
+SPIFFS backup: C:\Users\richa\Documents\GitHub\toilet_kat_change\test-builds\log-trim-regression\spiffs_backup_20260620T005256Z.bin
+
+Failures:
+  - write_trim: esptool write-flash SPIFFS failed (exit 2): 
+A fatal error occurred: Could not open COM5, the port is busy or doesn't exist.
+(could not open port 'COM5': PermissionError(13, 'Access is denied.', None, 5))
+
+Hint: Check if the port is not used by another task
+
+
+
+[FAIL] write_trim (0.95s)
+  seeded bytes: 76800
+  error: esptool write-flash SPIFFS failed (exit 2): 
+A fatal error occurred: Could not open COM5, the port is busy or doesn't exist.
+(could not open port 'COM5': PermissionError(13, 'Access is denied.', None, 5))
+
+Hint: Check if the port is not used by another task
+
+

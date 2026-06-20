@@ -135,7 +135,7 @@ class ToiletSystemInterface:
         self.param_definitions = {
             "batteryThreshold": {"description": "Minimum usable battery percent before flush", "units": "%", "default": 7.0},
             "K": {"description": "Temperature setpoint", "units": "°C", "default": 140.0},
-            "F": {"description": "How long to feed the bag at the START of a flush", "units": "sec", "default": 6.0},
+            "F": {"description": "How long to feed the bag at the START of a flush", "units": "sec", "default": 8.0},
             "T": {"description": "Cooling Time", "units": "sec", "default": 60.0},
             "backupTime": {"description": "How long to back up the bag when re-opening", "units": "sec", "default": 1.0},
             "fanDuration": {"description": "How long to run the fan after feeding at the end of a flush", "units": "sec", "default": 5.0},
@@ -170,7 +170,7 @@ class ToiletSystemInterface:
             "1.5mil High Barrier Plastic": {
                 "batteryThreshold": 7.0,
                 "K": 140.0,
-                "F": 6.0,
+                "F": 8.0,
                 "T": 60.0,
                 "backupTime": 1.0,
                 "fanDuration": 5.0,
@@ -202,7 +202,7 @@ class ToiletSystemInterface:
             "Compostable 1.5mil": {
                 "batteryThreshold": 7.0,
                 "K": 90.0,
-                "F": 6.0,
+                "F": 8.0,
                 "T": 40.0,
                 "backupTime": 1.0,
                 "fanDuration": 5.0,
@@ -1573,8 +1573,11 @@ async def main():
             print("23. Manual OTA rollback to factory firmware")
             print("24. Prepare OTA update (ENABLE_OTA + PREPARE_UPDATE, no transfer)")
             print("25. Read active OTA/factory partition (GET_ACTIVE_PARTITION)")
+            print("26. Read task watchdog status (GET_TASK_WDT)")
+            print("27. Disable task watchdog (DISABLE_TASK_WDT, requires trust)")
+            print("28. Enable task watchdog (ENABLE_TASK_WDT, re-init at next flush)")
             
-            choice = input("\nEnter your choice (1-25): ").strip()
+            choice = input("\nEnter your choice (1-28): ").strip()
             
             if choice == "1":
                 print("\nReading current parameters...")
@@ -1970,8 +1973,46 @@ async def main():
                         f"version={partition.get('version', 'unknown')})"
                     )
 
+            elif choice == "26":
+                print("\nReading task watchdog status...")
+                status = await interface.get_task_wdt_status()
+                if status is None:
+                    print("Failed to read task watchdog status")
+                else:
+                    print(f"Task watchdog status: {status}")
+
+            elif choice == "27":
+                print("\nDisable task watchdog (requires trusted connection)...")
+                if not interface.trusted:
+                    print("Trust handshake not completed. Use option 21 first.")
+                    continue
+                confirm = input("Disable task watchdog? (y/N): ").strip().lower()
+                if confirm != "y":
+                    print("Cancelled.")
+                    continue
+                if await interface.disable_task_wdt():
+                    status = await interface.get_task_wdt_status()
+                    print(f"Task watchdog disabled. Status: {status or 'unknown'}")
+                else:
+                    print("Failed to disable task watchdog")
+
+            elif choice == "28":
+                print("\nEnable task watchdog (re-init at next flush case 0)...")
+                if not interface.trusted:
+                    print("Trust handshake not completed. Use option 21 first.")
+                    continue
+                confirm = input("Arm watchdog re-init at next flush? (y/N): ").strip().lower()
+                if confirm != "y":
+                    print("Cancelled.")
+                    continue
+                if await interface.enable_task_wdt():
+                    status = await interface.get_task_wdt_status()
+                    print(f"Task watchdog re-init armed. Status: {status or 'unknown'}")
+                else:
+                    print("Failed to arm task watchdog re-init")
+
             else:
-                print("Invalid choice. Please enter 1-25.")
+                print("Invalid choice. Please enter 1-28.")
     
     except KeyboardInterrupt:
         print("\nProgram interrupted by user")

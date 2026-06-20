@@ -146,19 +146,20 @@ class OTAUpdater:
         if not self.connected:
             print("Not connected to device")
             return None
-        
+
         try:
-            # Send CHECK_VERSION command
             await self.client.write_gatt_char(UPDATE_CHARACTERISTIC_UUID, b"CHECK_VERSION")
-            await asyncio.sleep(0.5)
-            
-            # Read version from version characteristic
-            version_data = await self.client.read_gatt_char(VERSION_CHARACTERISTIC_UUID)
-            try:
-                version_str = version_data.decode('utf-8')
-            except UnicodeDecodeError:
-                # If version contains non-UTF-8 data, try with errors='replace'
-                version_str = version_data.decode('utf-8', errors='replace')
+            version_str = "v1.0"
+            for attempt in range(1, 8):
+                await asyncio.sleep(0.75 if attempt > 1 else 1.0)
+                version_data = await self.client.read_gatt_char(VERSION_CHARACTERISTIC_UUID)
+                try:
+                    version_str = version_data.decode("utf-8")
+                except UnicodeDecodeError:
+                    version_str = version_data.decode("utf-8", errors="replace")
+                version_str = version_str.strip("\x00").strip()
+                if "SW:" in version_str or (version_str and version_str != "v1.0"):
+                    break
             print(f"Current firmware version: {version_str}")
             return version_str
         except Exception as e:
@@ -224,25 +225,33 @@ class OTAUpdater:
         if not self.connected:
             print("Not connected to device")
             return False
-        
-        try:
-            print("Starting OTA update...")
-            await self.client.write_gatt_char(UPDATE_CHARACTERISTIC_UUID, b"START_UPDATE")
-            await asyncio.sleep(0.5)
-            
-            # Read response
-            response = await self.client.read_gatt_char(UPDATE_CHARACTERISTIC_UUID)
-            response_str = response.decode('utf-8')
-            
-            if "UPDATE_STARTED" in response_str:
-                print("OTA update started, ready to receive firmware")
-                return True
-            else:
+
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                if attempt > 1:
+                    print(f"START_UPDATE retry {attempt}/{max_retries}...")
+                    await asyncio.sleep(2.0)
+                print("Starting OTA update...")
+                await self.client.write_gatt_char(UPDATE_CHARACTERISTIC_UUID, b"START_UPDATE")
+                await asyncio.sleep(1.5)
+
+                response = await self.client.read_gatt_char(UPDATE_CHARACTERISTIC_UUID)
+                response_str = response.decode("utf-8")
+
+                if "UPDATE_STARTED" in response_str:
+                    print("OTA update started, ready to receive firmware")
+                    return True
+                if response_str in {"START_UPDATE", "PREPARING"} and attempt < max_retries:
+                    print(f"Unexpected response: {response_str}")
+                    continue
                 print(f"ERROR: Failed to start update: {response_str}")
                 return False
-        except Exception as e:
-            print(f"Failed to start update: {e}")
-            return False
+            except Exception as e:
+                print(f"Failed to start update: {e}")
+                if attempt >= max_retries:
+                    return False
+        return False
     
     async def send_firmware_size(self, size: int) -> bool:
         """Send firmware size metadata"""

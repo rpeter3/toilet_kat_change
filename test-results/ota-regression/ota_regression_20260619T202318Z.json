@@ -1,0 +1,19 @@
+{
+  "run_id": "20260619T202318Z",
+  "started_at": "2026-06-19T20:23:18.144446+00:00",
+  "ended_at": "2026-06-19T20:24:32.042928+00:00",
+  "passed": false,
+  "dry_run": false,
+  "fast_mode": true,
+  "auto_build": false,
+  "port": "COM5",
+  "address": "58:E6:C5:6C:AF:81",
+  "partition_sequence": [],
+  "steps": [],
+  "failures": [
+    "preflight: Failed to connect for diagnostics"
+  ],
+  "metadata": {
+    "preflight_error": "Failed to connect for diagnostics"
+  }
+}

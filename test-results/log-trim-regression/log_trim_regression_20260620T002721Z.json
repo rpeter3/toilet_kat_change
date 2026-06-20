@@ -1,0 +1,82 @@
+{
+  "run_id": "20260620T002721Z",
+  "started_at": "2026-06-20T00:27:21.242669+00:00",
+  "ended_at": "2026-06-20T00:36:15.062379+00:00",
+  "passed": false,
+  "dry_run": false,
+  "port": "COM5",
+  "chip": "esp32s3",
+  "address": "3C:DC:75:FC:62:5D",
+  "backup_path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\log-trim-regression\\spiffs_backup_20260620T002721Z.bin",
+  "steps": [
+    {
+      "name": "no_trim",
+      "passed": false,
+      "seeded_bytes": 30000,
+      "observed_log_bytes": null,
+      "errors": [
+        "no_trim: expected marker 'TRIM_MARKER_OLD_000001' not found"
+      ],
+      "logs_excerpt": null,
+      "started_at": "2026-06-20T00:28:36.927053+00:00",
+      "ended_at": "2026-06-20T00:29:15.813866+00:00",
+      "duration_s": 38.89
+    },
+    {
+      "name": "write_trim",
+      "passed": false,
+      "seeded_bytes": 76700,
+      "observed_log_bytes": null,
+      "errors": [
+        "BLE device not visible within 90s (3C:DC:75:FC:62:5D)"
+      ],
+      "logs_excerpt": null,
+      "started_at": "2026-06-20T00:29:15.814021+00:00",
+      "ended_at": "2026-06-20T00:31:35.292322+00:00",
+      "duration_s": 139.48
+    },
+    {
+      "name": "ota_trim",
+      "passed": false,
+      "seeded_bytes": 45000,
+      "observed_log_bytes": null,
+      "errors": [
+        "BLE device not visible within 90s (3C:DC:75:FC:62:5D)"
+      ],
+      "logs_excerpt": null,
+      "started_at": "2026-06-20T00:31:35.292394+00:00",
+      "ended_at": "2026-06-20T00:33:55.164655+00:00",
+      "duration_s": 139.87
+    },
+    {
+      "name": "sleep_trim",
+      "passed": false,
+      "seeded_bytes": 67000,
+      "observed_log_bytes": null,
+      "errors": [
+        "BLE device not visible within 90s (3C:DC:75:FC:62:5D)"
+      ],
+      "logs_excerpt": null,
+      "started_at": "2026-06-20T00:33:55.164724+00:00",
+      "ended_at": "2026-06-20T00:36:00.427320+00:00",
+      "duration_s": 125.26
+    },
+    {
+      "name": "restore",
+      "passed": true,
+      "seeded_bytes": null,
+      "observed_log_bytes": 0,
+      "errors": [],
+      "logs_excerpt": "",
+      "started_at": "2026-06-20T00:36:00.427391+00:00",
+      "ended_at": "2026-06-20T00:36:15.062227+00:00",
+      "duration_s": 14.63
+    }
+  ],
+  "failures": [
+    "no_trim: no_trim: expected marker 'TRIM_MARKER_OLD_000001' not found",
+    "write_trim: BLE device not visible within 90s (3C:DC:75:FC:62:5D)",
+    "ota_trim: BLE device not visible within 90s (3C:DC:75:FC:62:5D)",
+    "sleep_trim: BLE device not visible within 90s (3C:DC:75:FC:62:5D)"
+  ]
+}

@@ -1,0 +1,29 @@
+Log Trim Regression Report
+Run ID: 20260620T002258Z
+Started: 2026-06-20T00:22:58.223874+00:00
+Ended: 2026-06-20T00:22:58.228205+00:00
+Result: PASS
+Dry run: True
+Port: COM6
+Chip: esp32s3
+BLE address: None
+SPIFFS backup: C:\Users\richa\Documents\GitHub\toilet_kat_change\test-builds\log-trim-regression\spiffs_backup_20260620T002258Z.bin
+
+[PASS] no_trim (0.0s)
+  seeded bytes: 30000
+  observed log bytes: 0
+
+[PASS] write_trim (0.0s)
+  seeded bytes: 76700
+  observed log bytes: 0
+
+[PASS] ota_trim (0.0s)
+  seeded bytes: 45000
+  observed log bytes: 0
+
+[PASS] sleep_trim (0.0s)
+  seeded bytes: 67000
+  observed log bytes: 0
+
+[PASS] restore (0.0s)
+  observed log bytes: 0

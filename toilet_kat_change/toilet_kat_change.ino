@@ -26,11 +26,11 @@
 // Error log (SPIFFS, bounded, BLE-retrievable)
 #define LOG_FILE "/errors.txt"
 #define SPIFFS_PARTITION_LABEL "storage"
-#define MAX_LOG_SIZE 204800
-#define LOG_HEADROOM 25600
+#define MAX_LOG_SIZE 76800
+#define LOG_HEADROOM 10240
 #define LOG_SLEEP_TRIM_TRIGGER (MAX_LOG_SIZE - LOG_HEADROOM)
-#define LOG_TRIM_TARGET 153600
-#define OTA_PREP_LOG_TRIM_TARGET 102400
+#define LOG_TRIM_TARGET 51200
+#define OTA_PREP_LOG_TRIM_TARGET 40960
 #define LOG_TRIM_TEMP_FILE "/errors.tmp"
 #define LOG_TRIM_COPY_CHUNK 512
 #define LOG_CHUNK_SIZE 450
@@ -228,12 +228,12 @@ struct HWCFGConfigStore {
 #  if __has_include("software_version_build.h")
 #    include "software_version_build.h"
 #  else
-const char* SOFTWARE_VERSION_NUMBER = "4.1.6";
+const char* SOFTWARE_VERSION_NUMBER = "4.1.7";
 const char* FACTORY_SOFTWARE_DATE = "2026-06-18";
 const char* SOFTWARE_BUILD_DATE = "2026-06-19";  // YYYY-MM-DD — update with each build
 #  endif
 #else
-const char* SOFTWARE_VERSION_NUMBER = "4.1.6";
+const char* SOFTWARE_VERSION_NUMBER = "4.1.7";
 const char* FACTORY_SOFTWARE_DATE = "2026-06-18";
 const char* SOFTWARE_BUILD_DATE = "2026-06-19";  // YYYY-MM-DD — update with each build
 #endif
@@ -292,8 +292,7 @@ bool clearCoredumpImage();
 void logError(const char* type, int code, const char* msg);
 void logError(const char* type, int code, const char* msg, bool includeContext);
 bool trimErrorLogToSize(size_t targetBytes);
-void logDevFlush(const char* type, int code, const char* msg, bool includeContext = true);
-void logDevFlushStatusTick();
+void logFlushEvent(const char* type, int code, const char* msg, bool includeContext = true);
 void setFlushStep(int newStep, bool logTransition = true);
 String readLogChunk(size_t offset);
 float readBatteryVoltage();
@@ -313,7 +312,7 @@ bool validateBatteryAssessParams();
 void applyBatteryAssessParamsFromCsv(const float* parameters_list, int count);
 void renderBatteryLevelLeds(int chargeLevel);
 void showBatteryLevelFeedback(int chargeLevel, bool enterDisplayMode);
-void logPowerTestEvent(const char* phase, const char* msg, bool includeContext = false);
+void logPowerTestEvent(const char* phase, const char* msg, bool includeContext = false, bool persist = true);
 void latchLowBatteryStop(const char* reason);
 bool isM1MotorActive();
 bool shouldSkipBootHeaterTest(const char** skipReason);
@@ -385,6 +384,7 @@ bool isOnOtaTargetPartition();
 void enableOTA();
 void disableOTA();
 void restartBLEServer();
+void shutdownBleForPowerDown(const char* reason);
 void slowCircleLeds();
 void startManualFeed();
 void stopManualFeed();
@@ -621,6 +621,10 @@ int feedLedHeadIndex = 0;
 // BLE auto-shutdown variables
 unsigned long bleStartupTime = 0;
 unsigned long bleIdleStartTime = 0;
+unsigned long bleWakeGuardUntil = 0;
+unsigned long bleWakeGuardLastKick = 0;
+const unsigned long BLE_WAKE_GUARD_MS = 30 * 1000;
+const unsigned long BLE_WAKE_GUARD_INTERVAL_MS = 5000;
 const unsigned long BLE_TIMEOUT = 10 * 60 * 1000; // 10 minutes in milliseconds
 const unsigned long INACTIVITY_SLEEP_MS = 2 * 60 * 1000;  // 2 minutes - then deep sleep
 
@@ -635,8 +639,6 @@ const char* HW_MATRIX_NAMESPACE = "hwmeta";
 const char* HW_MATRIX_ACTIVE_KEY = "matrix";
 const char* HW_MATRIX_LAST_GOOD_KEY = "matrix_lkg";
 bool devModeEnabled = false;
-const unsigned long DEV_FLUSH_STATUS_INTERVAL_MS = 5000;  // 0.2 Hz status snapshots during flush
-unsigned long lastDevFlushStatusLogMillis = 0;
 // M1/M2 fault handling controls.
 bool ignoreM12Faults = false;
 bool hasIgnoredM12Fault = false;
@@ -930,7 +932,6 @@ struct BatteryAssessment {
 
 static BatteryAssessment batteryAssessment = {0.0f, 0.0f, 0.0f, 0, 0, false, false, 0UL, false, false, 0, {}};
 static bool bootBatteryCheckDone = false;
-static unsigned long lastLoggedPoweronBootStatusMs = 0;
 static uint8_t runtimeSagStrikes = 0;
 static unsigned long runtimeSagLastStrikeMs = 0;
 
@@ -1855,7 +1856,7 @@ void server_setup(bool includeOTA = false) {
   blue_advert->setScanResponse(true);
   // Functions that help with iPhone connections issue
   blue_advert->setMinPreferred(0x06);
-  blue_advert->setMinPreferred(0x12);
+  blue_advert->setMaxPreferred(0x12);
 
 
   // Once the server starts advertising, the client can now see the server as it's visible to everyone
@@ -1865,6 +1866,7 @@ void server_setup(bool includeOTA = false) {
   Serial.print("ESP32 MAC ADDRESS: ");
   // Outputs the MAC Address of the ESP32 Board
   Serial.println(BLEDevice::getAddress().toString());
+  Serial.println("Advertising started");
   Serial.println("Characteristic defined! Now your client can read it!");
 }
 
@@ -1998,9 +2000,6 @@ void logBootTiming(const char* phase) {
   char msg[96];
   snprintf(msg, sizeof(msg), "%s,+%lums,total=%lums", phase, delta, now);
   Serial.printf("Boot timing: %s\n", msg);
-  if (errorLogInitialized && devModeEnabled) {
-    logError("boot_timing", (int)delta, msg, false);
-  }
 }
 
 void logBootCheckpoint(const char* phase) {
@@ -2016,11 +2015,6 @@ void logBootCheckpoint(const char* phase) {
   snprintf(timingMsg, sizeof(timingMsg), "%s,+%lums,total=%lums", phase, delta, now);
   Serial.printf("Boot checkpoint: %s\n", phase);
   Serial.printf("Boot timing: %s\n", timingMsg);
-  if (errorLogInitialized) {
-    char msg[96];
-    snprintf(msg, sizeof(msg), "phase=%s,delta=%lu,total=%lu", phase, delta, now);
-    logError("boot_checkpoint", 0, msg, false);
-  }
 }
 
 void captureCrashPendingRtc() {
@@ -2221,24 +2215,11 @@ String readLogChunk(size_t offset) {
   return String("LOGS:") + String((unsigned int)offset) + ":" + String((unsigned int)n) + ":" + chunk;
 }
 
-void logDevFlush(const char* type, int code, const char* msg, bool includeContext) {
-  if (!devModeEnabled || !errorLogInitialized) {
+void logFlushEvent(const char* type, int code, const char* msg, bool includeContext) {
+  if (!errorLogInitialized || !devModeEnabled) {
     return;
   }
   logError(type, code, msg, includeContext);
-}
-
-void logDevFlushStatusTick() {
-  if (!devModeEnabled || !isFlushing || !errorLogInitialized) {
-    return;
-  }
-  unsigned long now = millis();
-  if (lastDevFlushStatusLogMillis != 0 &&
-      (now - lastDevFlushStatusLogMillis) < DEV_FLUSH_STATUS_INTERVAL_MS) {
-    return;
-  }
-  lastDevFlushStatusLogMillis = now;
-  logError("flush_status", 0, "tick", true);
 }
 
 void setFlushStep(int newStep, bool logTransition) {
@@ -5356,17 +5337,8 @@ void logBootStatus() {
                 reasonStr, (int)resetReason,
                 errorLogInitialized ? "ok" : "off",
                 (unsigned)getErrorLogFileSize());
-  if (errorLogInitialized) {
-    unsigned long now = millis();
-    if (resetReason == ESP_RST_POWERON &&
-        lastLoggedPoweronBootStatusMs != 0 &&
-        (now - lastLoggedPoweronBootStatusMs) < 60000UL) {
-      return;
-    }
+  if (errorLogInitialized && isAbnormalResetReason(resetReason)) {
     logError("boot_status", (int)resetReason, msg, false);
-    if (resetReason == ESP_RST_POWERON) {
-      lastLoggedPoweronBootStatusMs = now;
-    }
   }
 }
 
@@ -5429,9 +5401,6 @@ void wdtCheckpoint() {
 void wdtCheckpoint(const char* phase) {
   if (phase && phase[0]) {
     g_bootPhase = phase;
-    if (devModeEnabled && errorLogInitialized) {
-      logError("boot_checkpoint", 0, phase, false);
-    }
   }
   feedTaskWatchdog();
   yield();
@@ -5715,7 +5684,7 @@ void testHeaterCurrent(bool lowBatteryAsError) {
     return;
   }
   snprintf(msg, sizeof(msg), "start context=%s", lowBatteryAsError ? "flush" : "boot");
-  logPowerTestEvent(tag, msg, false);
+  logPowerTestEvent(tag, msg, false, false);
 
   if (!batteryAssessment.valid || !batteryAssessment.assessPassed) {
     if (!assessBatteryUsable(tag, true, nullptr)) {
@@ -5804,7 +5773,7 @@ void testHeaterCurrent(bool lowBatteryAsError) {
       logError("power_test", 5, "heater_current_not_detected", true);
     }
   } else {
-    logPowerTestEvent(tag, "PASS", false);
+    logPowerTestEvent(tag, "PASS", false, false);
   }
 }
 
@@ -5868,7 +5837,10 @@ void setup() {
     Serial.printf("Largest free block: %d bytes\n", ESP.getMaxAllocHeap());
     Serial.printf("Min free heap ever: %d bytes\n", ESP.getMinFreeHeap());
 
+    delay(200);
     server_setup(false);
+    bleWakeGuardUntil = millis() + BLE_WAKE_GUARD_MS;
+    bleWakeGuardLastKick = millis();
     logBootCheckpoint("ble_ok");
 
     Serial.println("=== MEMORY AFTER BLE SERVER SETUP (WAKE) ===");
@@ -6018,21 +5990,28 @@ void loop() {
     bleIdleStartTime = millis();
   }
 
+  // Post-wake advertising guard: re-kick advertising if it stalled after deep-sleep wake
+  if (bleEnabled && bleWakeGuardUntil > 0 && millis() < bleWakeGuardUntil && !is_device_connected) {
+    if (millis() - bleWakeGuardLastKick >= BLE_WAKE_GUARD_INTERVAL_MS) {
+      bleWakeGuardLastKick = millis();
+      if (blue_server) {
+        Serial.println("BLE wake guard: restart advertising");
+        BLEDevice::startAdvertising();
+      } else {
+        Serial.println("BLE wake guard: blue_server missing, skipping restart");
+      }
+    }
+  } else if (bleWakeGuardUntil > 0 && millis() >= bleWakeGuardUntil) {
+    bleWakeGuardUntil = 0;
+  }
+
   // Check for BLE timeout during idle (no serial streaming) - never shut down during OTA transfer.
   if (!devModeEnabled && bleEnabled && !otaTransferInProgress() && !serial_streaming_enabled && !isFlushing &&
       (millis() - bleIdleStartTime > BLE_TIMEOUT)) {
     Serial.println("BLE shutting down after 10 minutes to save power");
     SerialBLE_println("BLE shutting down after 10 minutes to save power");
-    
-    // Disconnect all clients and stop advertising
-    if (blue_server) {
-      is_device_connected = false;
-      serial_streaming_enabled = false;
-      blue_server->getAdvertising()->stop();
-      BLEDevice::deinit();
-    }
-    
-    bleEnabled = false;
+
+    shutdownBleForPowerDown("ble_idle_timeout");
     dualButtonHoldActive = false; // Reset hold timer when BLE shuts down
     Serial.println("BLE disabled - manually restart device to re-enable");
     // Continue with control panel operations even when BLE is disabled
@@ -6321,8 +6300,7 @@ void loop() {
           
           flushStep = 0;
           isFlushing = true;
-          lastDevFlushStatusLogMillis = 0;
-          logDevFlush("flush_event", 0, "start", false);
+          logFlushEvent("flush_event", 0, "start", false);
           flushCancelArmed = false;
           button1Held = false;
           button1DelayActive = false;
@@ -6478,6 +6456,7 @@ void loop() {
     if (getErrorLogFileSize() > LOG_SLEEP_TRIM_TRIGGER) {
       trimErrorLogToSize(LOG_TRIM_TARGET);
     }
+    shutdownBleForPowerDown("inactivity_deep_sleep");
     esp_task_wdt_reset();
     esp_deep_sleep_start();
   }
@@ -6553,7 +6532,6 @@ void loop() {
 
 void flushSequence() {
   unsigned long currentMillis = millis();
-  logDevFlushStatusTick();
   
   // Required time above K in seconds (H + CUT_MODE_HEAT_TIME if in cut mode)
   long totalHeaterTime = H;
@@ -6566,7 +6544,7 @@ void flushSequence() {
       ensureTaskWatchdogForFlush();
       ledLastUpdateMillis = millis();
       maxHeaterWallTimeMs = 0;  // Reset at start of each flush cycle before recomputing once.
-      logPowerTestEvent("flush_preflight", "gate0 start", false);
+      logPowerTestEvent("flush_preflight", "gate0 start", false, false);
 
       bool flushAllowed = false;
       if (!assessBatteryUsable("flush_preflight", true, &flushAllowed)) {
@@ -6589,8 +6567,6 @@ void flushSequence() {
         latchLowBatteryStop(reason);
         return;
       }
-      logPowerTestEvent("flush_preflight", "gate1 PASS usable battery ok", true);
-
       logMotorFaultDebug("flush case0 before fault check");
       checkAllMotorFaults();
       logMotorFaultDebug("flush case0 after fault check");
@@ -6599,7 +6575,6 @@ void flushSequence() {
         logPowerTestEvent("flush_preflight", preflightMsg, true);
         return;
       }
-      logPowerTestEvent("flush_preflight", "gate2 PASS motor_faults_ok", false);
 
       testHeaterCurrent(true);
       if (ERROR_CODE != 0) {
@@ -6607,7 +6582,9 @@ void flushSequence() {
         logPowerTestEvent("flush_preflight", preflightMsg, true);
         return;
       }
-      logPowerTestEvent("flush_preflight", "gate4 PASS all_preflight_ok", true);
+      snprintf(preflightMsg, sizeof(preflightMsg), "PASS gates_ok usable=%d%%",
+               batteryAssessment.usablePercent);
+      logPowerTestEvent("flush_preflight", preflightMsg, false, true);
       case1FeedStarted = false;  // Reset flag for case 1
       case6CutMotorRun = false;   // Reset flag for case 6 cut motor (run after H, then heat for CUT_MODE_HEAT_TIME)
       timeAboveCutModeTempMillis = 0;
@@ -7087,10 +7064,9 @@ void flushSequence() {
           mcp_digitalWrite(getLedPin(i), LOW);
         }
         incrementFlushCount();
-        logDevFlush("flush_event", 0, "complete", true);
+        logFlushEvent("flush_event", 0, "complete", true);
         isFlushing = false;
         setFlushStep(0, false);
-        lastDevFlushStatusLogMillis = 0;
         flushCancelArmed = false;
         cutBag = false;  // Reset cutBag for next cycle
         lastActivityMillis = millis();  // Restart inactivity/sleep timer at end of flush
@@ -7589,6 +7565,43 @@ void checkOTATimeouts() {
   }
 }
 
+void shutdownBleForPowerDown(const char* reason) {
+  if (!bleEnabled && !blue_server) {
+    return;
+  }
+
+  Serial.printf("Shutting down BLE: %s (heap=%d)\n", reason, ESP.getFreeHeap());
+
+  if (is_device_connected) {
+    disconnectBleClient();
+    delay(100);
+  }
+
+  is_device_connected = false;
+  serial_streaming_enabled = false;
+  old_device_connect = false;
+
+  if (blue_server) {
+    blue_server->getAdvertising()->stop();
+  }
+
+  BLEDevice::deinit(true);
+
+  blue_server = nullptr;
+  blue_characteristic = nullptr;
+  response_characteristic = nullptr;
+  param_read_characteristic = nullptr;
+  param_write_characteristic = nullptr;
+  serial_characteristic = nullptr;
+  version_characteristic = nullptr;
+  update_characteristic = nullptr;
+  update_service = nullptr;
+
+  bleEnabled = false;
+  bleWakeGuardUntil = 0;
+  delay(150);
+}
+
 // Restart BLE server without OTA
 void restartBLEServer() {
   Serial.println("Restarting BLE server (without OTA)");
@@ -7865,7 +7878,7 @@ float minIdleBatteryV() {
   return (fromThreshold > minIdleBatteryVFloor) ? fromThreshold : minIdleBatteryVFloor;
 }
 
-void logPowerTestEvent(const char* phase, const char* msg, bool includeContext) {
+void logPowerTestEvent(const char* phase, const char* msg, bool includeContext, bool persist) {
   if (!phase || !msg) {
     return;
   }
@@ -7873,7 +7886,7 @@ void logPowerTestEvent(const char* phase, const char* msg, bool includeContext) 
   snprintf(line, sizeof(line), "[%s] %s", phase, msg);
   Serial.println(line);
   SerialBLE_println(line);
-  if (errorLogInitialized) {
+  if (errorLogInitialized && persist) {
     logError("power_test", 0, line, includeContext);
   }
 }
@@ -7919,7 +7932,7 @@ bool measureBatteryUnderLoad(float* vIdle, float* vLoad, int testDuty, uint16_t 
     return false;
   }
 
-  logPowerTestEvent(tag, "PASS", false);
+  logPowerTestEvent(tag, "PASS", false, false);
   return true;
 }
 
@@ -7950,6 +7963,31 @@ int getEffectiveHeaterPwmCap(float batteryV) {
 
 bool assessBatteryUsable(const char* tag, bool forceRefresh, bool* outFlushAllowed) {
   const char* assessTag = (tag && tag[0]) ? tag : "battery_assess";
+
+  auto assessStartPersist = [](const char* assessTagName) -> bool {
+    if (!assessTagName) {
+      return true;
+    }
+    if (strcmp(assessTagName, "boot_battery_check") == 0) {
+      return false;
+    }
+    if (strcmp(assessTagName, "flush_preflight") == 0) {
+      return false;
+    }
+    if (strcmp(assessTagName, "flush_button") == 0) {
+      return false;
+    }
+    if (strcmp(assessTagName, "flush_check") == 0) {
+      return false;
+    }
+    if (strcmp(assessTagName, "boot_heater_test") == 0) {
+      return false;
+    }
+    if (strcmp(assessTagName, "flush_heater_test") == 0) {
+      return false;
+    }
+    return true;
+  };
 
   if (!shouldRefreshBatteryCache(forceRefresh)) {
     if (outFlushAllowed) {
@@ -8009,7 +8047,7 @@ bool assessBatteryUsable(const char* tag, bool forceRefresh, bool* outFlushAllow
   }
 
   snprintf(msg, sizeof(msg), "start vIdle=%.2f capDuty=%d steps=%d", vIdle, capDuty, dutyCount);
-  logPowerTestEvent(assessTag, msg, false);
+  logPowerTestEvent(assessTag, msg, false, assessStartPersist(assessTag));
 
   float vLoadWorst = vIdle;
   float sagWorst = 0.0f;
@@ -8068,17 +8106,19 @@ bool assessBatteryUsable(const char* tag, bool forceRefresh, bool* outFlushAllow
                step.duty, step.vLoad, step.sag, step.heaterAdc, step.heaterA);
       logPowerTestEvent(assessTag, msg, true);
     }
+    snprintf(msg, sizeof(msg),
+             "done passed=%d usable=%d%% flushAllowed=%d vLoadWorst=%.2f sagWorst=%.2f capDuty=%d",
+             0,
+             batteryAssessment.usablePercent,
+             batteryAssessment.flushAllowed ? 1 : 0,
+             vLoadWorst,
+             sagWorst,
+             capDuty);
+    logPowerTestEvent(assessTag, msg, true);
+  } else if (strcmp(assessTag, "flush_button") == 0) {
+    snprintf(msg, sizeof(msg), "done usable=%d%%", batteryAssessment.usablePercent);
+    logPowerTestEvent(assessTag, msg, false, true);
   }
-
-  snprintf(msg, sizeof(msg),
-           "done passed=%d usable=%d%% flushAllowed=%d vLoadWorst=%.2f sagWorst=%.2f capDuty=%d",
-           assessPassed ? 1 : 0,
-           batteryAssessment.usablePercent,
-           batteryAssessment.flushAllowed ? 1 : 0,
-           vLoadWorst,
-           sagWorst,
-           capDuty);
-  logPowerTestEvent(assessTag, msg, !assessPassed);
 
   if (outFlushAllowed) {
     *outFlushAllowed = batteryAssessment.flushAllowed;
@@ -8168,7 +8208,7 @@ bool shouldSkipBootHeaterTest(const char** skipReason) {
     }
     return true;
   }
-  logPowerTestEvent("boot_heater_test", "preflight_ok running test", false);
+  logPowerTestEvent("boot_heater_test", "preflight_ok running test", false, false);
   return false;
 }
 
@@ -8510,7 +8550,7 @@ bool acceptFlushCancel(bool button1Pressed, bool button2Pressed) {
   }
   Serial.println("Flush cancelled by control panel input");
   SerialBLE_println("Flush cancelled by control panel input");
-  logDevFlush("flush_event", 0, "cancel", true);
+  logFlushEvent("flush_event", 0, "cancel", true);
   playHardwareNotConnectedAlert();
   flushCancelRecoveryActive = true;
   bool continueFlushRecovery = abortFlushForCancel();
@@ -8552,7 +8592,6 @@ void clearFlushStateForCancel() {
 
   isFlushing = false;
   setFlushStep(0, false);
-  lastDevFlushStatusLogMillis = 0;
   flushCancelArmed = false;
   cutBag = false;
   mechanismMotorRunning = false;
@@ -8590,7 +8629,7 @@ void completeCancelRecoveryReady() {
     mcp_digitalWrite(getLedPin(i), LOW);
   }
   lastActivityMillis = millis();
-  logDevFlush("flush_event", 0, "cancel_complete", true);
+  logFlushEvent("flush_event", 0, "cancel_complete", true);
 }
 
 void beginCancelRecoveryHoming() {
@@ -8631,7 +8670,7 @@ void stopEverything() {
   SerialBLE_println("stop everything");
   bool wasFlushing = isFlushing;
   if (wasFlushing) {
-    logDevFlush("flush_event", 0, "abort", true);
+    logFlushEvent("flush_event", 0, "abort", true);
   }
   motors.setM2Speed(0);
   motors.setM1Speed(0);
@@ -8642,7 +8681,6 @@ void stopEverything() {
 
   isFlushing = false;
   setFlushStep(0, false);
-  lastDevFlushStatusLogMillis = 0;
   flushCancelArmed = false;
   cancelRecoveryHomingPending = false;
   flushCancelRecoveryActive = false;

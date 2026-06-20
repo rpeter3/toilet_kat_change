@@ -1,0 +1,17 @@
+Log Trim Regression Report
+Run ID: 20260620T011939Z
+Started: 2026-06-20T01:19:39.120659+00:00
+Ended: 2026-06-20T01:21:36.751746+00:00
+Result: FAIL
+Dry run: False
+Port: COM5
+Chip: esp32s3
+BLE address: 58:E6:C5:6C:AF:81
+SPIFFS backup: C:\Users\richa\Documents\GitHub\toilet_kat_change\test-builds\log-trim-regression\spiffs_backup_20260620T005256Z.bin
+
+Failures:
+  - write_trim: GET_LOGS failed after 3 attempts: Failed to connect for GET_LOGS
+
+[FAIL] write_trim (117.63s)
+  seeded bytes: 76800
+  error: GET_LOGS failed after 3 attempts: Failed to connect for GET_LOGS

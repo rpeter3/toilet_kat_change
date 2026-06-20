@@ -1,0 +1,35 @@
+Log Trim Regression Report
+Run ID: 20260620T002721Z
+Started: 2026-06-20T00:27:21.242669+00:00
+Ended: 2026-06-20T00:36:15.062379+00:00
+Result: FAIL
+Dry run: False
+Port: COM5
+Chip: esp32s3
+BLE address: 3C:DC:75:FC:62:5D
+SPIFFS backup: C:\Users\richa\Documents\GitHub\toilet_kat_change\test-builds\log-trim-regression\spiffs_backup_20260620T002721Z.bin
+
+Failures:
+  - no_trim: no_trim: expected marker 'TRIM_MARKER_OLD_000001' not found
+  - write_trim: BLE device not visible within 90s (3C:DC:75:FC:62:5D)
+  - ota_trim: BLE device not visible within 90s (3C:DC:75:FC:62:5D)
+  - sleep_trim: BLE device not visible within 90s (3C:DC:75:FC:62:5D)
+
+[FAIL] no_trim (38.89s)
+  seeded bytes: 30000
+  error: no_trim: expected marker 'TRIM_MARKER_OLD_000001' not found
+
+[FAIL] write_trim (139.48s)
+  seeded bytes: 76700
+  error: BLE device not visible within 90s (3C:DC:75:FC:62:5D)
+
+[FAIL] ota_trim (139.87s)
+  seeded bytes: 45000
+  error: BLE device not visible within 90s (3C:DC:75:FC:62:5D)
+
+[FAIL] sleep_trim (125.26s)
+  seeded bytes: 67000
+  error: BLE device not visible within 90s (3C:DC:75:FC:62:5D)
+
+[PASS] restore (14.63s)
+  observed log bytes: 0

@@ -1,0 +1,30 @@
+Log Trim Regression Report
+Run ID: 20260620T005256Z
+Started: 2026-06-20T00:52:56.619447+00:00
+Ended: 2026-06-20T01:01:51.073020+00:00
+Result: FAIL
+Dry run: False
+Port: COM5
+Chip: esp32s3
+BLE address: 58:E6:C5:6C:AF:81
+SPIFFS backup: C:\Users\richa\Documents\GitHub\toilet_kat_change\test-builds\log-trim-regression\spiffs_backup_20260620T005256Z.bin
+
+Failures:
+  - write_trim: write_trim: log size 76799 exceeds max 51200 (+ slack 512)
+  - ota_trim: ota_trim: expected marker 'TRIM_MARKER_NEW_999999' not found
+  - sleep_trim: sleep_trim: log missing trailing newline on last line
+
+[FAIL] write_trim (109.2s)
+  seeded bytes: 76800
+  error: write_trim: log size 76799 exceeds max 51200 (+ slack 512)
+
+[FAIL] ota_trim (47.03s)
+  seeded bytes: 45000
+  error: ota_trim: expected marker 'TRIM_MARKER_NEW_999999' not found
+
+[FAIL] sleep_trim (229.39s)
+  seeded bytes: 67000
+  error: sleep_trim: log missing trailing newline on last line
+
+[PASS] restore (14.74s)
+  observed log bytes: 0

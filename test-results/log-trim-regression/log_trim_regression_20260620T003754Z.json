@@ -1,0 +1,82 @@
+{
+  "run_id": "20260620T003754Z",
+  "started_at": "2026-06-20T00:37:54.038196+00:00",
+  "ended_at": "2026-06-20T00:45:13.255660+00:00",
+  "passed": false,
+  "dry_run": false,
+  "port": "COM5",
+  "chip": "esp32s3",
+  "address": "58:E6:C5:6C:AF:81",
+  "backup_path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\log-trim-regression\\spiffs_backup_20260620T003754Z.bin",
+  "steps": [
+    {
+      "name": "no_trim",
+      "passed": true,
+      "seeded_bytes": 30000,
+      "observed_log_bytes": 29999,
+      "errors": [],
+      "logs_excerpt": "trim_test,1,0,TRIM_MARKER_OLD_000001\ntrim_test,000002,0,PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP\ntrim_test,000003,0,PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP\ntri\n...(truncated)...\nim_test,000374,0,PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP\ntrim_test,000375,0,QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ\ntrim_test,999999,0,TRIM_MARKER_NEW_999999",
+      "started_at": "2026-06-20T00:38:56.681636+00:00",
+      "ended_at": "2026-06-20T00:39:54.995944+00:00",
+      "duration_s": 58.31
+    },
+    {
+      "name": "write_trim",
+      "passed": false,
+      "seeded_bytes": 76700,
+      "observed_log_bytes": null,
+      "errors": [
+        "write_trim: log size 76699 exceeds max 51200 (+ slack 512)"
+      ],
+      "logs_excerpt": null,
+      "started_at": "2026-06-20T00:39:54.996193+00:00",
+      "ended_at": "2026-06-20T00:41:44.088336+00:00",
+      "duration_s": 109.09
+    },
+    {
+      "name": "ota_trim",
+      "passed": false,
+      "seeded_bytes": 45000,
+      "observed_log_bytes": null,
+      "errors": [
+        "ota_trim: expected marker 'TRIM_MARKER_NEW_999999' not found"
+      ],
+      "logs_excerpt": null,
+      "started_at": "2026-06-20T00:41:44.088421+00:00",
+      "ended_at": "2026-06-20T00:42:31.254287+00:00",
+      "duration_s": 47.17
+    },
+    {
+      "name": "sleep_trim",
+      "passed": false,
+      "seeded_bytes": 67000,
+      "observed_log_bytes": null,
+      "errors": [
+        "esptool run failed (exit 2): \nA fatal error occurred: Could not open COM5, the port is busy or doesn't exist.\n(could not open port 'COM5': FileNotFoundError(2, 'The system cannot find the file specified.', None, 2))\n\nHint: Check if the port is correct and ESP connected\n\n"
+      ],
+      "logs_excerpt": null,
+      "started_at": "2026-06-20T00:42:31.254351+00:00",
+      "ended_at": "2026-06-20T00:45:12.652237+00:00",
+      "duration_s": 161.4
+    },
+    {
+      "name": "restore",
+      "passed": false,
+      "seeded_bytes": null,
+      "observed_log_bytes": null,
+      "errors": [
+        "esptool write-flash SPIFFS failed (exit 2): \nA fatal error occurred: Could not open COM5, the port is busy or doesn't exist.\n(could not open port 'COM5': FileNotFoundError(2, 'The system cannot find the file specified.', None, 2))\n\nHint: Check if the port is correct and ESP connected\n\n"
+      ],
+      "logs_excerpt": null,
+      "started_at": "2026-06-20T00:45:12.652309+00:00",
+      "ended_at": "2026-06-20T00:45:13.255604+00:00",
+      "duration_s": 0.6
+    }
+  ],
+  "failures": [
+    "write_trim: write_trim: log size 76699 exceeds max 51200 (+ slack 512)",
+    "ota_trim: ota_trim: expected marker 'TRIM_MARKER_NEW_999999' not found",
+    "sleep_trim: esptool run failed (exit 2): \nA fatal error occurred: Could not open COM5, the port is busy or doesn't exist.\n(could not open port 'COM5': FileNotFoundError(2, 'The system cannot find the file specified.', None, 2))\n\nHint: Check if the port is correct and ESP connected\n\n",
+    "restore: esptool write-flash SPIFFS failed (exit 2): \nA fatal error occurred: Could not open COM5, the port is busy or doesn't exist.\n(could not open port 'COM5': FileNotFoundError(2, 'The system cannot find the file specified.', None, 2))\n\nHint: Check if the port is correct and ESP connected\n\n"
+  ]
+}

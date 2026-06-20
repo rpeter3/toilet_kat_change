@@ -1,0 +1,371 @@
+{
+  "run_id": "20260619T203730Z",
+  "started_at": "2026-06-19T20:37:30.917216+00:00",
+  "ended_at": "2026-06-19T21:14:09.703115+00:00",
+  "passed": false,
+  "dry_run": false,
+  "fast_mode": true,
+  "auto_build": false,
+  "port": "COM5",
+  "address": "58:E6:C5:6C:AF:81",
+  "partition_sequence": [
+    "factory",
+    "ota_0"
+  ],
+  "steps": [
+    {
+      "name": "ota2",
+      "passed": false,
+      "expected_partition": "ota_1",
+      "transport": "ble",
+      "pending_clear_required": true,
+      "expected_sw": "4.1.7-regB",
+      "observed_sw": null,
+      "observed_partition": "ota_1",
+      "version": "v1.0",
+      "ota_diag": {
+        "pending": "0",
+        "attempts": "0",
+        "streak": "2",
+        "target": "17",
+        "last_trigger": "manual",
+        "from": "ota_1",
+        "to": "ota_0",
+        "reset": "poweron",
+        "md5": "af269075",
+        "size": "918016",
+        "reason": "manual_support_request",
+        "seq": "3",
+        "tail_len": "1024",
+        "log_tail": ",bat=12.7,temp=22.9,m1A=0.00,heaterA=0.00,fan=off~power_test,5824,0,[boot_battery_check] step duty=64 settle=50ms~power_test,5928,0,[boot_battery_check] step_result duty=64 vLoad=1"
+      },
+      "boot_info": "BOOT_INFO:reset=usb,code=11,phase=boot_complete:cold,coredump=0,coredump_size=0",
+      "logs_excerpt": "power_test,142061,0,[flush_preflight] step duty=64 settle=50ms\npower_test,142164,0,[flush_preflight] step_result duty=64 vLoad=12.58 sag=0.03 adc=1452 I=0.59\nboot_checkpoint,306,0,serial_ok\nboot_checkpoint,359,0,gpio_safe\nboot_checkpoint,410,0,nvs_ok\nboot_timing,530,396,crash_flush_done,+396ms,total=530ms\nboot_checkpoint,582,0,spiffs_ok\nboot_timing,633,102,spiffs_ok,+102ms,total=632ms\nboot_timing,684,51,spiffs_init_done,+51ms,total=683ms\nboot_timing,735,52,devmode_load_start,+52ms,total=735ms\nboot_timing,787,51,devmode_load_done,+51ms,total=786ms\nboot_timing,839,52,hw_matrix_start,+52ms,total=838ms\nboot_timing,1032,194,hw_matrix_path,active_nvs,+194ms,total=1032ms\nboot_timing,1084,52,hw_matrix_done,+52ms,total=1084ms\nboot_timing,1136,51,hwcfg_start,+51ms,total=1135ms\nboot_timing,1230,95,hwcfg_path,spiffs_active,+95ms,total=1230ms\nboot_timing,1284,53,hwcfg_done,+53ms,total=1283ms\nboot_timing,1336,52,ota_record_start,+52ms,total=1335ms\nboot_timing,1388,53,ota_record_done,+53ms,total=1388ms\nboot_timing,1506,118,mcp_start,+118ms,total=1506ms\nboot_timing,1758,252,mcp_rail_settle_done,+252ms,total=1758ms\nboot_timing,1828,70,mcp_ok_attempt_1,7ms,+70ms,total=1828ms\nboot_timing,1882,54,mcp_configure_start,+54ms,total=1882ms\nboot_timing,2089,207,mcp_configure_done,+207ms,total=2089ms\nboot_checkpoint,2142,0,mcp_ok\nboot_timing,2262,173,mcp_ok,+173ms,total=2262ms\nboot_timing,2314,51,eeprom_load_start,+51ms,total=2313ms\nboot_timing,2366,53,eeprom_params_load_start,+53ms,total=2366ms\nboot_timing,2419,53,eeprom_params_magic,0x1234,+53ms,total=2419ms\nboot_timing,2472,53,eeprom_params_load_valid_done,+53ms,total=2472ms\nboot_timing,2524,51,eeprom_flush_load_start,+51ms,total=2523ms\nboot_timing,2578,54,eeprom_flush_magic,0xF1C5,+54ms,total=2577ms\nboot_timing,2695,118,eeprom_flush_load_valid_done,+118ms,total=2695ms\nboot_timing,2747,51,eeprom_load_done,+51ms,total=2746ms\nboot_checkpoint,2798,0,eeprom_ok\nboot_timing,2850,104,eeprom_ok,+104ms,total=2850ms\nboot_checkpoint,2902,0,pins_ok\nbo",
+      "errors": [
+        "Expected SW 4.1.7-regB, observed None",
+        "Expected Build 2026-06-19, observed None"
+      ],
+      "started_at": "2026-06-19T20:58:44.499659+00:00",
+      "ended_at": "2026-06-19T21:03:04.363948+00:00",
+      "duration_s": 259.86
+    },
+    {
+      "name": "rollback_previous",
+      "passed": false,
+      "expected_partition": "ota_0",
+      "transport": "serial_sim",
+      "pending_clear_required": false,
+      "expected_sw": "4.1.7-regA",
+      "observed_sw": null,
+      "observed_partition": "ota_0",
+      "version": "v1.0",
+      "ota_diag": {
+        "pending": "0",
+        "attempts": "0",
+        "streak": "2",
+        "target": "17",
+        "last_trigger": "manual",
+        "from": "ota_1",
+        "to": "ota_0",
+        "reset": "poweron",
+        "md5": "af269075",
+        "size": "918016",
+        "reason": "manual_support_request",
+        "seq": "3",
+        "tail_len": "1024",
+        "log_tail": ",bat=12.7,temp=22.9,m1A=0.00,heaterA=0.00,fan=off~power_test,5824,0,[boot_battery_check] step duty=64 settle=50ms~power_test,5928,0,[boot_battery_check] step_result duty=64 vLoad=1"
+      },
+      "boot_info": "BOOT_INFO:reset=usb,code=11,phase=boot_complete:cold,coredump=0,coredump_size=0",
+      "logs_excerpt": "power_test,142061,0,[flush_preflight] step duty=64 settle=50ms\npower_test,142164,0,[flush_preflight] step_result duty=64 vLoad=12.58 sag=0.03 adc=1452 I=0.59\nboot_checkpoint,306,0,serial_ok\nboot_checkpoint,359,0,gpio_safe\nboot_checkpoint,410,0,nvs_ok\nboot_timing,530,396,crash_flush_done,+396ms,total=530ms\nboot_checkpoint,582,0,spiffs_ok\nboot_timing,633,102,spiffs_ok,+102ms,total=632ms\nboot_timing,684,51,spiffs_init_done,+51ms,total=683ms\nboot_timing,735,52,devmode_load_start,+52ms,total=735ms\nboot_timing,787,51,devmode_load_done,+51ms,total=786ms\nboot_timing,839,52,hw_matrix_start,+52ms,total=838ms\nboot_timing,1032,194,hw_matrix_path,active_nvs,+194ms,total=1032ms\nboot_timing,1084,52,hw_matrix_done,+52ms,total=1084ms\nboot_timing,1136,51,hwcfg_start,+51ms,total=1135ms\nboot_timing,1230,95,hwcfg_path,spiffs_active,+95ms,total=1230ms\nboot_timing,1284,53,hwcfg_done,+53ms,total=1283ms\nboot_timing,1336,52,ota_record_start,+52ms,total=1335ms\nboot_timing,1388,53,ota_record_done,+53ms,total=1388ms\nboot_timing,1506,118,mcp_start,+118ms,total=1506ms\nboot_timing,1758,252,mcp_rail_settle_done,+252ms,total=1758ms\nboot_timing,1828,70,mcp_ok_attempt_1,7ms,+70ms,total=1828ms\nboot_timing,1882,54,mcp_configure_start,+54ms,total=1882ms\nboot_timing,2089,207,mcp_configure_done,+207ms,total=2089ms\nboot_checkpoint,2142,0,mcp_ok\nboot_timing,2262,173,mcp_ok,+173ms,total=2262ms\nboot_timing,2314,51,eeprom_load_start,+51ms,total=2313ms\nboot_timing,2366,53,eeprom_params_load_start,+53ms,total=2366ms\nboot_timing,2419,53,eeprom_params_magic,0x1234,+53ms,total=2419ms\nboot_timing,2472,53,eeprom_params_load_valid_done,+53ms,total=2472ms\nboot_timing,2524,51,eeprom_flush_load_start,+51ms,total=2523ms\nboot_timing,2578,54,eeprom_flush_magic,0xF1C5,+54ms,total=2577ms\nboot_timing,2695,118,eeprom_flush_load_valid_done,+118ms,total=2695ms\nboot_timing,2747,51,eeprom_load_done,+51ms,total=2746ms\nboot_checkpoint,2798,0,eeprom_ok\nboot_timing,2850,104,eeprom_ok,+104ms,total=2850ms\nboot_checkpoint,2902,0,pins_ok\nbo",
+      "errors": [
+        "Expected SW 4.1.7-regA, observed None",
+        "Expected Build 2026-06-19, observed None"
+      ],
+      "started_at": "2026-06-19T21:03:23.412146+00:00",
+      "ended_at": "2026-06-19T21:05:33.596965+00:00",
+      "duration_s": 130.18
+    },
+    {
+      "name": "ota3",
+      "passed": false,
+      "expected_partition": "ota_1",
+      "transport": "serial_sim",
+      "pending_clear_required": false,
+      "expected_sw": "4.1.7-regB",
+      "observed_sw": null,
+      "observed_partition": "ota_1",
+      "version": "v1.0",
+      "ota_diag": {
+        "pending": "0",
+        "attempts": "0",
+        "streak": "2",
+        "target": "17",
+        "last_trigger": "manual",
+        "from": "ota_1",
+        "to": "ota_0",
+        "reset": "poweron",
+        "md5": "af269075",
+        "size": "918016",
+        "reason": "manual_support_request",
+        "seq": "3",
+        "tail_len": "1024",
+        "log_tail": ",bat=12.7,temp=22.9,m1A=0.00,heaterA=0.00,fan=off~power_test,5824,0,[boot_battery_check] step duty=64 settle=50ms~power_test,5928,0,[boot_battery_check] step_result duty=64 vLoad=1"
+      },
+      "boot_info": "BOOT_INFO:reset=usb,code=11,phase=boot_complete:cold,coredump=0,coredump_size=0",
+      "logs_excerpt": "power_test,142061,0,[flush_preflight] step duty=64 settle=50ms\npower_test,142164,0,[flush_preflight] step_result duty=64 vLoad=12.58 sag=0.03 adc=1452 I=0.59\nboot_checkpoint,306,0,serial_ok\nboot_checkpoint,359,0,gpio_safe\nboot_checkpoint,410,0,nvs_ok\nboot_timing,530,396,crash_flush_done,+396ms,total=530ms\nboot_checkpoint,582,0,spiffs_ok\nboot_timing,633,102,spiffs_ok,+102ms,total=632ms\nboot_timing,684,51,spiffs_init_done,+51ms,total=683ms\nboot_timing,735,52,devmode_load_start,+52ms,total=735ms\nboot_timing,787,51,devmode_load_done,+51ms,total=786ms\nboot_timing,839,52,hw_matrix_start,+52ms,total=838ms\nboot_timing,1032,194,hw_matrix_path,active_nvs,+194ms,total=1032ms\nboot_timing,1084,52,hw_matrix_done,+52ms,total=1084ms\nboot_timing,1136,51,hwcfg_start,+51ms,total=1135ms\nboot_timing,1230,95,hwcfg_path,spiffs_active,+95ms,total=1230ms\nboot_timing,1284,53,hwcfg_done,+53ms,total=1283ms\nboot_timing,1336,52,ota_record_start,+52ms,total=1335ms\nboot_timing,1388,53,ota_record_done,+53ms,total=1388ms\nboot_timing,1506,118,mcp_start,+118ms,total=1506ms\nboot_timing,1758,252,mcp_rail_settle_done,+252ms,total=1758ms\nboot_timing,1828,70,mcp_ok_attempt_1,7ms,+70ms,total=1828ms\nboot_timing,1882,54,mcp_configure_start,+54ms,total=1882ms\nboot_timing,2089,207,mcp_configure_done,+207ms,total=2089ms\nboot_checkpoint,2142,0,mcp_ok\nboot_timing,2262,173,mcp_ok,+173ms,total=2262ms\nboot_timing,2314,51,eeprom_load_start,+51ms,total=2313ms\nboot_timing,2366,53,eeprom_params_load_start,+53ms,total=2366ms\nboot_timing,2419,53,eeprom_params_magic,0x1234,+53ms,total=2419ms\nboot_timing,2472,53,eeprom_params_load_valid_done,+53ms,total=2472ms\nboot_timing,2524,51,eeprom_flush_load_start,+51ms,total=2523ms\nboot_timing,2578,54,eeprom_flush_magic,0xF1C5,+54ms,total=2577ms\nboot_timing,2695,118,eeprom_flush_load_valid_done,+118ms,total=2695ms\nboot_timing,2747,51,eeprom_load_done,+51ms,total=2746ms\nboot_checkpoint,2798,0,eeprom_ok\nboot_timing,2850,104,eeprom_ok,+104ms,total=2850ms\nboot_checkpoint,2902,0,pins_ok\nbo",
+      "errors": [
+        "Expected SW 4.1.7-regB, observed None",
+        "Expected Build 2026-06-19, observed None"
+      ],
+      "started_at": "2026-06-19T21:05:57.994646+00:00",
+      "ended_at": "2026-06-19T21:08:10.903489+00:00",
+      "duration_s": 132.91
+    },
+    {
+      "name": "ota4",
+      "passed": false,
+      "expected_partition": "ota_0",
+      "transport": "serial_sim",
+      "pending_clear_required": false,
+      "expected_sw": "4.1.7-regA",
+      "observed_sw": null,
+      "observed_partition": "ota_0",
+      "version": "v1.0",
+      "ota_diag": {
+        "pending": "0",
+        "attempts": "0",
+        "streak": "2",
+        "target": "17",
+        "last_trigger": "manual",
+        "from": "ota_1",
+        "to": "ota_0",
+        "reset": "poweron",
+        "md5": "af269075",
+        "size": "918016",
+        "reason": "manual_support_request",
+        "seq": "3",
+        "tail_len": "1024",
+        "log_tail": ",bat=12.7,temp=22.9,m1A=0.00,heaterA=0.00,fan=off~power_test,5824,0,[boot_battery_check] step duty=64 settle=50ms~power_test,5928,0,[boot_battery_check] step_result duty=64 vLoad=1"
+      },
+      "boot_info": "BOOT_INFO:reset=usb,code=11,phase=boot_complete:cold,coredump=0,coredump_size=0",
+      "logs_excerpt": "power_test,142061,0,[flush_preflight] step duty=64 settle=50ms\npower_test,142164,0,[flush_preflight] step_result duty=64 vLoad=12.58 sag=0.03 adc=1452 I=0.59\nboot_checkpoint,306,0,serial_ok\nboot_checkpoint,359,0,gpio_safe\nboot_checkpoint,410,0,nvs_ok\nboot_timing,530,396,crash_flush_done,+396ms,total=530ms\nboot_checkpoint,582,0,spiffs_ok\nboot_timing,633,102,spiffs_ok,+102ms,total=632ms\nboot_timing,684,51,spiffs_init_done,+51ms,total=683ms\nboot_timing,735,52,devmode_load_start,+52ms,total=735ms\nboot_timing,787,51,devmode_load_done,+51ms,total=786ms\nboot_timing,839,52,hw_matrix_start,+52ms,total=838ms\nboot_timing,1032,194,hw_matrix_path,active_nvs,+194ms,total=1032ms\nboot_timing,1084,52,hw_matrix_done,+52ms,total=1084ms\nboot_timing,1136,51,hwcfg_start,+51ms,total=1135ms\nboot_timing,1230,95,hwcfg_path,spiffs_active,+95ms,total=1230ms\nboot_timing,1284,53,hwcfg_done,+53ms,total=1283ms\nboot_timing,1336,52,ota_record_start,+52ms,total=1335ms\nboot_timing,1388,53,ota_record_done,+53ms,total=1388ms\nboot_timing,1506,118,mcp_start,+118ms,total=1506ms\nboot_timing,1758,252,mcp_rail_settle_done,+252ms,total=1758ms\nboot_timing,1828,70,mcp_ok_attempt_1,7ms,+70ms,total=1828ms\nboot_timing,1882,54,mcp_configure_start,+54ms,total=1882ms\nboot_timing,2089,207,mcp_configure_done,+207ms,total=2089ms\nboot_checkpoint,2142,0,mcp_ok\nboot_timing,2262,173,mcp_ok,+173ms,total=2262ms\nboot_timing,2314,51,eeprom_load_start,+51ms,total=2313ms\nboot_timing,2366,53,eeprom_params_load_start,+53ms,total=2366ms\nboot_timing,2419,53,eeprom_params_magic,0x1234,+53ms,total=2419ms\nboot_timing,2472,53,eeprom_params_load_valid_done,+53ms,total=2472ms\nboot_timing,2524,51,eeprom_flush_load_start,+51ms,total=2523ms\nboot_timing,2578,54,eeprom_flush_magic,0xF1C5,+54ms,total=2577ms\nboot_timing,2695,118,eeprom_flush_load_valid_done,+118ms,total=2695ms\nboot_timing,2747,51,eeprom_load_done,+51ms,total=2746ms\nboot_checkpoint,2798,0,eeprom_ok\nboot_timing,2850,104,eeprom_ok,+104ms,total=2850ms\nboot_checkpoint,2902,0,pins_ok\nbo",
+      "errors": [
+        "Expected SW 4.1.7-regA, observed None",
+        "Expected Build 2026-06-19, observed None"
+      ],
+      "started_at": "2026-06-19T21:08:35.573040+00:00",
+      "ended_at": "2026-06-19T21:10:53.462410+00:00",
+      "duration_s": 137.89
+    },
+    {
+      "name": "factory_reset",
+      "passed": false,
+      "expected_partition": "factory",
+      "transport": "serial_sim",
+      "pending_clear_required": false,
+      "expected_sw": "unknown",
+      "observed_sw": null,
+      "observed_partition": "factory",
+      "version": "v1.0",
+      "ota_diag": {},
+      "boot_info": "UNKNOWN_COMMAND:GET_BOOT_INFO",
+      "logs_excerpt": "mcp,3495,0,MCP_UNAVAILABLE\nmcp,3498,0,MCP_UNAVAILABLE",
+      "errors": [
+        "Expected SW unknown, observed None",
+        "Expected Build 2026-06-19, observed None"
+      ],
+      "started_at": "2026-06-19T21:11:10.971818+00:00",
+      "ended_at": "2026-06-19T21:11:21.429418+00:00",
+      "duration_s": 10.46
+    },
+    {
+      "name": "ota5",
+      "passed": false,
+      "expected_partition": "ota_0",
+      "transport": "serial_sim",
+      "pending_clear_required": false,
+      "expected_sw": "4.1.7-regB",
+      "observed_sw": null,
+      "observed_partition": "ota_0",
+      "version": "v1.0",
+      "ota_diag": {
+        "pending": "0",
+        "attempts": "0",
+        "streak": "2",
+        "target": "17",
+        "last_trigger": "manual",
+        "from": "ota_1",
+        "to": "ota_0",
+        "reset": "poweron",
+        "md5": "af269075",
+        "size": "918016",
+        "reason": "manual_support_request",
+        "seq": "3",
+        "tail_len": "1024",
+        "log_tail": ",bat=12.7,temp=22.9,m1A=0.00,heaterA=0.00,fan=off~power_test,5824,0,[boot_battery_check] step duty=64 settle=50ms~power_test,5928,0,[boot_battery_check] step_result duty=64 vLoad=1"
+      },
+      "boot_info": "BOOT_INFO:reset=usb,code=11,phase=boot_complete:cold,coredump=0,coredump_size=0",
+      "logs_excerpt": "power_test,142061,0,[flush_preflight] step duty=64 settle=50ms\npower_test,142164,0,[flush_preflight] step_result duty=64 vLoad=12.58 sag=0.03 adc=1452 I=0.59\nboot_checkpoint,306,0,serial_ok\nboot_checkpoint,359,0,gpio_safe\nboot_checkpoint,410,0,nvs_ok\nboot_timing,530,396,crash_flush_done,+396ms,total=530ms\nboot_checkpoint,582,0,spiffs_ok\nboot_timing,633,102,spiffs_ok,+102ms,total=632ms\nboot_timing,684,51,spiffs_init_done,+51ms,total=683ms\nboot_timing,735,52,devmode_load_start,+52ms,total=735ms\nboot_timing,787,51,devmode_load_done,+51ms,total=786ms\nboot_timing,839,52,hw_matrix_start,+52ms,total=838ms\nboot_timing,1032,194,hw_matrix_path,active_nvs,+194ms,total=1032ms\nboot_timing,1084,52,hw_matrix_done,+52ms,total=1084ms\nboot_timing,1136,51,hwcfg_start,+51ms,total=1135ms\nboot_timing,1230,95,hwcfg_path,spiffs_active,+95ms,total=1230ms\nboot_timing,1284,53,hwcfg_done,+53ms,total=1283ms\nboot_timing,1336,52,ota_record_start,+52ms,total=1335ms\nboot_timing,1388,53,ota_record_done,+53ms,total=1388ms\nboot_timing,1506,118,mcp_start,+118ms,total=1506ms\nboot_timing,1758,252,mcp_rail_settle_done,+252ms,total=1758ms\nboot_timing,1828,70,mcp_ok_attempt_1,7ms,+70ms,total=1828ms\nboot_timing,1882,54,mcp_configure_start,+54ms,total=1882ms\nboot_timing,2089,207,mcp_configure_done,+207ms,total=2089ms\nboot_checkpoint,2142,0,mcp_ok\nboot_timing,2262,173,mcp_ok,+173ms,total=2262ms\nboot_timing,2314,51,eeprom_load_start,+51ms,total=2313ms\nboot_timing,2366,53,eeprom_params_load_start,+53ms,total=2366ms\nboot_timing,2419,53,eeprom_params_magic,0x1234,+53ms,total=2419ms\nboot_timing,2472,53,eeprom_params_load_valid_done,+53ms,total=2472ms\nboot_timing,2524,51,eeprom_flush_load_start,+51ms,total=2523ms\nboot_timing,2578,54,eeprom_flush_magic,0xF1C5,+54ms,total=2577ms\nboot_timing,2695,118,eeprom_flush_load_valid_done,+118ms,total=2695ms\nboot_timing,2747,51,eeprom_load_done,+51ms,total=2746ms\nboot_checkpoint,2798,0,eeprom_ok\nboot_timing,2850,104,eeprom_ok,+104ms,total=2850ms\nboot_checkpoint,2902,0,pins_ok\nbo",
+      "errors": [
+        "Expected SW 4.1.7-regB, observed None",
+        "Expected Build 2026-06-19, observed None"
+      ],
+      "started_at": "2026-06-19T21:11:46.209578+00:00",
+      "ended_at": "2026-06-19T21:14:09.703015+00:00",
+      "duration_s": 143.49
+    }
+  ],
+  "failures": [
+    "ota2: Expected SW 4.1.7-regB, observed None",
+    "ota2: Expected Build 2026-06-19, observed None",
+    "rollback_previous: Expected SW 4.1.7-regA, observed None",
+    "rollback_previous: Expected Build 2026-06-19, observed None",
+    "ota3: Expected SW 4.1.7-regB, observed None",
+    "ota3: Expected Build 2026-06-19, observed None",
+    "ota4: Expected SW 4.1.7-regA, observed None",
+    "ota4: Expected Build 2026-06-19, observed None",
+    "factory_reset: Expected SW unknown, observed None",
+    "factory_reset: Expected Build 2026-06-19, observed None",
+    "ota5: Expected SW 4.1.7-regB, observed None",
+    "ota5: Expected Build 2026-06-19, observed None",
+    "Partition sequence mismatch: expected ['factory', 'ota_0', 'ota_1', 'ota_0', 'ota_1', 'ota_0', 'factory', 'ota_0'], observed ['factory', 'ota_0']"
+  ],
+  "metadata": {
+    "preflight": {
+      "fast_mode": true,
+      "auto_build": false,
+      "factory": {
+        "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\factory_sarah.bin",
+        "size": 4718592,
+        "md5": "ecb6d40150f0e21788ba7e25b5c8cca0",
+        "sha256": "697c3371dbb0e09183a046a28197f8debe0f0047ba60d861328d322772474bab"
+      },
+      "ota": [
+        {
+          "label": "ota1",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regA.bin",
+          "size": 918016,
+          "md5": "a0923405acb79614067d276455407193",
+          "sha256": "0ec265a902c415c2d9f7466def83751adb2131270f30cbf21d463abbec790d2e",
+          "expected_sw": "4.1.7-regA",
+          "expected_build": "2026-06-19"
+        },
+        {
+          "label": "ota2",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regB.bin",
+          "size": 918016,
+          "md5": "af2690757888d1917966e1cb188918c0",
+          "sha256": "bad1c131d65776da689baaf783cdea9a2eef99337ea5f0509f00d64563172330",
+          "expected_sw": "4.1.7-regB",
+          "expected_build": "2026-06-19"
+        },
+        {
+          "label": "ota3",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regB.bin",
+          "size": 918016,
+          "md5": "af2690757888d1917966e1cb188918c0",
+          "sha256": "bad1c131d65776da689baaf783cdea9a2eef99337ea5f0509f00d64563172330",
+          "expected_sw": "4.1.7-regB",
+          "expected_build": "2026-06-19"
+        },
+        {
+          "label": "ota4",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regA.bin",
+          "size": 918016,
+          "md5": "a0923405acb79614067d276455407193",
+          "sha256": "0ec265a902c415c2d9f7466def83751adb2131270f30cbf21d463abbec790d2e",
+          "expected_sw": "4.1.7-regA",
+          "expected_build": "2026-06-19"
+        },
+        {
+          "label": "ota5",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regB.bin",
+          "size": 918016,
+          "md5": "af2690757888d1917966e1cb188918c0",
+          "sha256": "bad1c131d65776da689baaf783cdea9a2eef99337ea5f0509f00d64563172330",
+          "expected_sw": "4.1.7-regB",
+          "expected_build": "2026-06-19"
+        }
+      ],
+      "manifest": {
+        "auto_build": true,
+        "base_version": "4.1.7",
+        "build_date": "2026-06-19",
+        "sarah_merged": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\FACTORY_BINARIES\\SARAH_toilet_kat_change.ino.merged.bin",
+        "factory": {
+          "path": "test-builds/ota-regression/factory_sarah.bin",
+          "expected_sw": "unknown",
+          "expected_build": "2026-06-19",
+          "md5": "ecb6d40150f0e21788ba7e25b5c8cca0",
+          "size": 4718592
+        },
+        "variants": {
+          "regA": {
+            "path": "test-builds/ota-regression/ota_regA.bin",
+            "expected_sw": "4.1.7-regA",
+            "expected_build": "2026-06-19",
+            "md5": "a0923405acb79614067d276455407193",
+            "size": "918016"
+          },
+          "regB": {
+            "path": "test-builds/ota-regression/ota_regB.bin",
+            "expected_sw": "4.1.7-regB",
+            "expected_build": "2026-06-19",
+            "md5": "af2690757888d1917966e1cb188918c0",
+            "size": "918016"
+          }
+        },
+        "ota": [
+          {
+            "label": "ota1",
+            "variant": "regA",
+            "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regA.bin",
+            "expected_sw": "4.1.7-regA",
+            "expected_build": "2026-06-19"
+          },
+          {
+            "label": "ota2",
+            "variant": "regB",
+            "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regB.bin",
+            "expected_sw": "4.1.7-regB",
+            "expected_build": "2026-06-19"
+          },
+          {
+            "label": "ota3",
+            "variant": "regB",
+            "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regB.bin",
+            "expected_sw": "4.1.7-regB",
+            "expected_build": "2026-06-19"
+          },
+          {
+            "label": "ota4",
+            "variant": "regA",
+            "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regA.bin",
+            "expected_sw": "4.1.7-regA",
+            "expected_build": "2026-06-19"
+          },
+          {
+            "label": "ota5",
+            "variant": "regB",
+            "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regB.bin",
+            "expected_sw": "4.1.7-regB",
+            "expected_build": "2026-06-19"
+          }
+        ]
+      },
+      "initial_usb_partition": "ota_unspecified",
+      "ble_address": "58:E6:C5:6C:AF:81",
+      "dev_mode": {
+        "address": "58:E6:C5:6C:AF:81",
+        "initial_dev_mode": 1
+      },
+      "baseline": {
+        "version": "v1.0",
+        "ota_diag": "OTA_DIAG:V1|pending=0|attempts=0|streak=0|target=255|last_trigger=manual|from=ota_1|to=ota_0|reset=poweron|md5=00000000|size=915360|reason=manual_support_request|seq=3|tail_len=1024|log_tail=,bat=12.7,temp=22.9,m1A=0.00,heaterA=0.00,fan=off~power_test,5824,0,[boot_battery_check] step duty=64 settle=50ms~power_test,5928,0,[boot_battery_check] step_result duty=64 vLoad=1",
+        "boot_info": "BOOT_INFO:reset=usb,code=11,phase=boot_complete:cold,coredump=0,coredump_size=0"
+      }
+    },
+    "manifest": null,
+    "start_from": "ota2"
+  }
+}

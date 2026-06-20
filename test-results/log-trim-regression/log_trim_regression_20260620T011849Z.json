@@ -1,0 +1,29 @@
+{
+  "run_id": "20260620T011849Z",
+  "started_at": "2026-06-20T01:18:49.570454+00:00",
+  "ended_at": "2026-06-20T01:18:50.518591+00:00",
+  "passed": false,
+  "dry_run": false,
+  "port": "COM5",
+  "chip": "esp32s3",
+  "address": "58:E6:C5:6C:AF:81",
+  "backup_path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\log-trim-regression\\spiffs_backup_20260620T005256Z.bin",
+  "steps": [
+    {
+      "name": "write_trim",
+      "passed": false,
+      "seeded_bytes": 76800,
+      "observed_log_bytes": null,
+      "errors": [
+        "esptool write-flash SPIFFS failed (exit 2): \nA fatal error occurred: Could not open COM5, the port is busy or doesn't exist.\n(could not open port 'COM5': PermissionError(13, 'Access is denied.', None, 5))\n\nHint: Check if the port is not used by another task\n\n"
+      ],
+      "logs_excerpt": null,
+      "started_at": "2026-06-20T01:18:49.570489+00:00",
+      "ended_at": "2026-06-20T01:18:50.518511+00:00",
+      "duration_s": 0.95
+    }
+  ],
+  "failures": [
+    "write_trim: esptool write-flash SPIFFS failed (exit 2): \nA fatal error occurred: Could not open COM5, the port is busy or doesn't exist.\n(could not open port 'COM5': PermissionError(13, 'Access is denied.', None, 5))\n\nHint: Check if the port is not used by another task\n\n"
+  ]
+}

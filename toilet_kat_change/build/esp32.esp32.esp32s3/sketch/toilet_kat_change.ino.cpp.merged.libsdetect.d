@@ -296,4 +296,5 @@ toilet_kat_change.ino.cpp.o: \
  C:\Users\richa\AppData\Local\Arduino15\packages\esp32\tools\esp32-arduino-libs\idf-release_v5.5-f1a1df9b-v3\esp32s3/include/espcoredump/include/esp_core_dump.h \
  C:\Users\richa\AppData\Local\Arduino15\packages\esp32\tools\esp32-arduino-libs\idf-release_v5.5-f1a1df9b-v3\esp32s3/include/esp_system/include/esp_private/panic_internal.h \
  C:\Users\richa\AppData\Local\Arduino15\packages\esp32\tools\esp32-arduino-libs\idf-release_v5.5-f1a1df9b-v3\esp32s3/include/espcoredump/include/port/xtensa/esp_core_dump_summary_port.h \
- C:\Users\richa\Documents\GitHub\toilet_kat_change\toilet_kat_change\build\esp32.esp32.esp32s3\sketch\ota_diag_types.h
+ C:\Users\richa\Documents\GitHub\toilet_kat_change\toilet_kat_change\build\esp32.esp32.esp32s3\sketch\ota_diag_types.h \
+ C:\Users\richa\Documents\GitHub\toilet_kat_change\toilet_kat_change\build\esp32.esp32.esp32s3\sketch\software_version_build.h
