@@ -276,11 +276,12 @@ The firmware persists error codes, crashes, brownouts, and runtime faults to a f
 - **OTA failures**: When `setOTAState(OTA_ERROR)` is invoked.
 - **OTA boot diagnostics**: `ota_boot`, `ota_boot_fail`, `ota_rollback`, `ota_boot_ok`, `ota_spiffs_capture` while verifying or running a recently OTA-installed partition. NVS snapshot available via `GET_OTA_DIAG`.
 - **MCP unavailable**: When I2C expander init fails after retries.
-- **Power tests** (`power_test` log type): Battery/heater preflight, boot heater skip, flush case 0 gates, loaded VMON measurements, and `homing_defer` events (boot skip, retry, completion) via `logPowerTestEvent()`.
+- **Power tests** (`power_test` log type): Battery/heater preflight, boot heater skip, flush case 0 gates, loaded VMON measurements, and `homing_defer` events (boot skip, retry, completion) via `logPowerTestEvent()`. SPIFFS persistence is selective: routine boot battery/heater PASS paths are Serial/BLE only; flush preflight PASS collapses to one summary line; failures retain full detail.
+- **Flush lifecycle** (`flush_event`, `flush_step`): SPIFFS only when DEV mode is enabled. `flush_status` ticks removed (too verbose). Normal-mode support exports rely on `power_test` flush preflight lines and runtime errors.
 
 **Context for runtime errors**: Each runtime error log includes flush/feed state (`step`, `cut`, `feed`), sensor values (`bat`, `temp`, `m1A`, `heaterA`), and fan status (`off`, `forward`, `reverse`) to aid diagnostics.
 
-**Storage**: SPIFFS file `/errors.txt`. Max 200 KB; when full, oldest entries are dropped at line boundaries. Line length capped at 200 chars. Boot checkpoints log one SPIFFS line per phase (phase + timing); sub-phase `boot_timing` lines are DEV-mode only. Routine `boot_battery_check` PASS paths log start + done only; failures retain per-step detail.
+**Storage**: SPIFFS file `/errors.txt`. Max **75 KB** (`MAX_LOG_SIZE`); trim to **50 KB** when approaching full; **10 KB** headroom before sleep trim; OTA prep trims to **40 KB**. Line length capped at 200 chars. Boot checkpoints and boot timing are **Serial only** (not SPIFFS). `boot_status` is SPIFFS only for abnormal reset reasons.
 
 **Retrieval**: BLE command `GET_LOGS` or `GET_LOGS:<offset>`. Response `LOGS:<offset>:<length>:<data>` (chunked, ~450 bytes per chunk) or `LOGS_END`. Also `GET_OTA_DIAG` for NVS OTA rollback metadata. No trust handshake required so diagnostics work even when the user cannot complete trust (e.g. broken flush button).
 
