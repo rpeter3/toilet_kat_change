@@ -1,0 +1,155 @@
+{
+  "run_id": "20260621T170405Z",
+  "started_at": "2026-06-21T17:04:05.162593+00:00",
+  "ended_at": "2026-06-21T17:05:05.774780+00:00",
+  "passed": false,
+  "dry_run": false,
+  "fast_mode": true,
+  "auto_build": false,
+  "port": "COM5",
+  "address": "58:E6:C5:6C:AF:81",
+  "partition_sequence": [],
+  "steps": [],
+  "failures": [
+    "flash-sarah-factory.ps1 failed with exit code 1",
+    "Partition sequence mismatch: expected ['factory', 'ota_0', 'ota_1', 'ota_0', 'ota_1', 'ota_0', 'factory', 'ota_0'], observed []"
+  ],
+  "metadata": {
+    "preflight": {
+      "fast_mode": true,
+      "auto_build": false,
+      "factory": {
+        "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\factory_sarah.bin",
+        "size": 4718592,
+        "md5": "ecb6d40150f0e21788ba7e25b5c8cca0",
+        "sha256": "697c3371dbb0e09183a046a28197f8debe0f0047ba60d861328d322772474bab"
+      },
+      "ota": [
+        {
+          "label": "ota1",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regA.bin",
+          "size": 919456,
+          "md5": "cde47fd305a33149f2cd3779cf6dedb2",
+          "sha256": "be5c17d46d4047bba5940da1c9ef60691c417583f5889acb7e0dcaa02a6041cc",
+          "expected_sw": "4.2.1-regA",
+          "expected_build": "2026-06-21"
+        },
+        {
+          "label": "ota2",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regB.bin",
+          "size": 919456,
+          "md5": "e1aabcca530fb4cdf4113bad18ae88f0",
+          "sha256": "1cac47f8621222b1061a65571e0f3b1abe847b22ff7b8aab1214b75307ebd680",
+          "expected_sw": "4.2.1-regB",
+          "expected_build": "2026-06-21"
+        },
+        {
+          "label": "ota3",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regB.bin",
+          "size": 919456,
+          "md5": "e1aabcca530fb4cdf4113bad18ae88f0",
+          "sha256": "1cac47f8621222b1061a65571e0f3b1abe847b22ff7b8aab1214b75307ebd680",
+          "expected_sw": "4.2.1-regB",
+          "expected_build": "2026-06-21"
+        },
+        {
+          "label": "ota4",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regA.bin",
+          "size": 919456,
+          "md5": "cde47fd305a33149f2cd3779cf6dedb2",
+          "sha256": "be5c17d46d4047bba5940da1c9ef60691c417583f5889acb7e0dcaa02a6041cc",
+          "expected_sw": "4.2.1-regA",
+          "expected_build": "2026-06-21"
+        },
+        {
+          "label": "ota5",
+          "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regB.bin",
+          "size": 919456,
+          "md5": "e1aabcca530fb4cdf4113bad18ae88f0",
+          "sha256": "1cac47f8621222b1061a65571e0f3b1abe847b22ff7b8aab1214b75307ebd680",
+          "expected_sw": "4.2.1-regB",
+          "expected_build": "2026-06-21"
+        }
+      ],
+      "manifest": {
+        "auto_build": true,
+        "base_version": "4.2.1",
+        "build_date": "2026-06-21",
+        "sarah_merged": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\FACTORY_BINARIES\\SARAH_toilet_kat_change.ino.merged.bin",
+        "factory": {
+          "path": "test-builds/ota-regression/factory_sarah.bin",
+          "expected_sw": "unknown",
+          "expected_build": "2026-06-21",
+          "md5": "ecb6d40150f0e21788ba7e25b5c8cca0",
+          "size": 4718592
+        },
+        "variants": {
+          "regA": {
+            "path": "test-builds/ota-regression/ota_regA.bin",
+            "expected_sw": "4.2.1-regA",
+            "expected_build": "2026-06-21",
+            "md5": "cde47fd305a33149f2cd3779cf6dedb2",
+            "size": "919456"
+          },
+          "regB": {
+            "path": "test-builds/ota-regression/ota_regB.bin",
+            "expected_sw": "4.2.1-regB",
+            "expected_build": "2026-06-21",
+            "md5": "e1aabcca530fb4cdf4113bad18ae88f0",
+            "size": "919456"
+          }
+        },
+        "ota": [
+          {
+            "label": "ota1",
+            "variant": "regA",
+            "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regA.bin",
+            "expected_sw": "4.2.1-regA",
+            "expected_build": "2026-06-21"
+          },
+          {
+            "label": "ota2",
+            "variant": "regB",
+            "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regB.bin",
+            "expected_sw": "4.2.1-regB",
+            "expected_build": "2026-06-21"
+          },
+          {
+            "label": "ota3",
+            "variant": "regB",
+            "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regB.bin",
+            "expected_sw": "4.2.1-regB",
+            "expected_build": "2026-06-21"
+          },
+          {
+            "label": "ota4",
+            "variant": "regA",
+            "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regA.bin",
+            "expected_sw": "4.2.1-regA",
+            "expected_build": "2026-06-21"
+          },
+          {
+            "label": "ota5",
+            "variant": "regB",
+            "path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\ota-regression\\ota_regB.bin",
+            "expected_sw": "4.2.1-regB",
+            "expected_build": "2026-06-21"
+          }
+        ]
+      },
+      "initial_usb_partition": "ota_unspecified",
+      "ble_address": "58:E6:C5:6C:AF:81",
+      "dev_mode": {
+        "address": "58:E6:C5:6C:AF:81",
+        "initial_dev_mode": 1
+      },
+      "baseline": {
+        "version": "HW:Uninitialized|SW:4.2.1-regA|Build:2026-06-20",
+        "ota_diag": "OTA_DIAG:EMPTY",
+        "boot_info": "BOOT_INFO:reset=usb,code=11,phase=boot_complete:cold,coredump=0,coredump_size=0"
+      }
+    },
+    "manifest": null,
+    "start_from": "flash_factory"
+  }
+}

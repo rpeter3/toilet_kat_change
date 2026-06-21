@@ -29,3 +29,5 @@ batteryAssessSettleMs,Heater pulse settle time during battery assessment ms,50,5
 heaterCapVFull,VMON voltage for full heater PWM 255 below this reduced PWM applies V,11.23,11.23
 heaterPwmReduced,Heater PWM duty when VMON is below heaterCapVFull,255,170
 maxHeaterWallTimeS,Maximum heater phase duration in flush step 6 before error 6 sec,200,200
+heaterAbsoluteMaxOnS,Maximum continuous heater PWM on-time before fail-safe error 8 sec,200,200
+MAX_TEMP_FAILSAFE_C,Absolute thermistor temperature ceiling before fail-safe error 9 °C,200,200

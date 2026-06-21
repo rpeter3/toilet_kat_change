@@ -17,20 +17,32 @@ import json
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+SCRIPTS_DIR = REPO_ROOT / "scripts"
 DEFAULT_AUTO_MANIFEST = REPO_ROOT / "test-builds" / "ota-regression" / "manifest.json"
 AUTO_BUILD_SCRIPT = REPO_ROOT / "scripts" / "build_ota_regression_firmware.py"
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
 
 from bleak import BleakScanner  # noqa: E402
 
+from build_ota_regression_firmware import refresh_manifest_build_dates  # noqa: E402
 from get_ota_diag import find_device, report_visible_ble_scan  # noqa: E402
+from ota_regression_diagnostics import (  # noqa: E402
+    BleConnectionTracker,
+    DiagnosticsHeartbeat,
+    SerialLineMonitor,
+    read_ble_advertising_status,
+    read_usb_boot_summary,
+)
 from ota_update import OTAUpdater  # noqa: E402
 from read_partitions import (  # noqa: E402
     OTADATA_OFFSET,
@@ -266,7 +278,10 @@ def run_auto_build_script(*, skip_firmware_build: bool = False) -> None:
         raise RuntimeError(f"Auto-build did not produce manifest: {DEFAULT_AUTO_MANIFEST}")
 
 
-def load_manifest(path: Path) -> tuple[FirmwareSpec, list[FirmwareSpec], dict[str, Any]]:
+def load_manifest(path: Path, *, sync_build_dates: bool = True) -> tuple[FirmwareSpec, list[FirmwareSpec], dict[str, Any]]:
+    path = path.resolve()
+    if sync_build_dates:
+        refresh_manifest_build_dates(path)
     data = json.loads(path.read_text(encoding="utf-8"))
     factory_data = data["factory"]
     factory = FirmwareSpec(
@@ -494,6 +509,20 @@ class OtaRegressionRunner:
         if self.start_from not in REGRESSION_STEP_ORDER:
             raise ValueError(f"Invalid --start-from {self.start_from!r}")
         self.partition_sequence = list(PRIOR_PARTITION_SEQUENCE[self.start_from])
+        self.diag_interval_s = args.diag_interval
+        self.ble_tracker = BleConnectionTracker(self.log)
+        self.serial_monitor: Optional[SerialLineMonitor] = None
+        if not args.no_serial_diag:
+            self.serial_monitor = SerialLineMonitor(self.port, log=self.log)
+        self.heartbeat = DiagnosticsHeartbeat(
+            port=self.port,
+            chip=self.chip,
+            log=self.log,
+            interval_s=self.diag_interval_s,
+            address=self.address,
+            serial_monitor=self.serial_monitor,
+            ble_tracker=self.ble_tracker,
+        )
 
     def should_run_step(self, step_name: str) -> bool:
         return REGRESSION_STEP_ORDER.index(step_name) >= REGRESSION_STEP_ORDER.index(self.start_from)
@@ -503,6 +532,28 @@ class OtaRegressionRunner:
 
     def log(self, message: str) -> None:
         print(message, flush=True)
+
+    def _serial_start(self) -> None:
+        if self.serial_monitor:
+            self.serial_monitor.start()
+
+    def _serial_stop(self) -> None:
+        if self.serial_monitor:
+            self.serial_monitor.stop()
+
+    @contextmanager
+    def _usb_port(self, reason: str):
+        """Release COM port so esptool/flash scripts can use it."""
+        self._serial_stop()
+        self.log(f"[serial] paused for USB: {reason}")
+        try:
+            yield
+        finally:
+            self._serial_start()
+
+    def _read_usb_boot(self) -> str:
+        with self._usb_port("otadata read"):
+            return read_usb_boot_summary(self.port, self.chip)
 
     async def ensure_address(self) -> str:
         if self.address:
@@ -525,23 +576,54 @@ class OtaRegressionRunner:
 
     async def wait_for_ble(self, timeout_s: Optional[float] = None) -> str:
         timeout = timeout_s if timeout_s is not None else self.boot_wait_s
-        self.log(f"Waiting up to {timeout:.0f}s for BLE device...")
+        self._serial_start()
+        self.heartbeat.address = self.address
+        target = self.address or "ESP32 Toilet"
+        self.ble_tracker.set("scanning", f"target={target} timeout={timeout:.0f}s")
+        self.heartbeat.set_phase("wait_ble", extra=f"target={target} timeout={timeout:.0f}s")
         deadline = time.monotonic() + timeout
+        scan_num = 0
         while time.monotonic() < deadline:
-            if self.address:
+            scan_num += 1
+            remaining = deadline - time.monotonic()
+            self.log(f"[ble] scan #{scan_num} starting (3s timeout, {remaining:.0f}s left)...")
+            await self.heartbeat.maybe_emit_async()
+            try:
                 devices = await BleakScanner.discover(timeout=3.0)
+            except Exception as exc:
+                self.log(f"[ble] scan #{scan_num} error: {exc}")
+                devices = []
+            if devices:
+                sample = ", ".join(
+                    f"{d.name or '?'}@{d.address}" for d in devices[:4]
+                )
+                if len(devices) > 4:
+                    sample += f", +{len(devices) - 4} more"
+                self.log(f"[ble] scan #{scan_num} done: {len(devices)} visible [{sample}]")
+            else:
+                self.log(f"[ble] scan #{scan_num} done: no devices visible")
+
+            if self.address:
                 for device in devices:
                     if device.address.lower() == self.address.lower():
-                        self.log(f"Device visible at {device.address}")
+                        self.ble_tracker.set("advertising", device.address)
+                        self.log(f"[ble] target visible at {device.address} (scan #{scan_num})")
+                        await self.heartbeat.maybe_emit_async(force=True)
                         return device.address
+                self.log(f"[ble] scan #{scan_num}: target {self.address} not in results")
             else:
                 found = await find_device(3.0)
                 if found:
                     self.address = found
+                    self.heartbeat.address = found
+                    self.ble_tracker.set("advertising", found)
+                    self.log(f"[ble] device discovered at {found} (scan #{scan_num})")
+                    await self.heartbeat.maybe_emit_async(force=True)
                     return found
             await asyncio.sleep(2.0)
+        adv = await read_ble_advertising_status(self.address) if self.address else "no target address"
+        self.ble_tracker.fail("wait_ble", f"timeout after {timeout:.0f}s; last={adv}")
         await self.report_target_not_advertising("device not visible before timeout")
-        target = self.address or "ESP32 Toilet"
         raise TimeoutError(f"BLE device not visible within {timeout:.0f}s ({target})")
 
     async def collect_diagnostics(
@@ -551,10 +633,13 @@ class OtaRegressionRunner:
         read_version: bool = True,
     ) -> dict[str, Any]:
         address = await self.ensure_address()
+        self.ble_tracker.set("connecting", f"diagnostics -> {address}")
         interface = ToiletSystemInterface()
         if not await interface.connect(address, require_trust=require_trust):
+            self.ble_tracker.fail("diagnostics_connect", address)
             await self.report_target_not_advertising("BLE connect failed during diagnostics")
-            raise RuntimeError("Failed to connect for diagnostics")
+            raise RuntimeError(f"Failed to connect for diagnostics ({address})")
+        self.ble_tracker.set("connected", f"diagnostics session {address}")
 
         snapshot: dict[str, Any] = {}
         try:
@@ -577,6 +662,7 @@ class OtaRegressionRunner:
             }
         finally:
             await interface.disconnect()
+            self.ble_tracker.disconnected("diagnostics session ended")
         return snapshot
 
     async def ensure_dev_mode_enabled(self) -> dict[str, Any]:
@@ -590,8 +676,10 @@ class OtaRegressionRunner:
                     self.log(f"DEV mode connect retry {attempt}/5...")
                     await asyncio.sleep(5.0)
                 await self.wait_for_ble(timeout_s=min(self.boot_wait_s, 60.0))
+                self.ble_tracker.set("connecting", f"dev_mode -> {address}")
                 if not await interface.connect(address, require_trust=False):
-                    raise RuntimeError("Failed to connect to enable DEV mode")
+                    raise RuntimeError(f"Failed to connect to enable DEV mode ({address})")
+                self.ble_tracker.set("connected", f"dev_mode session {address}")
                 break
             except asyncio.CancelledError as exc:
                 last_error = exc
@@ -625,17 +713,30 @@ class OtaRegressionRunner:
             self.log("DEV mode enabled for this test run.")
         finally:
             await interface.disconnect()
+            self.ble_tracker.disconnected("dev_mode session ended")
         return result
 
     async def wait_for_pending_clear(self) -> dict[str, Any]:
         deadline = time.monotonic() + self.pending_clear_timeout_s
         last_snapshot: dict[str, Any] = {}
+        self.heartbeat.set_phase(
+            "pending_clear",
+            extra=f"timeout={self.pending_clear_timeout_s:.0f}s",
+        )
+        poll = 0
         while time.monotonic() < deadline:
+            poll += 1
+            await self.heartbeat.maybe_emit_async()
             await self.wait_for_ble()
             snapshot = await self.collect_diagnostics()
             last_snapshot = snapshot
             pending = snapshot["ota_diag"].get("pending", "1")
             streak = int(snapshot["ota_diag"].get("streak", "0") or 0)
+            usb = self._read_usb_boot()
+            self.log(
+                f"[pending poll #{poll}] pending={pending} streak={streak} usb={usb} "
+                f"ota_diag={snapshot.get('ota_diag_raw', '-')}"
+            )
             if pending == "0":
                 return snapshot
             if streak < OTA_GOOD_BOOT_STREAK_REQUIRED:
@@ -644,10 +745,11 @@ class OtaRegressionRunner:
                     "triggering extra reboot via esptool..."
                 )
                 if not self.dry_run:
-                    esptool_reset(self.port, self.chip)
-                    await asyncio.sleep(8.0)
+                    with self._usb_port("esptool reset for pending clear"):
+                        esptool_reset(self.port, self.chip)
+                    await self.heartbeat.sleep(8.0, phase="pending_clear_reboot")
             else:
-                await asyncio.sleep(5.0)
+                await self.heartbeat.sleep(5.0, phase="pending_clear")
         raise TimeoutError(
             "OTA pending verification did not clear within "
             f"{self.pending_clear_timeout_s:.0f}s; last diag={last_snapshot.get('ota_diag')}"
@@ -698,7 +800,9 @@ class OtaRegressionRunner:
                 else:
                     snapshot = await self.collect_diagnostics()
 
-                observed_partition = get_active_boot_partition(self.port, self.chip)
+                with self._usb_port("post-step otadata"):
+                    observed_partition = get_active_boot_partition(self.port, self.chip)
+                self.log(f"USB boot partition after step: {observed_partition}")
                 if observed_partition == "ota_unspecified":
                     self.log(
                         "USB otadata label unspecified; keeping BLE/version checks as secondary evidence."
@@ -763,18 +867,36 @@ class OtaRegressionRunner:
             return
 
         address = await self.ensure_address()
+        self.heartbeat.address = address
         await self.wait_for_ble()
-        updater = OTAUpdater()
+        self._serial_start()
+        self.heartbeat.set_phase(
+            "ota_ble",
+            extra=f"label={spec.label} sw={spec.expected_sw} bytes={spec.size}",
+        )
+        self.log(f"BLE OTA starting: {spec.label} -> {spec.path.name} ({spec.size} bytes)")
+        updater = OTAUpdater(log=self.log, tracker=self.ble_tracker)
         if not await updater.connect(address):
-            raise RuntimeError(f"Failed to connect for OTA ({spec.label})")
+            raise RuntimeError(
+                f"Failed to connect for OTA ({spec.label}); ble_state={self.ble_tracker.state}"
+            )
         try:
-            success = await updater.update_firmware(str(spec.path))
+            success = await updater.update_firmware(
+                str(spec.path),
+                heartbeat=self.heartbeat,
+            )
             if not success:
-                raise RuntimeError(f"OTA update failed for {spec.label}")
+                raise RuntimeError(
+                    f"OTA update failed for {spec.label}; "
+                    f"ble_state={self.ble_tracker.state} detail={self.ble_tracker.detail!r}"
+                )
         finally:
             if updater.connected:
                 await updater.disconnect()
-        await asyncio.sleep(10.0)
+            elif self.ble_tracker.state not in ("disconnected", "idle"):
+                self.ble_tracker.disconnected("OTA session ended without clean disconnect")
+        self.log(f"BLE OTA finished: {spec.label}; waiting for reboot...")
+        await self.heartbeat.sleep(10.0, phase="ota_post_reboot")
 
     def perform_serial_slot_update(self, spec: FirmwareSpec, target_partition: str) -> None:
         if self.dry_run:
@@ -783,26 +905,28 @@ class OtaRegressionRunner:
             )
             return
 
-        current_seq = get_current_ota_seq(self.port, self.chip)
-        ota_seq = next_seq_for_slot(current_seq, target_partition)
-        self.log(
-            f"Serial sim: flash {spec.label} -> {target_partition} "
-            f"(seq {current_seq} -> {ota_seq})"
-        )
-        run_flash_ota_slot(self.port, target_partition, spec.path, ota_seq)
+        with self._usb_port(f"flash {spec.label} -> {target_partition}"):
+            current_seq = get_current_ota_seq(self.port, self.chip)
+            ota_seq = next_seq_for_slot(current_seq, target_partition)
+            self.log(
+                f"Serial sim: flash {spec.label} -> {target_partition} "
+                f"(seq {current_seq} -> {ota_seq})"
+            )
+            run_flash_ota_slot(self.port, target_partition, spec.path, ota_seq)
 
     def perform_serial_rollback_previous(self, target_partition: str) -> None:
         if self.dry_run:
             self.log(f"[dry-run] Would serial-sim rollback to {target_partition}")
             return
 
-        current_seq = get_current_ota_seq(self.port, self.chip)
-        ota_seq = next_seq_for_slot(current_seq, target_partition)
-        self.log(
-            f"Serial sim: rollback boot -> {target_partition} "
-            f"(seq {current_seq} -> {ota_seq}, image unchanged)"
-        )
-        run_flash_ota_slot(self.port, target_partition, ota_seq=ota_seq, otadata_only=True)
+        with self._usb_port(f"rollback -> {target_partition}"):
+            current_seq = get_current_ota_seq(self.port, self.chip)
+            ota_seq = next_seq_for_slot(current_seq, target_partition)
+            self.log(
+                f"Serial sim: rollback boot -> {target_partition} "
+                f"(seq {current_seq} -> {ota_seq}, image unchanged)"
+            )
+            run_flash_ota_slot(self.port, target_partition, ota_seq=ota_seq, otadata_only=True)
 
     def perform_serial_factory_reset(self) -> None:
         if self.dry_run:
@@ -810,7 +934,8 @@ class OtaRegressionRunner:
             return
 
         self.log("Serial sim: factory reset via otadata erase")
-        run_flash_ota_slot(self.port, "factory")
+        with self._usb_port("factory reset otadata"):
+            run_flash_ota_slot(self.port, "factory")
 
     async def perform_rollback_previous(self) -> None:
         if self.dry_run:
@@ -884,9 +1009,12 @@ class OtaRegressionRunner:
             return preflight
 
         try:
-            partition = get_active_boot_partition(self.port, self.chip)
+            with self._usb_port("preflight otadata"):
+                partition = get_active_boot_partition(self.port, self.chip)
+                usb_summary = read_usb_boot_summary(self.port, self.chip)
             preflight["initial_usb_partition"] = partition
-            self.log(f"Initial USB boot partition: {partition}")
+            self.log(f"Initial USB boot: {usb_summary}")
+            self._serial_start()
         except Exception as exc:
             raise RuntimeError(f"Serial port preflight failed for {self.port}: {exc}") from exc
 
@@ -927,7 +1055,8 @@ class OtaRegressionRunner:
             and self.args.boot_settle > 0
         ):
             self.log(f"Waiting {self.args.boot_settle:.0f}s for full boot before BLE preflight...")
-            await asyncio.sleep(self.args.boot_settle)
+            self._serial_start()
+            await self.heartbeat.sleep(self.args.boot_settle, phase="boot_settle")
 
         try:
             if self.args.skip_preflight:
@@ -973,11 +1102,14 @@ class OtaRegressionRunner:
             self.write_report(report)
             return report
 
+        self._serial_start()
         try:
             await self._run_steps(preflight)
         except Exception as exc:
             self.failures.append(str(exc))
             self.log(f"Harness aborted: {exc}")
+        finally:
+            self._serial_stop()
 
         sequence_ok = self.partition_sequence == EXPECTED_PARTITION_SEQUENCE
         if not sequence_ok:
@@ -1015,11 +1147,12 @@ class OtaRegressionRunner:
             self.log("\n--- Step: Flash Factory ---")
             use_sarah_factory = self.auto_build or bool(self.manifest_meta.get("auto_build"))
             if not self.dry_run:
-                if use_sarah_factory:
-                    run_flash_sarah_factory(self.port)
-                else:
-                    run_flash_factory(self.port, self.factory_spec.path, boot_slot="factory")
-                await asyncio.sleep(12.0)
+                with self._usb_port("flash factory"):
+                    if use_sarah_factory:
+                        run_flash_sarah_factory(self.port)
+                    else:
+                        run_flash_factory(self.port, self.factory_spec.path, boot_slot="factory")
+                await self.heartbeat.sleep(12.0, phase="post_flash_factory")
             await self.assert_post_step_state(
                 "flash_factory",
                 "factory",
@@ -1043,8 +1176,7 @@ class OtaRegressionRunner:
         if self.should_run_step("ota2"):
             self.log("\n--- Step: OTA2 ---")
             if not self.dry_run:
-                self.log("Pause 20s before OTA2 to let device settle...")
-                await asyncio.sleep(20.0)
+                await self.heartbeat.sleep(20.0, phase="pre_ota2_settle")
             await self.perform_ota(self.ota_specs[1])
             await self.assert_post_step_state(
                 "ota2",
@@ -1312,6 +1444,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=True,
         help="Enable DEV mode over BLE before test if off (default: on; grants trust bypass)",
     )
+    parser.add_argument(
+        "--diag-interval",
+        type=float,
+        default=10.0,
+        help="Seconds between live diagnostic heartbeats (serial/USB/BLE) (default: 10)",
+    )
+    parser.add_argument(
+        "--no-serial-diag",
+        action="store_true",
+        help="Disable background USB-serial log capture during waits",
+    )
     return parser
 
 
@@ -1322,7 +1465,8 @@ async def async_main() -> int:
     if args.auto_build:
         skip_build = args.dry_run and DEFAULT_AUTO_MANIFEST.exists()
         if skip_build:
-            print(f"Auto-build: reusing existing manifest ({DEFAULT_AUTO_MANIFEST})")
+            print(f"Auto-build: refreshing manifest build dates from binaries ({DEFAULT_AUTO_MANIFEST})")
+            refresh_manifest_build_dates(DEFAULT_AUTO_MANIFEST)
         else:
             run_auto_build_script(skip_firmware_build=False)
         args.manifest = str(DEFAULT_AUTO_MANIFEST)

@@ -1,0 +1,87 @@
+OTA Partition Regression Report
+Run ID: 20260621T173355Z
+Started: 2026-06-21T17:33:55.357598+00:00
+Ended: 2026-06-21T17:57:15.001843+00:00
+Result: FAIL
+Dry run: False
+Fast mode: True
+Auto-build: False
+Port: COM5
+BLE address: 58:E6:C5:6C:AF:81
+
+Partition sequence: factory -> ota_0
+Expected sequence: factory -> ota_0 -> ota_1 -> ota_0 -> ota_1 -> ota_0 -> factory -> ota_0
+
+Version evolution:
+Step                 Partition  Expected SW              Observed SW              Pass
+------------------------------------------------------------------------------------------
+ota2                 ota_1      4.2.1-regB               4.2.1-regB               FAIL
+rollback_previous    ota_0      4.2.1-regA               4.2.1-regA               FAIL
+ota3                 ota_1      4.2.1-regB               4.2.1-regB               FAIL
+ota4                 ota_0      4.2.1-regA               4.2.1-regA               FAIL
+factory_reset        factory    unknown                  3.0.0                    FAIL
+ota5                 ota_0      4.2.1-regB               4.2.1-regB               FAIL
+
+Failures:
+  - ota2: Expected Build 2026-06-21, observed '2026-06-20'
+  - rollback_previous: Expected Build 2026-06-21, observed '2026-06-20'
+  - ota3: Expected Build 2026-06-21, observed '2026-06-20'
+  - ota4: Expected Build 2026-06-21, observed '2026-06-20'
+  - factory_reset: Expected Build 2026-06-21, observed '2026-06-20'
+  - ota5: Expected Build 2026-06-21, observed '2026-06-20'
+  - Partition sequence mismatch: expected ['factory', 'ota_0', 'ota_1', 'ota_0', 'ota_1', 'ota_0', 'factory', 'ota_0'], observed ['factory', 'ota_0']
+
+[FAIL] ota2 (83.39s)
+  transport: ble
+  pending_clear_required: yes
+  expected partition: ota_1
+  observed partition: ota_1
+  expected SW: 4.2.1-regB
+  observed SW: 4.2.1-regB
+  version: HW:Uninitialized|SW:4.2.1-regB|Build:2026-06-20
+  error: Expected Build 2026-06-21, observed '2026-06-20'
+
+[FAIL] rollback_previous (34.56s)
+  transport: serial_sim
+  expected partition: ota_0
+  observed partition: ota_0
+  expected SW: 4.2.1-regA
+  observed SW: 4.2.1-regA
+  version: HW:Uninitialized|SW:4.2.1-regA|Build:2026-06-20
+  error: Expected Build 2026-06-21, observed '2026-06-20'
+
+[FAIL] ota3 (35.34s)
+  transport: serial_sim
+  expected partition: ota_1
+  observed partition: ota_1
+  expected SW: 4.2.1-regB
+  observed SW: 4.2.1-regB
+  version: HW:Uninitialized|SW:4.2.1-regB|Build:2026-06-20
+  error: Expected Build 2026-06-21, observed '2026-06-20'
+
+[FAIL] ota4 (34.47s)
+  transport: serial_sim
+  expected partition: ota_0
+  observed partition: ota_0
+  expected SW: 4.2.1-regA
+  observed SW: 4.2.1-regA
+  version: HW:Uninitialized|SW:4.2.1-regA|Build:2026-06-20
+  error: Expected Build 2026-06-21, observed '2026-06-20'
+
+[FAIL] factory_reset (19.55s)
+  transport: serial_sim
+  expected partition: factory
+  observed partition: factory
+  expected SW: unknown
+  observed SW: 3.0.0
+  version: HW:Uninitialized|SW:3.0.0|Build:2026-06-20
+  error: Expected Build 2026-06-21, observed '2026-06-20'
+
+[FAIL] ota5 (34.66s)
+  transport: serial_sim
+  expected partition: ota_0
+  observed partition: ota_0
+  expected SW: 4.2.1-regB
+  observed SW: 4.2.1-regB
+  version: HW:Uninitialized|SW:4.2.1-regB|Build:2026-06-20
+  error: Expected Build 2026-06-21, observed '2026-06-20'

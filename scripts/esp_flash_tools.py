@@ -3,12 +3,15 @@
 
 from __future__ import annotations
 
+import re
 import struct
 import subprocess
 import sys
 import tempfile
 import zlib
 from pathlib import Path
+
+_HW_MATRIX_DEFAULT_DATES = frozenset({"2026-02-28"})
 
 PARTITION_TABLE_OFFSET = 0x8000
 PARTITION_TABLE_MAX_SIZE = 0xC00
@@ -157,6 +160,50 @@ def parse_partition_entries(data: bytes) -> list[dict]:
         )
         i += PARTITION_ENTRY_SIZE
     return entries
+
+
+def parse_app_build_date(
+    partition_bytes: bytes,
+    *,
+    expected_sw: str | None = None,
+) -> str | None:
+    """Extract SOFTWARE_BUILD_DATE (YYYY-MM-DD) embedded in an app partition image."""
+    if not partition_bytes:
+        return None
+    if partition_bytes[0] != ESP_IMAGE_MAGIC:
+        if len(partition_bytes) >= 256 and all(b == 0xFF for b in partition_bytes[:256]):
+            return None
+        return None
+
+    text = partition_bytes.decode("latin-1", errors="ignore")
+
+    if expected_sw:
+        idx = text.find(expected_sw)
+        if idx >= 0:
+            after = text[idx + len(expected_sw) : idx + len(expected_sw) + 48]
+            after_dates = re.findall(r"(\d{4}-\d{2}-\d{2})", after)
+            if after_dates:
+                return after_dates[0]
+            window = text[max(0, idx - 96) : idx + len(expected_sw) + 96]
+            window_dates = re.findall(r"(\d{4}-\d{2}-\d{2})", window)
+            if window_dates:
+                return window_dates[-1]
+
+    dates = [
+        date
+        for date in set(re.findall(r"(\d{4}-\d{2}-\d{2})", text))
+        if date not in _HW_MATRIX_DEFAULT_DATES
+    ]
+    if not dates:
+        return None
+    return max(dates)
+
+
+def build_date_from_firmware_path(path: Path, *, expected_sw: str | None = None) -> str | None:
+    """Read build date from a firmware .bin on disk."""
+    if not path.is_file():
+        return None
+    return parse_app_build_date(path.read_bytes(), expected_sw=expected_sw)
 
 
 def parse_app_version(partition_bytes: bytes) -> str:

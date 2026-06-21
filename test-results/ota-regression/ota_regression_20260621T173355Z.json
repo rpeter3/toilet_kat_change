@@ -1,0 +1,225 @@
+{
+  "run_id": "20260621T173355Z",
+  "started_at": "2026-06-21T17:33:55.357598+00:00",
+  "ended_at": "2026-06-21T17:57:15.001843+00:00",
+  "passed": false,
+  "dry_run": false,
+  "fast_mode": true,
+  "auto_build": false,
+  "port": "COM5",
+  "address": "58:E6:C5:6C:AF:81",
+  "partition_sequence": [
+    "factory",
+    "ota_0"
+  ],
+  "steps": [
+    {
+      "name": "ota2",
+      "passed": false,
+      "expected_partition": "ota_1",
+      "transport": "ble",
+      "pending_clear_required": true,
+      "expected_sw": "4.2.1-regB",
+      "observed_sw": "4.2.1-regB",
+      "observed_partition": "ota_1",
+      "version": "HW:Uninitialized|SW:4.2.1-regB|Build:2026-06-20",
+      "ota_diag": {
+        "pending": "0",
+        "attempts": "0",
+        "streak": "2",
+        "target": "17",
+        "last_trigger": "none",
+        "from": "ota_1",
+        "to": "",
+        "reset": "unknown",
+        "md5": "246affa9",
+        "size": "919456",
+        "reason": "",
+        "seq": "0",
+        "tail_len": "0"
+      },
+      "boot_info": "BOOT_INFO:reset=usb,code=11,phase=boot_complete:cold,coredump=0,coredump_size=0",
+      "logs_excerpt": "power_test,55950,0,[flush_button] done usable=12%\nflush_event,56619,0,start\npower_test,56835,0,[flush_preflight] PASS gates_ok usable=12%\nflush_step,56841,1,from_0,step=0,cut=1,feed=1,bat=11.8,temp=49.2,m1A=0.00,heaterA=0.00,fan=off\nflush_step,66123,2,from_1,step=1,cut=1,feed=1,bat=11.8,temp=49.0,m1A=0.00,heaterA=0.00,fan=forward\nflush_step,66144,3,from_2,step=2,cut=1,feed=1,bat=11.8,temp=49.0,m1A=0.17,heaterA=0.00,fan=forward\nflush_step,66156,4,from_3,step=3,cut=1,feed=1,bat=11.7,temp=49.0,m1A=0.74,heaterA=0.00,fan=reverse\nflush_step,66167,5,from_4,step=4,cut=1,feed=1,bat=11.8,temp=49.0,m1A=0.37,heaterA=0.00,fan=reverse\nflush_step,78390,6,from_5,step=5,cut=1,feed=1,bat=11.8,temp=48.2,m1A=0.00,heaterA=0.00,fan=off\nflush_step,140448,7,from_6,step=6,cut=1,feed=1,bat=11.5,temp=92.7,m1A=1.15,heaterA=0.00,fan=off\nflush_step,188648,8,from_7,step=7,cut=1,feed=1,bat=11.7,temp=80.3,m1A=0.00,heaterA=0.00,fan=off\nflush_step,189650,9,from_8,step=8,cut=1,feed=1,bat=11.7,temp=79.7,m1A=0.09,heaterA=0.00,fan=off\nflush_step,189662,10,from_9,step=9,cut=1,feed=1,bat=11.7,temp=79.7,m1A=0.10,heaterA=0.00,fan=off\nflush_step,203939,11,from_10,step=10,cut=1,feed=1,bat=11.7,temp=75.9,m1A=0.00,heaterA=0.00,fan=forward\nflush_step,209939,12,from_11,step=11,cut=1,feed=1,bat=11.7,temp=74.1,m1A=0.00,heaterA=0.00,fan=forward\nflush_step,214941,13,from_12,step=12,cut=1,feed=1,bat=11.7,temp=73.0,m1A=0.00,heaterA=0.00,fan=off\nflush_event,216122,0,complete,step=13,cut=1,feed=1,bat=11.7,temp=72.7,m1A=0.00,heaterA=0.00,fan=off\npower_test,278835,0,[display] start vIdle=11.75 capDuty=255 steps=3\npower_test,285028,0,[flush_button] done usable=5%\npower_test,288742,0,[display] start vIdle=11.75 capDuty=255 steps=3\npower_test,312135,0,[display] start vIdle=11.76 capDuty=255 steps=3\npower_test,315788,0,[flush_button] done usable=4%\npower_test,362523,0,[display] start vIdle=11.77 capDuty=255 steps=3\npower_test,990901,0,[display] start vIdle=11.96 capDuty=255 steps=3\npower_test,993258,0,[flush_button] done usable",
+      "errors": [
+        "Expected Build 2026-06-21, observed '2026-06-20'"
+      ],
+      "started_at": "2026-06-21T17:51:37.962498+00:00",
+      "ended_at": "2026-06-21T17:53:01.353224+00:00",
+      "duration_s": 83.39
+    },
+    {
+      "name": "rollback_previous",
+      "passed": false,
+      "expected_partition": "ota_0",
+      "transport": "serial_sim",
+      "pending_clear_required": false,
+      "expected_sw": "4.2.1-regA",
+      "observed_sw": "4.2.1-regA",
+      "observed_partition": "ota_0",
+      "version": "HW:Uninitialized|SW:4.2.1-regA|Build:2026-06-20",
+      "ota_diag": {
+        "pending": "0",
+        "attempts": "0",
+        "streak": "2",
+        "target": "17",
+        "last_trigger": "none",
+        "from": "ota_1",
+        "to": "",
+        "reset": "unknown",
+        "md5": "246affa9",
+        "size": "919456",
+        "reason": "",
+        "seq": "0",
+        "tail_len": "0"
+      },
+      "boot_info": "BOOT_INFO:reset=usb,code=11,phase=boot_complete:cold,coredump=0,coredump_size=0",
+      "logs_excerpt": "power_test,55950,0,[flush_button] done usable=12%\nflush_event,56619,0,start\npower_test,56835,0,[flush_preflight] PASS gates_ok usable=12%\nflush_step,56841,1,from_0,step=0,cut=1,feed=1,bat=11.8,temp=49.2,m1A=0.00,heaterA=0.00,fan=off\nflush_step,66123,2,from_1,step=1,cut=1,feed=1,bat=11.8,temp=49.0,m1A=0.00,heaterA=0.00,fan=forward\nflush_step,66144,3,from_2,step=2,cut=1,feed=1,bat=11.8,temp=49.0,m1A=0.17,heaterA=0.00,fan=forward\nflush_step,66156,4,from_3,step=3,cut=1,feed=1,bat=11.7,temp=49.0,m1A=0.74,heaterA=0.00,fan=reverse\nflush_step,66167,5,from_4,step=4,cut=1,feed=1,bat=11.8,temp=49.0,m1A=0.37,heaterA=0.00,fan=reverse\nflush_step,78390,6,from_5,step=5,cut=1,feed=1,bat=11.8,temp=48.2,m1A=0.00,heaterA=0.00,fan=off\nflush_step,140448,7,from_6,step=6,cut=1,feed=1,bat=11.5,temp=92.7,m1A=1.15,heaterA=0.00,fan=off\nflush_step,188648,8,from_7,step=7,cut=1,feed=1,bat=11.7,temp=80.3,m1A=0.00,heaterA=0.00,fan=off\nflush_step,189650,9,from_8,step=8,cut=1,feed=1,bat=11.7,temp=79.7,m1A=0.09,heaterA=0.00,fan=off\nflush_step,189662,10,from_9,step=9,cut=1,feed=1,bat=11.7,temp=79.7,m1A=0.10,heaterA=0.00,fan=off\nflush_step,203939,11,from_10,step=10,cut=1,feed=1,bat=11.7,temp=75.9,m1A=0.00,heaterA=0.00,fan=forward\nflush_step,209939,12,from_11,step=11,cut=1,feed=1,bat=11.7,temp=74.1,m1A=0.00,heaterA=0.00,fan=forward\nflush_step,214941,13,from_12,step=12,cut=1,feed=1,bat=11.7,temp=73.0,m1A=0.00,heaterA=0.00,fan=off\nflush_event,216122,0,complete,step=13,cut=1,feed=1,bat=11.7,temp=72.7,m1A=0.00,heaterA=0.00,fan=off\npower_test,278835,0,[display] start vIdle=11.75 capDuty=255 steps=3\npower_test,285028,0,[flush_button] done usable=5%\npower_test,288742,0,[display] start vIdle=11.75 capDuty=255 steps=3\npower_test,312135,0,[display] start vIdle=11.76 capDuty=255 steps=3\npower_test,315788,0,[flush_button] done usable=4%\npower_test,362523,0,[display] start vIdle=11.77 capDuty=255 steps=3\npower_test,990901,0,[display] start vIdle=11.96 capDuty=255 steps=3\npower_test,993258,0,[flush_button] done usable",
+      "errors": [
+        "Expected Build 2026-06-21, observed '2026-06-20'"
+      ],
+      "started_at": "2026-06-21T17:53:16.924631+00:00",
+      "ended_at": "2026-06-21T17:53:51.486463+00:00",
+      "duration_s": 34.56
+    },
+    {
+      "name": "ota3",
+      "passed": false,
+      "expected_partition": "ota_1",
+      "transport": "serial_sim",
+      "pending_clear_required": false,
+      "expected_sw": "4.2.1-regB",
+      "observed_sw": "4.2.1-regB",
+      "observed_partition": "ota_1",
+      "version": "HW:Uninitialized|SW:4.2.1-regB|Build:2026-06-20",
+      "ota_diag": {
+        "pending": "0",
+        "attempts": "0",
+        "streak": "2",
+        "target": "17",
+        "last_trigger": "none",
+        "from": "ota_1",
+        "to": "",
+        "reset": "unknown",
+        "md5": "246affa9",
+        "size": "919456",
+        "reason": "",
+        "seq": "0",
+        "tail_len": "0"
+      },
+      "boot_info": "BOOT_INFO:reset=usb,code=11,phase=boot_complete:cold,coredump=0,coredump_size=0",
+      "logs_excerpt": "power_test,55950,0,[flush_button] done usable=12%\nflush_event,56619,0,start\npower_test,56835,0,[flush_preflight] PASS gates_ok usable=12%\nflush_step,56841,1,from_0,step=0,cut=1,feed=1,bat=11.8,temp=49.2,m1A=0.00,heaterA=0.00,fan=off\nflush_step,66123,2,from_1,step=1,cut=1,feed=1,bat=11.8,temp=49.0,m1A=0.00,heaterA=0.00,fan=forward\nflush_step,66144,3,from_2,step=2,cut=1,feed=1,bat=11.8,temp=49.0,m1A=0.17,heaterA=0.00,fan=forward\nflush_step,66156,4,from_3,step=3,cut=1,feed=1,bat=11.7,temp=49.0,m1A=0.74,heaterA=0.00,fan=reverse\nflush_step,66167,5,from_4,step=4,cut=1,feed=1,bat=11.8,temp=49.0,m1A=0.37,heaterA=0.00,fan=reverse\nflush_step,78390,6,from_5,step=5,cut=1,feed=1,bat=11.8,temp=48.2,m1A=0.00,heaterA=0.00,fan=off\nflush_step,140448,7,from_6,step=6,cut=1,feed=1,bat=11.5,temp=92.7,m1A=1.15,heaterA=0.00,fan=off\nflush_step,188648,8,from_7,step=7,cut=1,feed=1,bat=11.7,temp=80.3,m1A=0.00,heaterA=0.00,fan=off\nflush_step,189650,9,from_8,step=8,cut=1,feed=1,bat=11.7,temp=79.7,m1A=0.09,heaterA=0.00,fan=off\nflush_step,189662,10,from_9,step=9,cut=1,feed=1,bat=11.7,temp=79.7,m1A=0.10,heaterA=0.00,fan=off\nflush_step,203939,11,from_10,step=10,cut=1,feed=1,bat=11.7,temp=75.9,m1A=0.00,heaterA=0.00,fan=forward\nflush_step,209939,12,from_11,step=11,cut=1,feed=1,bat=11.7,temp=74.1,m1A=0.00,heaterA=0.00,fan=forward\nflush_step,214941,13,from_12,step=12,cut=1,feed=1,bat=11.7,temp=73.0,m1A=0.00,heaterA=0.00,fan=off\nflush_event,216122,0,complete,step=13,cut=1,feed=1,bat=11.7,temp=72.7,m1A=0.00,heaterA=0.00,fan=off\npower_test,278835,0,[display] start vIdle=11.75 capDuty=255 steps=3\npower_test,285028,0,[flush_button] done usable=5%\npower_test,288742,0,[display] start vIdle=11.75 capDuty=255 steps=3\npower_test,312135,0,[display] start vIdle=11.76 capDuty=255 steps=3\npower_test,315788,0,[flush_button] done usable=4%\npower_test,362523,0,[display] start vIdle=11.77 capDuty=255 steps=3\npower_test,990901,0,[display] start vIdle=11.96 capDuty=255 steps=3\npower_test,993258,0,[flush_button] done usable",
+      "errors": [
+        "Expected Build 2026-06-21, observed '2026-06-20'"
+      ],
+      "started_at": "2026-06-21T17:54:13.153692+00:00",
+      "ended_at": "2026-06-21T17:54:48.495267+00:00",
+      "duration_s": 35.34
+    },
+    {
+      "name": "ota4",
+      "passed": false,
+      "expected_partition": "ota_0",
+      "transport": "serial_sim",
+      "pending_clear_required": false,
+      "expected_sw": "4.2.1-regA",
+      "observed_sw": "4.2.1-regA",
+      "observed_partition": "ota_0",
+      "version": "HW:Uninitialized|SW:4.2.1-regA|Build:2026-06-20",
+      "ota_diag": {
+        "pending": "0",
+        "attempts": "0",
+        "streak": "2",
+        "target": "17",
+        "last_trigger": "none",
+        "from": "ota_1",
+        "to": "",
+        "reset": "unknown",
+        "md5": "246affa9",
+        "size": "919456",
+        "reason": "",
+        "seq": "0",
+        "tail_len": "0"
+      },
+      "boot_info": "BOOT_INFO:reset=usb,code=11,phase=boot_complete:cold,coredump=0,coredump_size=0",
+      "logs_excerpt": "power_test,55950,0,[flush_button] done usable=12%\nflush_event,56619,0,start\npower_test,56835,0,[flush_preflight] PASS gates_ok usable=12%\nflush_step,56841,1,from_0,step=0,cut=1,feed=1,bat=11.8,temp=49.2,m1A=0.00,heaterA=0.00,fan=off\nflush_step,66123,2,from_1,step=1,cut=1,feed=1,bat=11.8,temp=49.0,m1A=0.00,heaterA=0.00,fan=forward\nflush_step,66144,3,from_2,step=2,cut=1,feed=1,bat=11.8,temp=49.0,m1A=0.17,heaterA=0.00,fan=forward\nflush_step,66156,4,from_3,step=3,cut=1,feed=1,bat=11.7,temp=49.0,m1A=0.74,heaterA=0.00,fan=reverse\nflush_step,66167,5,from_4,step=4,cut=1,feed=1,bat=11.8,temp=49.0,m1A=0.37,heaterA=0.00,fan=reverse\nflush_step,78390,6,from_5,step=5,cut=1,feed=1,bat=11.8,temp=48.2,m1A=0.00,heaterA=0.00,fan=off\nflush_step,140448,7,from_6,step=6,cut=1,feed=1,bat=11.5,temp=92.7,m1A=1.15,heaterA=0.00,fan=off\nflush_step,188648,8,from_7,step=7,cut=1,feed=1,bat=11.7,temp=80.3,m1A=0.00,heaterA=0.00,fan=off\nflush_step,189650,9,from_8,step=8,cut=1,feed=1,bat=11.7,temp=79.7,m1A=0.09,heaterA=0.00,fan=off\nflush_step,189662,10,from_9,step=9,cut=1,feed=1,bat=11.7,temp=79.7,m1A=0.10,heaterA=0.00,fan=off\nflush_step,203939,11,from_10,step=10,cut=1,feed=1,bat=11.7,temp=75.9,m1A=0.00,heaterA=0.00,fan=forward\nflush_step,209939,12,from_11,step=11,cut=1,feed=1,bat=11.7,temp=74.1,m1A=0.00,heaterA=0.00,fan=forward\nflush_step,214941,13,from_12,step=12,cut=1,feed=1,bat=11.7,temp=73.0,m1A=0.00,heaterA=0.00,fan=off\nflush_event,216122,0,complete,step=13,cut=1,feed=1,bat=11.7,temp=72.7,m1A=0.00,heaterA=0.00,fan=off\npower_test,278835,0,[display] start vIdle=11.75 capDuty=255 steps=3\npower_test,285028,0,[flush_button] done usable=5%\npower_test,288742,0,[display] start vIdle=11.75 capDuty=255 steps=3\npower_test,312135,0,[display] start vIdle=11.76 capDuty=255 steps=3\npower_test,315788,0,[flush_button] done usable=4%\npower_test,362523,0,[display] start vIdle=11.77 capDuty=255 steps=3\npower_test,990901,0,[display] start vIdle=11.96 capDuty=255 steps=3\npower_test,993258,0,[flush_button] done usable",
+      "errors": [
+        "Expected Build 2026-06-21, observed '2026-06-20'"
+      ],
+      "started_at": "2026-06-21T17:55:10.135352+00:00",
+      "ended_at": "2026-06-21T17:55:44.604527+00:00",
+      "duration_s": 34.47
+    },
+    {
+      "name": "factory_reset",
+      "passed": false,
+      "expected_partition": "factory",
+      "transport": "serial_sim",
+      "pending_clear_required": false,
+      "expected_sw": "unknown",
+      "observed_sw": "3.0.0",
+      "observed_partition": "factory",
+      "version": "HW:Uninitialized|SW:3.0.0|Build:2026-06-20",
+      "ota_diag": {},
+      "boot_info": "UNKNOWN_COMMAND:GET_BOOT_INFO",
+      "logs_excerpt": "mcp,3524,0,MCP_UNAVAILABLE\nmcp,3433,0,MCP_UNAVAILABLE\nmcp,3440,0,MCP_UNAVAILABLE\nmcp,3438,0,MCP_UNAVAILABLE\nmcp,3345,0,MCP_UNAVAILABLE",
+      "errors": [
+        "Expected Build 2026-06-21, observed '2026-06-20'"
+      ],
+      "started_at": "2026-06-21T17:55:59.090309+00:00",
+      "ended_at": "2026-06-21T17:56:18.640845+00:00",
+      "duration_s": 19.55
+    },
+    {
+      "name": "ota5",
+      "passed": false,
+      "expected_partition": "ota_0",
+      "transport": "serial_sim",
+      "pending_clear_required": false,
+      "expected_sw": "4.2.1-regB",
+      "observed_sw": "4.2.1-regB",
+      "observed_partition": "ota_0",
+      "version": "HW:Uninitialized|SW:4.2.1-regB|Build:2026-06-20",
+      "ota_diag": {
+        "pending": "0",
+        "attempts": "0",
+        "streak": "2",
+        "target": "17",
+        "last_trigger": "none",
+        "from": "ota_1",
+        "to": "",
+        "reset": "unknown",
+        "md5": "246affa9",
+        "size": "919456",
+        "reason": "",
+        "seq": "0",
+        "tail_len": "0"
+      },
+      "boot_info": "BOOT_INFO:reset=usb,code=11,phase=boot_complete:cold,coredump=0,coredump_size=0",
+      "logs_excerpt": "power_test,55950,0,[flush_button] done usable=12%\nflush_event,56619,0,start\npower_test,56835,0,[flush_preflight] PASS gates_ok usable=12%\nflush_step,56841,1,from_0,step=0,cut=1,feed=1,bat=11.8,temp=49.2,m1A=0.00,heaterA=0.00,fan=off\nflush_step,66123,2,from_1,step=1,cut=1,feed=1,bat=11.8,temp=49.0,m1A=0.00,heaterA=0.00,fan=forward\nflush_step,66144,3,from_2,step=2,cut=1,feed=1,bat=11.8,temp=49.0,m1A=0.17,heaterA=0.00,fan=forward\nflush_step,66156,4,from_3,step=3,cut=1,feed=1,bat=11.7,temp=49.0,m1A=0.74,heaterA=0.00,fan=reverse\nflush_step,66167,5,from_4,step=4,cut=1,feed=1,bat=11.8,temp=49.0,m1A=0.37,heaterA=0.00,fan=reverse\nflush_step,78390,6,from_5,step=5,cut=1,feed=1,bat=11.8,temp=48.2,m1A=0.00,heaterA=0.00,fan=off\nflush_step,140448,7,from_6,step=6,cut=1,feed=1,bat=11.5,temp=92.7,m1A=1.15,heaterA=0.00,fan=off\nflush_step,188648,8,from_7,step=7,cut=1,feed=1,bat=11.7,temp=80.3,m1A=0.00,heaterA=0.00,fan=off\nflush_step,189650,9,from_8,step=8,cut=1,feed=1,bat=11.7,temp=79.7,m1A=0.09,heaterA=0.00,fan=off\nflush_step,189662,10,from_9,step=9,cut=1,feed=1,bat=11.7,temp=79.7,m1A=0.10,heaterA=0.00,fan=off\nflush_step,203939,11,from_10,step=10,cut=1,feed=1,bat=11.7,temp=75.9,m1A=0.00,heaterA=0.00,fan=forward\nflush_step,209939,12,from_11,step=11,cut=1,feed=1,bat=11.7,temp=74.1,m1A=0.00,heaterA=0.00,fan=forward\nflush_step,214941,13,from_12,step=12,cut=1,feed=1,bat=11.7,temp=73.0,m1A=0.00,heaterA=0.00,fan=off\nflush_event,216122,0,complete,step=13,cut=1,feed=1,bat=11.7,temp=72.7,m1A=0.00,heaterA=0.00,fan=off\npower_test,278835,0,[display] start vIdle=11.75 capDuty=255 steps=3\npower_test,285028,0,[flush_button] done usable=5%\npower_test,288742,0,[display] start vIdle=11.75 capDuty=255 steps=3\npower_test,312135,0,[display] start vIdle=11.76 capDuty=255 steps=3\npower_test,315788,0,[flush_button] done usable=4%\npower_test,362523,0,[display] start vIdle=11.77 capDuty=255 steps=3\npower_test,990901,0,[display] start vIdle=11.96 capDuty=255 steps=3\npower_test,993258,0,[flush_button] done usable",
+      "errors": [
+        "Expected Build 2026-06-21, observed '2026-06-20'"
+      ],
+      "started_at": "2026-06-21T17:56:40.337701+00:00",
+      "ended_at": "2026-06-21T17:57:14.998599+00:00",
+      "duration_s": 34.66
+    }
+  ],
+  "failures": [
+    "ota2: Expected Build 2026-06-21, observed '2026-06-20'",
+    "rollback_previous: Expected Build 2026-06-21, observed '2026-06-20'",
+    "ota3: Expected Build 2026-06-21, observed '2026-06-20'",
+    "ota4: Expected Build 2026-06-21, observed '2026-06-20'",
+    "factory_reset: Expected Build 2026-06-21, observed '2026-06-20'",
+    "ota5: Expected Build 2026-06-21, observed '2026-06-20'",
+    "Partition sequence mismatch: expected ['factory', 'ota_0', 'ota_1', 'ota_0', 'ota_1', 'ota_0', 'factory', 'ota_0'], observed ['factory', 'ota_0']"
+  ],
+  "metadata": {
+    "preflight": {
+      "skipped": true,
+      "start_from": "ota2",
+      "ble_address": "58:E6:C5:6C:AF:81"
+    },
+    "manifest": null,
+    "start_from": "ota2"
+  }
+}

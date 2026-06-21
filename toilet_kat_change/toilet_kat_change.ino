@@ -228,12 +228,12 @@ struct HWCFGConfigStore {
 #  if __has_include("software_version_build.h")
 #    include "software_version_build.h"
 #  else
-const char* SOFTWARE_VERSION_NUMBER = "4.2.1";
+const char* SOFTWARE_VERSION_NUMBER = "4.2.2";
 const char* FACTORY_SOFTWARE_DATE = "2026-06-18";
 const char* SOFTWARE_BUILD_DATE = "2026-06-21";  // YYYY-MM-DD — update with each build
 #  endif
 #else
-const char* SOFTWARE_VERSION_NUMBER = "4.2.1";
+const char* SOFTWARE_VERSION_NUMBER = "4.2.2";
 const char* FACTORY_SOFTWARE_DATE = "2026-06-18";
 const char* SOFTWARE_BUILD_DATE = "2026-06-21";  // YYYY-MM-DD — update with each build
 #endif
@@ -5474,7 +5474,7 @@ void feedTaskWatchdog() {
     return;
   }
 #endif
-  if (taskWatchdogInitialized) {
+  if (taskWatchdogInitialized && xTaskGetCurrentTaskHandle() == taskWatchdogLoopHandle) {
     esp_task_wdt_reset();
   }
 }
@@ -5695,13 +5695,23 @@ void checkHeaterRuntimeSafety() {
   heaterRuntimeMismatchStrikes = 0;
 
   unsigned long maxOnMs = (unsigned long)heaterAbsoluteMaxOnS * 1000UL;
-  if ((heaterOn || heaterOutputOn) && heaterOutputOnSinceMs != 0 &&
-      (now - heaterOutputOnSinceMs >= maxOnMs)) {
-    Serial.println("Heater runtime safety: absolute max on-time exceeded");
-    logError("runtime", HEATER_FAILSAFE_ERROR_CODE, "heater_absolute_max_on", true);
-    ERROR_CODE = HEATER_FAILSAFE_ERROR_CODE;
-    stopEverything();
-    LEDErrorCode(HEATER_FAILSAFE_ERROR_CODE);
+
+  // Safely copy shared timestamp before compare
+  unsigned long startedMs = heaterOutputOnSinceMs;
+
+  if ((heaterOn || heaterOutputOn) && startedMs != 0) {
+    // Prevent unsigned underflow if another task just updated the timestamp
+    if (now < startedMs) {
+      now = startedMs;
+    }
+
+    if (now - startedMs >= maxOnMs) {
+      Serial.println("Heater runtime safety: absolute max on-time exceeded");
+      logError("runtime", HEATER_FAILSAFE_ERROR_CODE, "heater_absolute_max_on", true);
+      ERROR_CODE = HEATER_FAILSAFE_ERROR_CODE;
+      stopEverything();
+      LEDErrorCode(HEATER_FAILSAFE_ERROR_CODE);
+    }
   }
 }
 

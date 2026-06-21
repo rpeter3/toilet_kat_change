@@ -1,0 +1,32 @@
+OTA Partition Regression Report
+Run ID: 20260621T163739Z
+Started: 2026-06-21T16:37:39.136843+00:00
+Ended: 2026-06-21T17:04:18.428590+00:00
+Result: FAIL
+Dry run: False
+Fast mode: True
+Auto-build: False
+Port: COM5
+BLE address: 58:E6:C5:6C:AF:81
+
+Partition sequence: factory
+Expected sequence: factory -> ota_0 -> ota_1 -> ota_0 -> ota_1 -> ota_0 -> factory -> ota_0
+
+Version evolution:
+Step                 Partition  Expected SW              Observed SW              Pass
+------------------------------------------------------------------------------------------
+ota1                 ota_0      4.2.1-regA               -                        FAIL
+
+Failures:
+  - ota1: OTA pending verification did not clear within 180s; last diag={}
+  - OTA update failed for ota2
+  - Partition sequence mismatch: expected ['factory', 'ota_0', 'ota_1', 'ota_0', 'ota_1', 'ota_0', 'factory', 'ota_0'], observed ['factory']
+
+[FAIL] ota1 (204.3s)
+  transport: ble
+  pending_clear_required: yes
+  expected partition: ota_0
+  observed partition: None
+  expected SW: 4.2.1-regA
+  observed SW: None
+  error: OTA pending verification did not clear within 180s; last diag={}

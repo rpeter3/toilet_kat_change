@@ -1,0 +1,50 @@
+{
+  "run_id": "20260621T163739Z",
+  "started_at": "2026-06-21T16:37:39.136843+00:00",
+  "ended_at": "2026-06-21T17:04:18.428590+00:00",
+  "passed": false,
+  "dry_run": false,
+  "fast_mode": true,
+  "auto_build": false,
+  "port": "COM5",
+  "address": "58:E6:C5:6C:AF:81",
+  "partition_sequence": [
+    "factory"
+  ],
+  "steps": [
+    {
+      "name": "ota1",
+      "passed": false,
+      "expected_partition": "ota_0",
+      "transport": "ble",
+      "pending_clear_required": true,
+      "expected_sw": "4.2.1-regA",
+      "observed_sw": null,
+      "observed_partition": null,
+      "version": null,
+      "ota_diag": null,
+      "boot_info": null,
+      "logs_excerpt": null,
+      "errors": [
+        "OTA pending verification did not clear within 180s; last diag={}"
+      ],
+      "started_at": "2026-06-21T16:54:48.223531+00:00",
+      "ended_at": "2026-06-21T16:58:12.526205+00:00",
+      "duration_s": 204.3
+    }
+  ],
+  "failures": [
+    "ota1: OTA pending verification did not clear within 180s; last diag={}",
+    "OTA update failed for ota2",
+    "Partition sequence mismatch: expected ['factory', 'ota_0', 'ota_1', 'ota_0', 'ota_1', 'ota_0', 'factory', 'ota_0'], observed ['factory']"
+  ],
+  "metadata": {
+    "preflight": {
+      "skipped": true,
+      "start_from": "ota1",
+      "ble_address": "58:E6:C5:6C:AF:81"
+    },
+    "manifest": null,
+    "start_from": "ota1"
+  }
+}

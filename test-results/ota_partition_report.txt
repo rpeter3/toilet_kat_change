@@ -1,0 +1,50 @@
+ESP32 OTA Partition Report
+Port: COM5  Chip: esp32s3  Generated: 2026-06-21 18:10:50 UTC
+
+=== 1. Current flash layout ===
+Partition          Offset Image                        SOFTWARE_VERSION
+------------------------------------------------------------------------
+factory      0x00010000 SARAH                        3.0.0           
+ota_0        0x00490000 firmware-3.3.3.bin           3.3.3           
+ota_1        0x00910000 firmware-3.3.3.bin           3.3.3           
+
+=== 2. otadata (boot selection) ===
+Active seq: 2
+ESP-IDF boots: ota_1 (even seq)
+Label in otadata: ota_0 (informational only)
+ota_state: VALID (0x00000002)  crc_ok: True
+
+=== 3. otadata records (decoded) ===
+Sector 0 @ 0x0000: seq=1, label='ota_0', state=UNDEFINED, crc=0x4743989A (ok=True), boot=ota_0
+Sector 1 @ 0x1000: seq=2, label='ota_0', state=VALID, crc=0x55F63774 (ok=True), boot=ota_1
+
+=== 4. Raw otadata binary (boot selection fields) ===
+otadata raw (8192 bytes):
+Sector 0 @ 0x0000 (seq=1, boot=ota_0, state=UNDEFINED, crc_ok=True)
+  0x0000: 01 00 00 00  # ota_seq (uint32 LE)
+  0x0004: 6F 74 61 5F 30 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  # seq_label[20]
+  0x0018: FF FF FF FF  # ota_state (uint32 LE)
+  0x001C: 9A 98 43 47  # crc (expected 0x4743989A)
+
+Sector 1 @ 0x1000 (seq=2, boot=ota_1, state=VALID, crc_ok=True)
+  0x1000: 02 00 00 00  # ota_seq (uint32 LE)
+  0x1004: 6F 74 61 5F 30 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  # seq_label[20]
+  0x1018: 02 00 00 00  # ota_state (uint32 LE)
+  0x101C: 74 37 F6 55  # crc (expected 0x55F63774)
+
+=== 5. Seq reference (ESP-IDF) ===
+odd seq -> ota_0, even seq -> ota_1 (seq 0 / 0xFFFFFFFF -> factory)
+seq 2 (now) -> ota_1  version in slot: 3.3.3
+seq 1 (prev) -> ota_0  version in slot: 3.3.3
+
+=== 6. Full partition table ===
+Name         Type             Offset       Size  Flags
+------------------------------------------------------------
+nvs          nvs          0x00009000 0x00004000 (16 KiB)  0x00000000
+phy_init     phy          0x0000D000 0x00001000 (4 KiB)  0x00000000
+otadata      ota          0x0000E000 0x00002000 (8 KiB)  0x00000000
+factory      factory      0x00010000 0x00480000 (4608 KiB)  0x00000000
+ota_0        ota_0        0x00490000 0x00480000 (4608 KiB)  0x00000000
+ota_1        ota_1        0x00910000 0x00480000 (4608 KiB)  0x00000000
+coredump     coredump     0x00D90000 0x00010000 (64 KiB)  0x00000000
+storage      spiffs       0x00DA0000 0x00260000 (2432 KiB)  0x00000000

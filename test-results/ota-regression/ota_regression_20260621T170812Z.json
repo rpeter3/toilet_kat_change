@@ -1,0 +1,19 @@
+{
+  "run_id": "20260621T170812Z",
+  "started_at": "2026-06-21T17:08:12.329417+00:00",
+  "ended_at": "2026-06-21T17:08:12.498899+00:00",
+  "passed": false,
+  "dry_run": false,
+  "fast_mode": true,
+  "auto_build": true,
+  "port": "COM5",
+  "address": "58:E6:C5:6C:AF:81",
+  "partition_sequence": [],
+  "steps": [],
+  "failures": [
+    "preflight: Serial port preflight failed for COM5: esptool read-flash failed (exit 2). If COM6 is busy, close Serial Monitor, the BLE Python tool, or any app using the port."
+  ],
+  "metadata": {
+    "preflight_error": "Serial port preflight failed for COM5: esptool read-flash failed (exit 2). If COM6 is busy, close Serial Monitor, the BLE Python tool, or any app using the port."
+  }
+}

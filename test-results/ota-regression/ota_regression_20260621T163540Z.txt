@@ -1,0 +1,37 @@
+OTA Partition Regression Report
+Run ID: 20260621T163540Z
+Started: 2026-06-21T16:35:40.306011+00:00
+Ended: 2026-06-21T16:37:22.513489+00:00
+Result: FAIL
+Dry run: False
+Fast mode: True
+Auto-build: True
+Port: COM5
+BLE address: 58:E6:C5:6C:AF:81
+
+Partition sequence: 
+Expected sequence: factory -> ota_0 -> ota_1 -> ota_0 -> ota_1 -> ota_0 -> factory -> ota_0
+
+Version evolution:
+Step                 Partition  Expected SW              Observed SW              Pass
+------------------------------------------------------------------------------------------
+flash_factory        factory    unknown                  3.0.0                    FAIL
+
+Auto-build manifest:
+  base_version: 4.2.1
+  build_date: 2026-06-21
+  factory SW: unknown
+
+Failures:
+  - flash_factory: Expected Build 2026-06-21, observed '2026-06-20'
+  - Not connected
+  - Partition sequence mismatch: expected ['factory', 'ota_0', 'ota_1', 'ota_0', 'ota_1', 'ota_0', 'factory', 'ota_0'], observed []
+
+[FAIL] flash_factory (15.38s)
+  transport: serial
+  expected partition: factory
+  observed partition: factory
+  expected SW: unknown
+  observed SW: 3.0.0
+  version: HW:Uninitialized|SW:3.0.0|Build:2026-06-20
+  error: Expected Build 2026-06-21, observed '2026-06-20'
