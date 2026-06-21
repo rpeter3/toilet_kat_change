@@ -273,12 +273,12 @@ struct HWCFGConfigStore {
 #  if __has_include("software_version_build.h")
 #    include "software_version_build.h"
 #  else
-const char* SOFTWARE_VERSION_NUMBER = "4.2.3";
+const char* SOFTWARE_VERSION_NUMBER = "4.2.4";
 const char* FACTORY_SOFTWARE_DATE = "2026-06-18";
 const char* SOFTWARE_BUILD_DATE = "2026-06-21";  // YYYY-MM-DD — update with each build
 #  endif
 #else
-const char* SOFTWARE_VERSION_NUMBER = "4.2.3";
+const char* SOFTWARE_VERSION_NUMBER = "4.2.4";
 const char* FACTORY_SOFTWARE_DATE = "2026-06-18";
 const char* SOFTWARE_BUILD_DATE = "2026-06-21";  // YYYY-MM-DD — update with each build
 #endif
@@ -299,6 +299,8 @@ String buildParamCSV();
 String buildMotorFaultStatusSnapshot();
 void saveParametersToEEPROM();
 void loadParametersFromEEPROM();
+void runDeferredParamEepromSchemaStampIfNeeded();
+bool reclaimNvsSpaceForParamEeprom();
 void loadFlushCountFromEEPROM();
 bool saveFlushCountToEEPROM();
 void incrementFlushCount();
@@ -914,6 +916,8 @@ bool hardwareMatrixInitialized = false;
 HWCFGConfigStore hwcfgStore = {};
 bool hwcfgStoreInitialized = false;
 bool hwcfgSafeFault = false;
+bool hwcfgActiveOnSpiffs = false;
+static bool g_pendingParamEepromSchemaStamp = false;
 HardwareMatrix hardwareMatrixScratchActive = {};
 HardwareMatrix hardwareMatrixScratchLastGood = {};
 // HWCFG scratch/snapshot buffers kept at file scope to avoid large loopTask stack frames.
@@ -2197,7 +2201,8 @@ void saveParametersToEEPROM() {
   
   unsigned long commitStart = millis();
   bool commitOk = false;
-  for (int commitAttempt = 0; commitAttempt < 3; commitAttempt += 1) {
+  reclaimNvsSpaceForParamEeprom();
+  for (int commitAttempt = 0; commitAttempt < 5; commitAttempt += 1) {
     if (commitAttempt > 0) {
       delay(50);
     }
@@ -2205,6 +2210,8 @@ void saveParametersToEEPROM() {
     if (commitOk) {
       break;
     }
+    Serial.printf("EEPROM commit failed (attempt %d/5), reclaiming NVS and retrying\n", commitAttempt + 1);
+    reclaimNvsSpaceForParamEeprom();
   }
   char commitMsg[64];
   snprintf(commitMsg, sizeof(commitMsg), "eeprom_params_commit,%lums,ok=%d",
@@ -2698,9 +2705,7 @@ void loadParametersFromEEPROM() {
     EEPROM.end();
     logBootTiming("eeprom_params_load_valid_done");
     if (needSchemaMigrate) {
-      Serial.println("EEPROM schema migration: stamping V2 layout");
-      SerialBLE_println("EEPROM schema migration: stamping V2 layout");
-      saveParametersToEEPROM();
+      g_pendingParamEepromSchemaStamp = true;
     }
     return;
   }
@@ -2738,6 +2743,24 @@ void loadParametersFromEEPROM() {
     enterEEPROMInvalidErrorState("magic mismatch");
     logBootTiming("eeprom_params_corrupt_done");
     return;
+  }
+}
+
+void runDeferredParamEepromSchemaStampIfNeeded() {
+  if (!g_pendingParamEepromSchemaStamp) {
+    return;
+  }
+  Serial.println("EEPROM schema migration: stamping V2 layout");
+  SerialBLE_println("EEPROM schema migration: stamping V2 layout");
+  reclaimNvsSpaceForParamEeprom();
+  saveParametersToEEPROM();
+  if (lastEEPROMWriteVerified) {
+    g_pendingParamEepromSchemaStamp = false;
+    Serial.println("EEPROM schema V2 stamped successfully");
+    SerialBLE_println("EEPROM schema V2 stamped successfully");
+  } else {
+    Serial.println("EEPROM schema stamp deferred (NVS persist failed, will retry next boot)");
+    SerialBLE_println("EEPROM schema stamp deferred");
   }
 }
 
@@ -3626,6 +3649,47 @@ bool saveHWCFGBlob(const HWCFGConfigStore& store, bool updateLastGood) {
   return saved;
 }
 
+static bool eraseHwcfgNvsKey(const char* key) {
+  nvs_handle_t nvsHandle;
+  esp_err_t err = nvs_open(HWCFG_CONFIG_NAMESPACE, NVS_READWRITE, &nvsHandle);
+  if (err != ESP_OK) {
+    return false;
+  }
+  err = nvs_erase_key(nvsHandle, key);
+  if (err == ESP_OK) {
+    err = nvs_commit(nvsHandle);
+  } else if (err == ESP_ERR_NVS_NOT_FOUND) {
+    err = ESP_OK;
+  }
+  nvs_close(nvsHandle);
+  return err == ESP_OK;
+}
+
+bool reclaimNvsSpaceForParamEeprom() {
+  bool reclaimed = false;
+  if (hwcfgActiveOnSpiffs || SPIFFS.exists(HWCFG_ACTIVE_FILE)) {
+    if (eraseHwcfgNvsKey(HWCFG_ACTIVE_KEY)) {
+      Serial.println("Reclaimed NVS: erased hwcfg/active (SPIFFS copy retained)");
+      reclaimed = true;
+    }
+    // Orphan lkg NVS key may remain after active-only migration; SPIFFS is authoritative.
+    if (eraseHwcfgNvsKey(HWCFG_LAST_GOOD_KEY)) {
+      Serial.println("Reclaimed NVS: erased hwcfg/lkg (SPIFFS authoritative)");
+      reclaimed = true;
+    }
+  } else if (SPIFFS.exists(HWCFG_LAST_GOOD_FILE)) {
+    if (eraseHwcfgNvsKey(HWCFG_LAST_GOOD_KEY)) {
+      Serial.println("Reclaimed NVS: erased hwcfg/lkg (SPIFFS copy retained)");
+      reclaimed = true;
+    }
+  }
+  if (reclaimed) {
+    SerialBLE_println("Reclaimed NVS space for param EEPROM");
+    logBootTiming("nvs_reclaim_hwcfg_done");
+  }
+  return reclaimed;
+}
+
 bool migrateHWCFGBlobFromNVSToSPIFFS(const char* key, const HWCFGConfigStore& store) {
   const char* path = hwcfgFilePathForKey(key);
   if (path == NULL) {
@@ -3633,6 +3697,12 @@ bool migrateHWCFGBlobFromNVSToSPIFFS(const char* key, const HWCFGConfigStore& st
   }
   if (saveHWCFGBlobFile(path, store)) {
     Serial.printf("Migrated HWCFG %s record from NVS to SPIFFS\n", key);
+    if (eraseHwcfgNvsKey(key)) {
+      Serial.printf("Reclaimed NVS: erased hwcfg/%s after SPIFFS migration\n", key);
+    }
+    if (strcmp(key, HWCFG_ACTIVE_KEY) == 0) {
+      hwcfgActiveOnSpiffs = true;
+    }
     return true;
   }
   return false;
@@ -3709,6 +3779,8 @@ bool initializeHWCFGStore() {
     hwcfgStore = hwcfgScratchActive;
     hwcfgStoreInitialized = true;
     hwcfgSafeFault = false;
+    hwcfgActiveOnSpiffs = true;
+    reclaimNvsSpaceForParamEeprom();
     logBootTiming("hwcfg_path,spiffs_active");
     return true;
   }
@@ -3729,8 +3801,10 @@ bool initializeHWCFGStore() {
     hwcfgStore = hwcfgScratchLastGood;
     hwcfgStoreInitialized = true;
     hwcfgSafeFault = false;
+    hwcfgActiveOnSpiffs = true;
     logBootTiming("hwcfg_last_good_save_start");
     saveHWCFGBlob(hwcfgStore, false);
+    reclaimNvsSpaceForParamEeprom();
     logBootTiming("hwcfg_path,spiffs_last_good");
     return true;
   }
@@ -3757,6 +3831,8 @@ bool initializeHWCFGStore() {
     return false;
   }
   hwcfgSafeFault = false;
+  hwcfgActiveOnSpiffs = true;
+  reclaimNvsSpaceForParamEeprom();
   logBootTiming("hwcfg_path,defaults_saved");
   return true;
 }
@@ -6013,6 +6089,8 @@ void initCorePlatformServices() {
   if (!initializeHWCFGStore()) {
     Serial.println("WARNING: HWCFG store failed to initialize");
     SerialBLE_println("WARNING: HWCFG store init failed");
+  } else {
+    reclaimNvsSpaceForParamEeprom();
   }
   logBootTiming("hwcfg_done");
   if (ignoreM12Faults) {
@@ -6159,6 +6237,7 @@ void setup() {
     logBootTiming("eeprom_load_start");
     loadParametersFromEEPROM();
     loadFlushCountFromEEPROM();
+    runDeferredParamEepromSchemaStampIfNeeded();
     logBootTiming("eeprom_load_done");
     logBootCheckpoint("eeprom_ok");
     knownResistor = thermistorResistance;
@@ -6220,6 +6299,7 @@ void setup() {
   logBootTiming("eeprom_load_start");
   loadParametersFromEEPROM();
   loadFlushCountFromEEPROM();
+  runDeferredParamEepromSchemaStampIfNeeded();
   logBootTiming("eeprom_load_done");
   logBootCheckpoint("eeprom_ok");
   knownResistor = thermistorResistance;
