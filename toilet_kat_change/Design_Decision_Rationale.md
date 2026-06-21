@@ -124,7 +124,7 @@ Behavior:
 - **Usable battery assessment** (`assessBatteryUsable`): user-facing battery % (LED bar, `GET_BATTERY`, flush block) is derived from a scaled heater load pulse, not idle open-circuit VMON. Assessment steps through duties up to `getHeaterPwmCapForVoltage(vIdle)`, records worst loaded voltage/sag, and maps usable % from `MIN_LOADED_BATTERY_V` (0%) to `USABLE_V_FULL` (100%).
 - **Unified flush block**: `batteryThreshold` (default 15% high barrier, 10% compostable) is the minimum usable % before flush. Flush is blocked at the button handler and re-checked in flush case 0; both use the same cached assessment. `assessPassed` must also prove the pack can sustain `capDuty` (255 or `heaterPwmReduced`).
 - **Two-tier heater PWM** (`getHeaterPwmCapForVoltage`): VMON at/above `heaterCapVFull` → PWM 255; below → `heaterPwmReduced` (255 high barrier, 170 compostable). No 255/170/100 voltage ladder or runtime preflight derate cascade.
-- **Max heater wall time** (`maxHeaterWallTimeS`, default 200 s): fixed BLE/EEPROM parameter sets flush step 6 timeout before error 6 (`heater_max_wall`); replaces per-flush `(ramp + hold) * 1.2` calculation.
+- **Max heater wall time** (`maxHeaterWallTimeS`, default 200 s): fixed BLE/EEPROM parameter sets flush step 6 timeout before error 6 (`heater_max_wall`); replaces per-flush `(ramp + hold) * 1.2` calculation. Error 6 is an **advisory**: flush continues with progress LEDs, each occurrence is logged to SPIFFS, preflight does not block on code 6, first occurrence silently latches code 6, recurring consecutive occurrence shows LED/buzzer after completion flash, cleared when a latched advisory flush completes without re-triggering.
 - **Loaded VMON preflight** (`measureBatteryUnderLoad`, legacy helper): still available for single-step tests; boot/flush/homing paths now use `assessBatteryUsable` instead of idle % plus light-duty-only load test.
 - **Boot brownout streak**: RTC `BrownoutRtc` counter increments on brownout reset; when streak ≥ `BROWNOUT_STREAK_LIMIT`, boot heater test is skipped.
 - **Ramped boot heater test** (`testHeaterCurrent`): PWM ramps up to assessed `capDuty` instead of always targeting full duty at boot.
@@ -293,8 +293,8 @@ The firmware persists error codes, crashes, brownouts, and runtime faults to a f
 **What is logged**:
 
 - **Reset/crash/brownout**: `esp_reset_reason()` at boot for unexpected resets (panic, WDT, brownout, SDIO). Normal power-on and software resets are skipped.
-- **Runtime errors**: When `LEDErrorCode()` is called (ERROR_CODE 1–7): motor timeout, low battery, heater overheat, motor fault, heater current fail, heater max wall time, EEPROM invalid.
-- **EEPROM invalid**: Full reason from `enterEEPROMInvalidErrorState()`.
+- **Runtime errors**: When `LEDErrorCode()` is called (ERROR_CODE 1–5, 7–9) or when error 6 is logged via `logError()` in flush step 6: motor timeout, low battery, heater overheat, motor fault, heater current fail, heater max wall time (advisory), EEPROM invalid.
+- **EEPROM invalid (ERROR_CODE 7)**: Full reason from `enterEEPROMInvalidErrorState()`. Steady LED 7 indicator; **blocks flush** at preflight until recovered via verified BLE param write.
 - **OTA failures**: When `setOTAState(OTA_ERROR)` is invoked.
 - **OTA boot diagnostics**: `ota_boot`, `ota_boot_fail`, `ota_rollback`, `ota_boot_ok`, `ota_spiffs_capture` while verifying or running a recently OTA-installed partition. NVS snapshot available via `GET_OTA_DIAG`.
 - **MCP unavailable**: When I2C expander init fails after retries.

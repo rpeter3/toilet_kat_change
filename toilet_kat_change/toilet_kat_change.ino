@@ -431,6 +431,9 @@ void releaseFanPinsFromDeepSleepHold();
 void initHeaterPidController();
 void initCorePlatformServices();
 void LEDErrorCode(int errorCode);
+void displayErrorCodeLeds(int errorCode);
+bool isBlockingFlushError(int code);
+void finalizeHeaterMaxWallAdvisory();
 void stopEverything();
 void flashLeds();
 bool mechanismNeedsHomingAfterCancel();
@@ -569,6 +572,8 @@ const int FLUSH_STEP_CANCEL_COOL = 14;
 
 bool isFlushing = false;
 int flushStep = 0;
+bool heaterMaxWallAtFlushStart = false;
+bool heaterMaxWallThisFlush = false;
 bool cancelRecoveryHomingPending = false;
 bool flushCancelRecoveryActive = false;
 bool case5FeedExecuted = false; // Flag to prevent multiple M2 activations in case 5
@@ -782,7 +787,7 @@ int ERROR_CODE = 0;
 //ERROR_CODE = 3 ==> Heater too hot 
 //ERROR_CODE = 4 ==> Motor Fault Detected
 //ERROR_CODE = 5 ==> Heater current detection failure
-//ERROR_CODE = 6 ==> Heater max wall time - time above K not reached
+//ERROR_CODE = 6 ==> Heater max wall time - time above K not reached (advisory; non-blocking flush)
 //ERROR_CODE = 7 ==> EEPROM invalid (reflash/parameter recovery required)
 //ERROR_CODE = 8 ==> Heater fail-safe fault (crash recovery, MOSFET short, absolute max on-time)
 //ERROR_CODE = 9 ==> Heater absolute max temperature failsafe (MAX_TEMP_FAILSAFE_C exceeded)
@@ -6621,6 +6626,40 @@ void loop() {
   delay(1);
 }
 
+bool isBlockingFlushError(int code) {
+  return code != 0 && code != 6;
+}
+
+void displayErrorCodeLeds(int errorCode) {
+  for (int j = 0; j < totalLeds; j++) {
+    mcp_digitalWrite(getLedPin(j), LOW);
+  }
+  if (errorCode == EEPROM_INVALID_ERROR_CODE) {
+    // EEPROM warning mode: steady indicator while allowing device operation.
+    mcp_digitalWrite(getLedPin(EEPROM_INVALID_ERROR_CODE), HIGH);
+    return;
+  }
+  for (int j = 0; j < 10; j++) {
+    mcp_digitalWrite(getLedPin(errorCode), HIGH);
+
+    digitalWrite(buzzerPin, HIGH);
+    wdtSafeDelay(300);
+    mcp_digitalWrite(getLedPin(errorCode), LOW);
+    digitalWrite(buzzerPin, LOW);
+  }
+}
+
+void finalizeHeaterMaxWallAdvisory() {
+  if (heaterMaxWallAtFlushStart && heaterMaxWallThisFlush) {
+    ERROR_CODE = 6;
+    displayErrorCodeLeds(6);
+  } else if (heaterMaxWallThisFlush) {
+    ERROR_CODE = 6;
+  } else if (ERROR_CODE == 6) {
+    ERROR_CODE = 0;
+  }
+}
+
 void flushSequence() {
   unsigned long currentMillis = millis();
   
@@ -6635,6 +6674,8 @@ void flushSequence() {
       ensureTaskWatchdogForFlush();
       ledLastUpdateMillis = millis();
       maxHeaterWallTimeMs = 0;  // Reset at start of each flush cycle before recomputing once.
+      heaterMaxWallAtFlushStart = (ERROR_CODE == 6);
+      heaterMaxWallThisFlush = false;
       logPowerTestEvent("flush_preflight", "gate0 start", false, false);
 
       bool flushAllowed = false;
@@ -6661,7 +6702,7 @@ void flushSequence() {
       logMotorFaultDebug("flush case0 before fault check");
       checkAllMotorFaults();
       logMotorFaultDebug("flush case0 after fault check");
-      if (ERROR_CODE != 0) {
+      if (isBlockingFlushError(ERROR_CODE)) {
         snprintf(preflightMsg, sizeof(preflightMsg), "gate2_fail error_code=%d", ERROR_CODE);
         logPowerTestEvent("flush_preflight", preflightMsg, true);
         abortFlushPreflight(true);
@@ -6669,7 +6710,7 @@ void flushSequence() {
       }
 
       testHeaterCurrent(true);
-      if (ERROR_CODE != 0) {
+      if (isBlockingFlushError(ERROR_CODE)) {
         snprintf(preflightMsg, sizeof(preflightMsg), "gate4_fail error_code=%d", ERROR_CODE);
         logPowerTestEvent("flush_preflight", preflightMsg, true);
         abortFlushPreflight(false);
@@ -6934,10 +6975,10 @@ void flushSequence() {
         if (maxWallTimeExceeded && !timeAboveKReached) {
           Serial.println("WARNING: Heater max wall time reached - temperature did not stay above K for required time");
           SerialBLE_println("WARNING: Heater max time - time above K target not reached");
-          if (ERROR_CODE == 0) {
-            ERROR_CODE = 6;
-            LEDErrorCode(ERROR_CODE);
+          if (!heaterMaxWallThisFlush) {
+            logError("runtime", 6, "heater_max_wall", true);
           }
+          heaterMaxWallThisFlush = true;
         } else {
           SerialBLE_println("Heater time complete - Begin cooling");
         }
@@ -7149,6 +7190,7 @@ void flushSequence() {
         for (int i = 0; i < totalLeds; i++) {
           mcp_digitalWrite(getLedPin(i), LOW);
         }
+        finalizeHeaterMaxWallAdvisory();
         incrementFlushCount();
         logFlushEvent("flush_event", 0, "complete", true);
         isFlushing = false;
@@ -8730,6 +8772,8 @@ void clearFlushStateForCancel() {
   heaterTargetTemp = K;
   m1CurrentLogWindowStartMillis = 0;
   m1CurrentMaxInWindow = 0.0;
+  heaterMaxWallAtFlushStart = false;
+  heaterMaxWallThisFlush = false;
 }
 
 void abortFlushPreflight(bool showErrorLed) {
@@ -9314,22 +9358,7 @@ void LEDErrorCode(int errorCode) { // Modified to accept errorCode
       (errorCode == HEATER_MAX_TEMP_FAILSAFE_ERROR_CODE) ? "heater_max_temp_failsafe" : "unknown";
     logError("runtime", errorCode, msg, true);
   }
-  for (int j = 0; j < totalLeds; j++) {
-    mcp_digitalWrite(getLedPin(j), LOW);
-  }
-  if (errorCode == EEPROM_INVALID_ERROR_CODE) {
-    // EEPROM warning mode: steady indicator while allowing device operation.
-    mcp_digitalWrite(getLedPin(EEPROM_INVALID_ERROR_CODE), HIGH);
-    return;
-  }
-  for (int j = 0; j < 10; j++) {
-    mcp_digitalWrite(getLedPin(errorCode), HIGH);
-
-    digitalWrite(buzzerPin, HIGH);
-    wdtSafeDelay(300);
-    mcp_digitalWrite(getLedPin(errorCode), LOW);
-    digitalWrite(buzzerPin, LOW);
-  }
+  displayErrorCodeLeds(errorCode);
 }
 
 void checkMotorFaults() {
