@@ -1,5 +1,5 @@
 Parameter,Description,1.5mil High Barrier Plastic,Compostable 1.5mil
-batteryThreshold,Minimum usable battery percent before flush,7,7
+batteryThreshold,Minimum usable battery percent before flush,15,10
 K,Temperature setpoint,140,90
 F,How long to feed the bag at the START of a flush,8,8
 T,Cooling Time,60,40
@@ -26,6 +26,8 @@ maxBatterySagV,Maximum allowed battery sag during flush preflight heater test V,
 minIdleBatteryVFloor,Minimum idle battery voltage floor before flush preflight V,11.3,11.3
 usableVFull,Loaded battery voltage mapped to 100 percent usable V,12.4,12.4
 batteryAssessSettleMs,Heater pulse settle time during battery assessment ms,50,50
-heaterCapV255,Idle battery voltage for maximum heater PWM cap during assessment V,11.23,11.23
-heaterCapV170,Idle battery voltage for 170 heater PWM cap during assessment V,11.22,11.22
-heaterCapV100,Idle battery voltage for 100 heater PWM cap during assessment V,11.21,11.21
+heaterCapVFull,VMON voltage for full heater PWM 255 below this reduced PWM applies V,11.23,11.23
+heaterPwmReduced,Heater PWM duty when VMON is below heaterCapVFull,255,170
+maxHeaterWallTimeS,Maximum heater phase duration in flush step 6 before error 6 sec,200,200
+heaterAbsoluteMaxOnS,Maximum continuous heater PWM on-time before fail-safe error 8 sec,200,200
+MAX_TEMP_FAILSAFE_C,Absolute thermistor temperature ceiling before fail-safe error 9 °C,200,200

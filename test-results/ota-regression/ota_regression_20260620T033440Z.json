@@ -1,0 +1,28 @@
+{
+  "run_id": "20260620T033440Z",
+  "started_at": "2026-06-20T03:34:40.419302+00:00",
+  "ended_at": "2026-06-20T03:36:41.470043+00:00",
+  "passed": false,
+  "dry_run": false,
+  "fast_mode": false,
+  "auto_build": false,
+  "port": "COM5",
+  "address": "58:E6:C5:6C:AF:81",
+  "partition_sequence": [
+    "factory"
+  ],
+  "steps": [],
+  "failures": [
+    "BLE device not visible within 90s (58:E6:C5:6C:AF:81)",
+    "Partition sequence mismatch: expected ['factory', 'ota_0', 'ota_1', 'ota_0', 'ota_1', 'ota_0', 'factory', 'ota_0'], observed ['factory']"
+  ],
+  "metadata": {
+    "preflight": {
+      "skipped": true,
+      "start_from": "ota1",
+      "ble_address": "58:E6:C5:6C:AF:81"
+    },
+    "manifest": null,
+    "start_from": "ota1"
+  }
+}

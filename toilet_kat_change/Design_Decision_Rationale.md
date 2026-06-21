@@ -42,7 +42,7 @@ Implications:
 
 ## Heater over-temperature shutdown threshold
 
-The firmware enforces a hard safety shutdown when measured heater temperature reaches 20% above the active target temperature.
+The firmware enforces a hard safety shutdown when measured heater temperature reaches 20% above the active target temperature. This is the **process-proportional** overheat layer; for normal K values it trips earlier than the absolute ceiling (e.g. 168 °C at K=140). See also **Absolute heater temperature failsafe (`MAX_TEMP_FAILSAFE_C`)** below.
 
 Behavior:
 
@@ -53,9 +53,25 @@ Behavior:
 
 Rationale:
 
-- Protect hardware and surrounding components from runaway heating.
-- Keep overheat logic proportional to the intended process temperature, rather than using a fixed absolute threshold.
+- Protect hardware and surrounding components from runaway heating relative to the intended process temperature.
+- Keep overheat logic proportional to the intended process temperature, rather than using only a fixed absolute threshold.
 - Maintain process continuity in cut mode by preventing premature shutdown at temperatures that are expected for `CUT_MODE_TEMP`, while preserving a clear safety boundary.
+
+## Absolute heater temperature failsafe (`MAX_TEMP_FAILSAFE_C`)
+
+Behavior:
+
+- BLE/EEPROM parameter `MAX_TEMP_FAILSAFE_C` (default 200 °C, validated range 50–250 °C).
+- Checked unconditionally every `loop()` iteration in `checkHeaterRuntimeSafety()` — no guard on `heaterOn`, flush step, or cut mode.
+- If `readTemperature() >= MAX_TEMP_FAILSAFE_C`, firmware raises `ERROR_CODE = 9` (`heater_max_temp_failsafe`), calls `stopEverything()`, and signals via LED index 9 / buzzer.
+- Catches runaway heating that PID cycling or relative overheat might miss (e.g. slow thermal creep, software state desync, heater output stuck on while `heaterOn` is false).
+
+Rationale:
+
+- Fixed ceiling is independent of configured `K` / `CUT_MODE_TEMP`, so a parameter or logic bug cannot raise the safety trip point.
+- Unconditional check in the runtime safety choke point ensures the guard runs even when the flush state machine or PID path is wrong.
+- Deliberately separate from `ERROR_CODE 3` so field logs distinguish "above process target margin" vs "above hardware absolute limit".
+- Default 200 °C provides headroom above normal operating temps (~140 °C) while still bounding worst-case heating.
 
 ## Heater fail-safe firmware (crash and runaway monitoring)
 
@@ -70,7 +86,8 @@ Behavior:
 - RTC memory records whether heater was on across resets for post-crash forensics.
 - Boot check: abnormal reset + (RTC flag or HS_OUT current) → `ERROR_CODE 8`.
 - Boot check: current with GPIO off → MOSFET short suspicion.
-- Runtime: sustained current with GPIO off; absolute 20 min output cap.
+- Runtime: sustained current with GPIO off; configurable continuous PWM on-time cap via `heaterAbsoluteMaxOnS` (default 200 s, BLE/EEPROM parameter) → `ERROR_CODE 8` (`heater_absolute_max_on`). Timer tracks uninterrupted `heaterOutputOn` (duty > 0) and resets when PWM returns to 0 — a continuous-on backstop, not cumulative session time. Distinct from `maxHeaterWallTimeS` (flush step 6 process timeout, `ERROR_CODE 6`).
+- Runtime: absolute thermistor ceiling via `MAX_TEMP_FAILSAFE_C` in `checkHeaterRuntimeSafety()` → `ERROR_CODE 9` (`heater_max_temp_failsafe`).
 - Case 6 motor cuts and cold-boot motor homing are non-blocking so safety checks and TWDT feeding continue.
 - Flush blocked until `motorHomingActive` is false and `motorHomingDeferred` is false.
 - Light sleep: explicit `heaterOff()` before sleep.
@@ -93,20 +110,26 @@ Rationale:
 - HS_OUT provides independent confirmation of actual current, not just GPIO belief.
 - RTC forensics distinguish "crashed while heating" from benign resets.
 - Forensics logging runs after pins are ready so post-reset ADC/temp are meaningful; `initErrorLog()` only mounts SPIFFS.
+- Configurable continuous on-time (`heaterAbsoluteMaxOnS`, default 200 s) tightens the prior hardcoded 20 min cap to match flush wall-time scale and reduce runaway exposure from software bugs; BLE tuning avoids rebuild while validated bounds (30–3600 s) cap extremes.
+- Absolute temp check (`MAX_TEMP_FAILSAFE_C`) runs in the same `checkHeaterRuntimeSafety()` function before on-time and GPIO-mismatch checks.
 - Absolute on-time is a backstop independent of flush state machine / PID.
 - Software-only protection is not a substitute for a thermal fuse or hardware watchdog on the heater power path.
+
+Note: `docs/heater_failsafe_flow.png` may be updated later to show the absolute temp check and configurable on-time cap; not required for this change.
 
 ## Brownout and low-battery voltage guard
 
 Behavior:
 
 - **Usable battery assessment** (`assessBatteryUsable`): user-facing battery % (LED bar, `GET_BATTERY`, flush block) is derived from a scaled heater load pulse, not idle open-circuit VMON. Assessment steps through duties up to `getHeaterPwmCapForVoltage(vIdle)`, records worst loaded voltage/sag, and maps usable % from `MIN_LOADED_BATTERY_V` (0%) to `USABLE_V_FULL` (100%).
-- **Unified flush block**: `batteryThreshold` (default 7 = one LED on a 14-LED bar) is the minimum usable % before flush. Flush is blocked at the button handler and re-checked in flush case 0; both use the same cached assessment.
+- **Unified flush block**: `batteryThreshold` (default 15% high barrier, 10% compostable) is the minimum usable % before flush. Flush is blocked at the button handler and re-checked in flush case 0; both use the same cached assessment. `assessPassed` must also prove the pack can sustain `capDuty` (255 or `heaterPwmReduced`).
+- **Two-tier heater PWM** (`getHeaterPwmCapForVoltage`): VMON at/above `heaterCapVFull` → PWM 255; below → `heaterPwmReduced` (255 high barrier, 170 compostable). No 255/170/100 voltage ladder or runtime preflight derate cascade.
+- **Max heater wall time** (`maxHeaterWallTimeS`, default 200 s): fixed BLE/EEPROM parameter sets flush step 6 timeout before error 6 (`heater_max_wall`); replaces per-flush `(ramp + hold) * 1.2` calculation.
 - **Loaded VMON preflight** (`measureBatteryUnderLoad`, legacy helper): still available for single-step tests; boot/flush/homing paths now use `assessBatteryUsable` instead of idle % plus light-duty-only load test.
 - **Boot brownout streak**: RTC `BrownoutRtc` counter increments on brownout reset; when streak ≥ `BROWNOUT_STREAK_LIMIT`, boot heater test is skipped.
 - **Ramped boot heater test** (`testHeaterCurrent`): PWM ramps up to assessed `capDuty` instead of always targeting full duty at boot.
 - **Flush case 0 gates**: preflight (usable battery assess, motor faults, heater current test) before entering the flush sequence; failures latch `ERROR_CODE 2` via `latchLowBatteryStop`.
-- **Runtime PWM derate** (`getEffectiveHeaterPwmCap`, `updateHeaterPID`): heater duty capped when VMON sags during operation; one-tier conservative derate when preflight `vLoadWorst` is within `PREFLIGHT_CAP_MARGIN_V` of `MIN_LOADED_BATTERY_V`.
+- **Runtime heater cap** (`updateHeaterPID`): PID output limited by `getHeaterPwmCapForVoltage()` on live VMON each tick.
 - **Runtime sag debounce**: `checkRuntimeSagDebounced` requires `RUNTIME_SAG_STRIKES` consecutive low VMON samples before latching low battery mid-heat.
 - **M1/heater mutual exclusion**: heater is not armed until case 5 close completes (end of case 5 before case 6); `isM1MotorActive()` blocks heater PID while M1 runs; heat timers pause during M1 motion.
 - **Diagnostics**: `logPowerTestEvent()` writes `power_test` lines to Serial, BLE (when streaming), and SPIFFS for assessment steps, boot skip, flush preflight, and heater ramp outcomes.

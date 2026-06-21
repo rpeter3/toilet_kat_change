@@ -122,7 +122,7 @@ void trustDoubleBeep();
 #define EEPROM_SIZE 512
 #define PARAM_START_ADDR 0
 #define PARAM_MAGIC_NUMBER 0x1234
-#define PARAM_COUNT 30
+#define PARAM_COUNT 32
 #define HW_VERSION_ADDR 200
 #define HW_VERSION_MAGIC 0xFADE
 #define FLUSH_COUNT_MAGIC_ADDR 300
@@ -228,14 +228,14 @@ struct HWCFGConfigStore {
 #  if __has_include("software_version_build.h")
 #    include "software_version_build.h"
 #  else
-const char* SOFTWARE_VERSION_NUMBER = "4.1.8";
+const char* SOFTWARE_VERSION_NUMBER = "4.1.9";
 const char* FACTORY_SOFTWARE_DATE = "2026-06-18";
-const char* SOFTWARE_BUILD_DATE = "2026-06-19";  // YYYY-MM-DD — update with each build
+const char* SOFTWARE_BUILD_DATE = "2026-06-20";  // YYYY-MM-DD — update with each build
 #  endif
 #else
-const char* SOFTWARE_VERSION_NUMBER = "4.1.8";
+const char* SOFTWARE_VERSION_NUMBER = "4.1.9";
 const char* FACTORY_SOFTWARE_DATE = "2026-06-18";
-const char* SOFTWARE_BUILD_DATE = "2026-06-19";  // YYYY-MM-DD — update with each build
+const char* SOFTWARE_BUILD_DATE = "2026-06-20";  // YYYY-MM-DD — update with each build
 #endif
 
 // Forward declarations
@@ -301,7 +301,6 @@ float readHeaterCurrentQuiet();
 float readBatteryTemperatureQuiet();
 bool measureBatteryUnderLoad(float* vIdle, float* vLoad, int testDuty, uint16_t settleMs, const char* testTag = nullptr);
 int getHeaterPwmCapForVoltage(float batteryV);
-int getEffectiveHeaterPwmCap(float batteryV);
 float minIdleBatteryV();
 bool assessBatteryUsable(const char* tag, bool forceRefresh, bool* outFlushAllowed = nullptr);
 void streamBatteryAssessReport(const char* tag);
@@ -310,6 +309,9 @@ bool isFlushAllowedByBattery(bool forceRefresh = false);
 void applyBatteryAssessDefaults();
 bool validateBatteryAssessParams();
 void applyBatteryAssessParamsFromCsv(const float* parameters_list, int count);
+void applyHeaterFailsafeDefaults();
+bool validateHeaterFailsafeParams();
+void applyHeaterFailsafeParamsFromCsv(const float* parameters_list, int count);
 void renderBatteryLevelLeds(int chargeLevel);
 void showBatteryLevelFeedback(int chargeLevel, bool enterDisplayMode);
 void logPowerTestEvent(const char* phase, const char* msg, bool includeContext = false, bool persist = true);
@@ -437,6 +439,7 @@ void clearFlushStateForCancel();
 void completeCancelRecoveryReady();
 void beginCancelRecoveryHoming();
 bool abortFlushForCancel();
+void abortFlushPreflight(bool showErrorLed);
 bool isDeviceIdleForDualButton();
 bool acceptFlushCancel(bool button1Pressed, bool button2Pressed);
 void maintainCancelRecoveryLeds();
@@ -510,7 +513,7 @@ const int typicalOpeningTime = 5; //parameters_list[12] */
 
 // Parameters (defaults: 1.5mil High Barrier Plastic from material_parameters.csv)
 // Can't have global constant variables in C
-int batteryThreshold = 7; //parameters_list[0] minimum usable % before flush
+int batteryThreshold = 15; //parameters_list[0] minimum usable % before flush
 float K = 140.0; //parameters_list[1]
 int F = 8; //parameters_list[2]
 long T = 60; //parameters_list[3] - Estimated cooling time for LED pacing (seconds)
@@ -543,9 +546,11 @@ constexpr float kBatteryAssessDefaultMaxSagV = 0.85f;
 constexpr float kBatteryAssessDefaultMinIdleVFloor = 11.3f;
 constexpr float kBatteryAssessDefaultUsableVFull = 12.4f;
 constexpr uint16_t kBatteryAssessDefaultSettleMs = 50;
-constexpr float kBatteryAssessDefaultHeaterCapV255 = 11.23f;
-constexpr float kBatteryAssessDefaultHeaterCapV170 = 11.22f;
-constexpr float kBatteryAssessDefaultHeaterCapV100 = 11.21f;
+constexpr float kBatteryAssessDefaultHeaterCapVFull = 11.23f;
+constexpr int kBatteryAssessDefaultHeaterPwmReduced = 255;
+constexpr long kBatteryAssessDefaultMaxHeaterWallTimeS = 200L;
+constexpr long kDefaultHeaterAbsoluteMaxOnS = 200L;
+constexpr float kDefaultMaxTempFailsafeC = 200.0f;
 }  // namespace
 
 float minLoadedBatteryV = kBatteryAssessDefaultMinLoadedV; //parameters_list[22]
@@ -553,9 +558,11 @@ float maxBatterySagV = kBatteryAssessDefaultMaxSagV; //parameters_list[23]
 float minIdleBatteryVFloor = kBatteryAssessDefaultMinIdleVFloor; //parameters_list[24]
 float usableVFull = kBatteryAssessDefaultUsableVFull; //parameters_list[25]
 uint16_t batteryAssessSettleMs = kBatteryAssessDefaultSettleMs; //parameters_list[26]
-float heaterCapV255 = kBatteryAssessDefaultHeaterCapV255; //parameters_list[27]
-float heaterCapV170 = kBatteryAssessDefaultHeaterCapV170; //parameters_list[28]
-float heaterCapV100 = kBatteryAssessDefaultHeaterCapV100; //parameters_list[29]
+float heaterCapVFull = kBatteryAssessDefaultHeaterCapVFull; //parameters_list[27]
+int heaterPwmReduced = kBatteryAssessDefaultHeaterPwmReduced; //parameters_list[28]
+long maxHeaterWallTimeS = kBatteryAssessDefaultMaxHeaterWallTimeS; //parameters_list[29]
+long heaterAbsoluteMaxOnS = kDefaultHeaterAbsoluteMaxOnS; //parameters_list[30]
+float MAX_TEMP_FAILSAFE_C = kDefaultMaxTempFailsafeC; //parameters_list[31]
 float heaterTargetTemp = 140.0;    // Active heater target (K or CUT_MODE_TEMP)
 
 const int FLUSH_STEP_CANCEL_COOL = 14;
@@ -778,10 +785,11 @@ int ERROR_CODE = 0;
 //ERROR_CODE = 6 ==> Heater max wall time - time above K not reached
 //ERROR_CODE = 7 ==> EEPROM invalid (reflash/parameter recovery required)
 //ERROR_CODE = 8 ==> Heater fail-safe fault (crash recovery, MOSFET short, absolute max on-time)
+//ERROR_CODE = 9 ==> Heater absolute max temperature failsafe (MAX_TEMP_FAILSAFE_C exceeded)
 const int EEPROM_INVALID_ERROR_CODE = 7;
 const int HEATER_FAILSAFE_ERROR_CODE = 8;
+const int HEATER_MAX_TEMP_FAILSAFE_ERROR_CODE = 9;
 const int HEATER_CURRENT_ADC_THRESHOLD = 200;
-const unsigned long HEATER_ABSOLUTE_MAX_ON_MS = 20UL * 60UL * 1000UL;
 const unsigned long TASK_WDT_TIMEOUT_MS = 5000UL;
 const uint32_t HEATER_RTC_MAGIC = 0x4854A101UL;
 const uint32_t CRASH_RTC_MAGIC = 0x43525348UL;
@@ -901,7 +909,6 @@ const int HEATER_PWM_FREQ = 1000;
 const int HEATER_PWM_RESOLUTION = 8;
 const int HEATER_PWM_MAX = 255;
 const int HEATER_TEST_START_DUTY = 64;
-const float PREFLIGHT_CAP_MARGIN_V = 0.15f;
 const unsigned long BATTERY_ASSESS_CACHE_MS = 120000UL;
 const uint8_t RUNTIME_SAG_STRIKES = 2;
 const uint8_t BROWNOUT_STREAK_LIMIT = 2;
@@ -1108,6 +1115,9 @@ class server_callbacks: public BLEServerCallbacks {
       applyBatteryAssessParamsFromCsv(parameters_list, k);
       if (!validateBatteryAssessParams()) {
         applyBatteryAssessDefaults();
+      }
+      if (!validateHeaterFailsafeParams()) {
+        applyHeaterFailsafeDefaults();
       }
       if (!(isFlushing && cutBag && case6CutMotorRun)) {
         heaterTargetTemp = K;
@@ -1587,6 +1597,12 @@ class param_write_characteristic_callbacks: public BLECharacteristicCallbacks {
       loadParametersFromEEPROM();
       return;
     }
+    if (!validateHeaterFailsafeParams()) {
+      writeResponseToChannel("PARAM_WRITE_ERR:BAD_FORMAT");
+      Serial.println("Param write rejected: invalid heater failsafe parameters");
+      loadParametersFromEEPROM();
+      return;
+    }
     if (!(isFlushing && cutBag && case6CutMotorRun)) {
       heaterTargetTemp = K;
     }
@@ -1913,9 +1929,11 @@ void saveParametersToEEPROM() {
   EEPROM.put(addr, minIdleBatteryVFloor); addr += sizeof(minIdleBatteryVFloor);
   EEPROM.put(addr, usableVFull); addr += sizeof(usableVFull);
   EEPROM.put(addr, batteryAssessSettleMs); addr += sizeof(batteryAssessSettleMs);
-  EEPROM.put(addr, heaterCapV255); addr += sizeof(heaterCapV255);
-  EEPROM.put(addr, heaterCapV170); addr += sizeof(heaterCapV170);
-  EEPROM.put(addr, heaterCapV100); addr += sizeof(heaterCapV100);
+  EEPROM.put(addr, heaterCapVFull); addr += sizeof(heaterCapVFull);
+  EEPROM.put(addr, heaterPwmReduced); addr += sizeof(heaterPwmReduced);
+  EEPROM.put(addr, maxHeaterWallTimeS); addr += sizeof(maxHeaterWallTimeS);
+  EEPROM.put(addr, heaterAbsoluteMaxOnS); addr += sizeof(heaterAbsoluteMaxOnS);
+  EEPROM.put(addr, MAX_TEMP_FAILSAFE_C); addr += sizeof(MAX_TEMP_FAILSAFE_C);
   
   unsigned long commitStart = millis();
   bool commitOk = EEPROM.commit();
@@ -2363,27 +2381,61 @@ void loadParametersFromEEPROM() {
     float loadedMinIdleBatteryVFloor = minIdleBatteryVFloor;
     float loadedUsableVFull = usableVFull;
     uint16_t loadedBatteryAssessSettleMs = batteryAssessSettleMs;
-    float loadedHeaterCapV255 = heaterCapV255;
-    float loadedHeaterCapV170 = heaterCapV170;
-    float loadedHeaterCapV100 = heaterCapV100;
+    float loadedSlot27 = 0.0f;
+    float loadedSlot28 = 0.0f;
+    float loadedSlot29 = 0.0f;
     EEPROM.get(addr, loadedMinLoadedBatteryV); addr += sizeof(loadedMinLoadedBatteryV);
     EEPROM.get(addr, loadedMaxBatterySagV); addr += sizeof(loadedMaxBatterySagV);
     EEPROM.get(addr, loadedMinIdleBatteryVFloor); addr += sizeof(loadedMinIdleBatteryVFloor);
     EEPROM.get(addr, loadedUsableVFull); addr += sizeof(loadedUsableVFull);
     EEPROM.get(addr, loadedBatteryAssessSettleMs); addr += sizeof(loadedBatteryAssessSettleMs);
-    EEPROM.get(addr, loadedHeaterCapV255); addr += sizeof(loadedHeaterCapV255);
-    EEPROM.get(addr, loadedHeaterCapV170); addr += sizeof(loadedHeaterCapV170);
-    EEPROM.get(addr, loadedHeaterCapV100); addr += sizeof(loadedHeaterCapV100);
+    EEPROM.get(addr, loadedSlot27); addr += sizeof(loadedSlot27);
+    EEPROM.get(addr, loadedSlot28); addr += sizeof(loadedSlot28);
+    EEPROM.get(addr, loadedSlot29); addr += sizeof(loadedSlot29);
     minLoadedBatteryV = loadedMinLoadedBatteryV;
     maxBatterySagV = loadedMaxBatterySagV;
     minIdleBatteryVFloor = loadedMinIdleBatteryVFloor;
     usableVFull = loadedUsableVFull;
     batteryAssessSettleMs = loadedBatteryAssessSettleMs;
-    heaterCapV255 = loadedHeaterCapV255;
-    heaterCapV170 = loadedHeaterCapV170;
-    heaterCapV100 = loadedHeaterCapV100;
+    auto looksLikeLegacyHeaterCapVoltage = [](float v) {
+      return v == v && v >= 10.0f && v <= 13.5f;
+    };
+    if (looksLikeLegacyHeaterCapVoltage(loadedSlot28)) {
+      Serial.println("EEPROM heater PWM migration: legacy voltage slots detected");
+      heaterCapVFull = looksLikeLegacyHeaterCapVoltage(loadedSlot27)
+                           ? loadedSlot27
+                           : kBatteryAssessDefaultHeaterCapVFull;
+      heaterPwmReduced = kBatteryAssessDefaultHeaterPwmReduced;
+    } else {
+      heaterCapVFull = loadedSlot27;
+      heaterPwmReduced = (int)loadedSlot28;
+    }
+    if (looksLikeLegacyHeaterCapVoltage(loadedSlot29)) {
+      maxHeaterWallTimeS = kBatteryAssessDefaultMaxHeaterWallTimeS;
+    } else {
+      maxHeaterWallTimeS = (long)loadedSlot29;
+    }
     if (!validateBatteryAssessParams()) {
       applyBatteryAssessDefaults();
+    }
+
+    long loadedHeaterAbsoluteMaxOnS = kDefaultHeaterAbsoluteMaxOnS;
+    float loadedMaxTempFailsafeC = kDefaultMaxTempFailsafeC;
+    EEPROM.get(addr, loadedHeaterAbsoluteMaxOnS); addr += sizeof(loadedHeaterAbsoluteMaxOnS);
+    EEPROM.get(addr, loadedMaxTempFailsafeC); addr += sizeof(loadedMaxTempFailsafeC);
+    if (loadedHeaterAbsoluteMaxOnS >= 30L && loadedHeaterAbsoluteMaxOnS <= 3600L) {
+      heaterAbsoluteMaxOnS = loadedHeaterAbsoluteMaxOnS;
+    } else {
+      heaterAbsoluteMaxOnS = kDefaultHeaterAbsoluteMaxOnS;
+    }
+    if (loadedMaxTempFailsafeC == loadedMaxTempFailsafeC && loadedMaxTempFailsafeC >= 50.0f &&
+        loadedMaxTempFailsafeC <= 250.0f) {
+      MAX_TEMP_FAILSAFE_C = loadedMaxTempFailsafeC;
+    } else {
+      MAX_TEMP_FAILSAFE_C = kDefaultMaxTempFailsafeC;
+    }
+    if (!validateHeaterFailsafeParams()) {
+      applyHeaterFailsafeDefaults();
     }
 
     heaterTargetTemp = K;
@@ -2997,6 +3049,8 @@ bool isKnownParameterKey(const String& key) {
          key == "COOL_OPEN_TEMP_C" || key == "MAX_COOL_WAIT_S" ||
          key == "minLoadedBatteryV" || key == "maxBatterySagV" || key == "minIdleBatteryVFloor" ||
          key == "usableVFull" || key == "batteryAssessSettleMs" ||
+         key == "heaterCapVFull" || key == "heaterPwmReduced" || key == "maxHeaterWallTimeS" ||
+         key == "heaterAbsoluteMaxOnS" || key == "MAX_TEMP_FAILSAFE_C" ||
          key == "heaterCapV255" || key == "heaterCapV170" || key == "heaterCapV100";
 }
 
@@ -3079,8 +3133,27 @@ bool validateParameterBlob(const String& componentName, const String& paramsBlob
         errorCode = "OUT_OF_RANGE";
         return false;
       }
-      if ((key == "heaterCapV255" || key == "heaterCapV170" || key == "heaterCapV100") &&
-          (numericValue < 10.0f || numericValue > 13.5f)) {
+      if (key == "heaterCapVFull" && (numericValue < 10.0f || numericValue > 13.5f)) {
+        errorCode = "OUT_OF_RANGE";
+        return false;
+      }
+      if (key == "heaterCapV255" && (numericValue < 10.0f || numericValue > 13.5f)) {
+        errorCode = "OUT_OF_RANGE";
+        return false;
+      }
+      if ((key == "heaterPwmReduced") && (numericValue < 1.0f || numericValue > 255.0f)) {
+        errorCode = "OUT_OF_RANGE";
+        return false;
+      }
+      if (key == "maxHeaterWallTimeS" && (numericValue < 30.0f || numericValue > 600.0f)) {
+        errorCode = "OUT_OF_RANGE";
+        return false;
+      }
+      if (key == "heaterAbsoluteMaxOnS" && (numericValue < 30.0f || numericValue > 3600.0f)) {
+        errorCode = "OUT_OF_RANGE";
+        return false;
+      }
+      if (key == "MAX_TEMP_FAILSAFE_C" && (numericValue < 50.0f || numericValue > 250.0f)) {
         errorCode = "OUT_OF_RANGE";
         return false;
       }
@@ -3153,9 +3226,12 @@ bool applyParameterBlobToRuntime(const String& paramsBlob, String& errorCode) {
       else if (key == "minIdleBatteryVFloor") minIdleBatteryVFloor = numericValue;
       else if (key == "usableVFull") usableVFull = numericValue;
       else if (key == "batteryAssessSettleMs") batteryAssessSettleMs = (uint16_t)numericValue;
-      else if (key == "heaterCapV255") heaterCapV255 = numericValue;
-      else if (key == "heaterCapV170") heaterCapV170 = numericValue;
-      else if (key == "heaterCapV100") heaterCapV100 = numericValue;
+      else if (key == "heaterCapVFull" || key == "heaterCapV255") heaterCapVFull = numericValue;
+      else if (key == "heaterPwmReduced" || key == "heaterCapV170") heaterPwmReduced = (int)numericValue;
+      else if (key == "maxHeaterWallTimeS") maxHeaterWallTimeS = (long)numericValue;
+      else if (key == "heaterAbsoluteMaxOnS") heaterAbsoluteMaxOnS = (long)numericValue;
+      else if (key == "MAX_TEMP_FAILSAFE_C") MAX_TEMP_FAILSAFE_C = numericValue;
+      else if (key == "heaterCapV100") { /* legacy: ignored */ }
       else {
         errorCode = "UNKNOWN_PARAM";
         return false;
@@ -3166,6 +3242,10 @@ bool applyParameterBlobToRuntime(const String& paramsBlob, String& errorCode) {
 
   enforceHeaterToleranceGap("hwcfg_apply", false);
   if (!validateBatteryAssessParams()) {
+    errorCode = "OUT_OF_RANGE";
+    return false;
+  }
+  if (!validateHeaterFailsafeParams()) {
     errorCode = "OUT_OF_RANGE";
     return false;
   }
@@ -5569,6 +5649,16 @@ void checkHeaterRuntimeSafety() {
 
   unsigned long now = millis();
 
+  float heaterTemp = readTemperature();
+  if (heaterTemp >= MAX_TEMP_FAILSAFE_C) {
+    Serial.println("Heater runtime safety: absolute max temperature exceeded");
+    logError("runtime", HEATER_MAX_TEMP_FAILSAFE_ERROR_CODE, "heater_absolute_max_temp", true);
+    ERROR_CODE = HEATER_MAX_TEMP_FAILSAFE_ERROR_CODE;
+    stopEverything();
+    LEDErrorCode(HEATER_MAX_TEMP_FAILSAFE_ERROR_CODE);
+    return;
+  }
+
   if (heaterOn || heaterOutputOn) {
     if (!isM1MotorActive()) {
       float v = readBatteryVoltageQuiet();
@@ -5599,8 +5689,9 @@ void checkHeaterRuntimeSafety() {
 
   heaterRuntimeMismatchStrikes = 0;
 
+  unsigned long maxOnMs = (unsigned long)heaterAbsoluteMaxOnS * 1000UL;
   if ((heaterOn || heaterOutputOn) && heaterOutputOnSinceMs != 0 &&
-      (now - heaterOutputOnSinceMs >= HEATER_ABSOLUTE_MAX_ON_MS)) {
+      (now - heaterOutputOnSinceMs >= maxOnMs)) {
     Serial.println("Heater runtime safety: absolute max on-time exceeded");
     logError("runtime", HEATER_FAILSAFE_ERROR_CODE, "heater_absolute_max_on", true);
     ERROR_CODE = HEATER_FAILSAFE_ERROR_CODE;
@@ -6573,6 +6664,7 @@ void flushSequence() {
       if (ERROR_CODE != 0) {
         snprintf(preflightMsg, sizeof(preflightMsg), "gate2_fail error_code=%d", ERROR_CODE);
         logPowerTestEvent("flush_preflight", preflightMsg, true);
+        abortFlushPreflight(true);
         return;
       }
 
@@ -6580,6 +6672,7 @@ void flushSequence() {
       if (ERROR_CODE != 0) {
         snprintf(preflightMsg, sizeof(preflightMsg), "gate4_fail error_code=%d", ERROR_CODE);
         logPowerTestEvent("flush_preflight", preflightMsg, true);
+        abortFlushPreflight(false);
         return;
       }
       snprintf(preflightMsg, sizeof(preflightMsg), "PASS gates_ok usable=%d%%",
@@ -6588,18 +6681,11 @@ void flushSequence() {
       case1FeedStarted = false;  // Reset flag for case 1
       case6CutMotorRun = false;   // Reset flag for case 6 cut motor (run after H, then heat for CUT_MODE_HEAT_TIME)
       timeAboveCutModeTempMillis = 0;
-      // Compute timeout once per flush cycle from starting temperature.
+      // Compute timeout once per flush cycle from material parameter.
       {
-        float timeoutCurrentTemp = readTemperature();
-        float timeoutTargetTemp = cutBag ? CUT_MODE_TEMP : K;
-        float rampSecondsF = (timeoutTargetTemp - timeoutCurrentTemp) / 1.0f;  // 1 C/s ramp assumption
-        if (rampSecondsF < 0.0f) {
-          rampSecondsF = 0.0f;
-        }
-        float holdSecondsF = (float)totalHeaterTime;
-        maxHeaterWallTimeMs = (unsigned long)((rampSecondsF + holdSecondsF) * 1.2f * 1000.0f);
-        Serial.printf("DEBUG: Heater timeout calc (cycle start): current=%.1f C, target=%.1f C, ramp=%.1f s, hold=%.1f s, maxWall=%lu ms\n",
-                      timeoutCurrentTemp, timeoutTargetTemp, rampSecondsF, holdSecondsF, maxHeaterWallTimeMs);
+        maxHeaterWallTimeMs = (unsigned long)maxHeaterWallTimeS * 1000UL;
+        Serial.printf("DEBUG: Heater timeout: maxHeaterWallTimeS=%ld maxWall=%lu ms\n",
+                      maxHeaterWallTimeS, maxHeaterWallTimeMs);
       }
       setFlushStep(flushStep + 1);
       SerialBLE_println("Moving to Case1:");
@@ -7709,9 +7795,9 @@ void applyBatteryAssessDefaults() {
   minIdleBatteryVFloor = kBatteryAssessDefaultMinIdleVFloor;
   usableVFull = kBatteryAssessDefaultUsableVFull;
   batteryAssessSettleMs = kBatteryAssessDefaultSettleMs;
-  heaterCapV255 = kBatteryAssessDefaultHeaterCapV255;
-  heaterCapV170 = kBatteryAssessDefaultHeaterCapV170;
-  heaterCapV100 = kBatteryAssessDefaultHeaterCapV100;
+  heaterCapVFull = kBatteryAssessDefaultHeaterCapVFull;
+  heaterPwmReduced = kBatteryAssessDefaultHeaterPwmReduced;
+  maxHeaterWallTimeS = kBatteryAssessDefaultMaxHeaterWallTimeS;
 }
 
 bool validateBatteryAssessParams() {
@@ -7730,25 +7816,55 @@ bool validateBatteryAssessParams() {
   if (batteryAssessSettleMs < 10 || batteryAssessSettleMs > 500) {
     return false;
   }
-  if (heaterCapV255 != heaterCapV255 || heaterCapV170 != heaterCapV170 || heaterCapV100 != heaterCapV100) {
+  if (heaterCapVFull != heaterCapVFull || heaterCapVFull < 10.0f || heaterCapVFull > 13.5f) {
     return false;
   }
-  if (!(heaterCapV255 > heaterCapV170 && heaterCapV170 > heaterCapV100 && heaterCapV100 > minLoadedBatteryV)) {
+  if (!(heaterCapVFull > minLoadedBatteryV)) {
+    return false;
+  }
+  if (heaterPwmReduced < 1 || heaterPwmReduced > HEATER_PWM_MAX) {
+    return false;
+  }
+  if (maxHeaterWallTimeS < 30L || maxHeaterWallTimeS > 600L) {
     return false;
   }
   return true;
 }
 
 void applyBatteryAssessParamsFromCsv(const float* parameters_list, int count) {
-  if (count >= PARAM_COUNT) {
+  if (count >= 30) {
     minLoadedBatteryV = parameters_list[22];
     maxBatterySagV = parameters_list[23];
     minIdleBatteryVFloor = parameters_list[24];
     usableVFull = parameters_list[25];
     batteryAssessSettleMs = (uint16_t)parameters_list[26];
-    heaterCapV255 = parameters_list[27];
-    heaterCapV170 = parameters_list[28];
-    heaterCapV100 = parameters_list[29];
+    heaterCapVFull = parameters_list[27];
+    heaterPwmReduced = (int)parameters_list[28];
+    maxHeaterWallTimeS = (long)parameters_list[29];
+  }
+  applyHeaterFailsafeParamsFromCsv(parameters_list, count);
+}
+
+void applyHeaterFailsafeDefaults() {
+  heaterAbsoluteMaxOnS = kDefaultHeaterAbsoluteMaxOnS;
+  MAX_TEMP_FAILSAFE_C = kDefaultMaxTempFailsafeC;
+}
+
+bool validateHeaterFailsafeParams() {
+  if (heaterAbsoluteMaxOnS < 30L || heaterAbsoluteMaxOnS > 3600L) {
+    return false;
+  }
+  if (MAX_TEMP_FAILSAFE_C != MAX_TEMP_FAILSAFE_C || MAX_TEMP_FAILSAFE_C < 50.0f ||
+      MAX_TEMP_FAILSAFE_C > 250.0f) {
+    return false;
+  }
+  return true;
+}
+
+void applyHeaterFailsafeParamsFromCsv(const float* parameters_list, int count) {
+  if (count >= 32) {
+    heaterAbsoluteMaxOnS = (long)parameters_list[30];
+    MAX_TEMP_FAILSAFE_C = parameters_list[31];
   }
 }
 
@@ -7786,6 +7902,17 @@ static void storeBatteryAssessment(float vIdle, float vLoadWorst, float sagWorst
   batteryAssessment.flushAllowed = assessPassed && (batteryAssessment.usablePercent > batteryThreshold);
   batteryAssessment.lastAssessMs = millis();
   batteryAssessment.valid = true;
+}
+
+static void clearLowBatteryErrorIfRecovered(bool assessPassed) {
+  if (!assessPassed || ERROR_CODE != 2) {
+    return;
+  }
+  ERROR_CODE = 0;
+  for (int i = 0; i < totalLeds; i++) {
+    mcp_digitalWrite(getLedPin(i), LOW);
+  }
+  logPowerTestEvent("battery_recover", "cleared error_code=2", true);
 }
 
 static void resetRuntimeSagStrikes() {
@@ -7937,28 +8064,11 @@ bool measureBatteryUnderLoad(float* vIdle, float* vLoad, int testDuty, uint16_t 
 }
 
 int getHeaterPwmCapForVoltage(float batteryV) {
-  if (batteryV >= heaterCapV255) return HEATER_PWM_MAX;
-  if (batteryV >= heaterCapV170) return 170;
-  if (batteryV >= heaterCapV100) return 100;
-  if (batteryV >= minLoadedBatteryV) return HEATER_TEST_START_DUTY;
-  return 0;
-}
-
-int getEffectiveHeaterPwmCap(float batteryV) {
-  int cap = getHeaterPwmCapForVoltage(batteryV);
-  if (!batteryAssessment.valid || !isFlushing) {
-    return cap;
+  int pwm = HEATER_PWM_MAX;
+  if (batteryV < heaterCapVFull) {
+    return heaterPwmReduced;
   }
-  if (batteryAssessment.vLoadWorst < (minLoadedBatteryV + PREFLIGHT_CAP_MARGIN_V)) {
-    if (cap >= HEATER_PWM_MAX) {
-      cap = 170;
-    } else if (cap >= 170) {
-      cap = 100;
-    } else if (cap >= 100) {
-      cap = HEATER_TEST_START_DUTY;
-    }
-  }
-  return cap;
+  return pwm;
 }
 
 bool assessBatteryUsable(const char* tag, bool forceRefresh, bool* outFlushAllowed) {
@@ -8012,7 +8122,7 @@ bool assessBatteryUsable(const char* tag, bool forceRefresh, bool* outFlushAllow
   }
 
   int capDuty = getHeaterPwmCapForVoltage(vIdle);
-  if (capDuty <= 0) {
+  if (capDuty < 1) {
     snprintf(msg, sizeof(msg), "cap_fail v=%.2f cap=0", vIdle);
     logPowerTestEvent(assessTag, msg, true);
     batteryAssessment.inProgress = false;
@@ -8096,6 +8206,11 @@ bool assessBatteryUsable(const char* tag, bool forceRefresh, bool* outFlushAllow
   bool assessPassed = (highestDutyVLoad >= minLoadedBatteryV) && (highestDutySag <= maxBatterySagV);
   storeBatteryAssessment(vIdle, vLoadWorst, sagWorst, capDuty, assessPassed);
   batteryAssessment.inProgress = false;
+  clearLowBatteryErrorIfRecovered(assessPassed);
+  if (assessPassed && motorHomingDeferred && !motorHomingActive && !isFlushing) {
+    logPowerTestEvent("homing_defer", "assess_pass kick homing", true);
+    startMotorHoming(true);
+  }
 
   if (!assessPassed) {
     for (uint8_t i = 0; i < batteryAssessment.stepCount; i++) {
@@ -8300,12 +8415,7 @@ void clearMotorHomingDeferred() {
   clearMotorHomingDeferredFromNvs();
   logPowerTestEvent("homing_defer", "complete deferred_cleared", true);
 
-  if (ERROR_CODE == 2) {
-    ERROR_CODE = 0;
-    for (int i = 0; i < totalLeds; i++) {
-      mcp_digitalWrite(getLedPin(i), LOW);
-    }
-  }
+  clearLowBatteryErrorIfRecovered(true);
 }
 
 void applyLoadedMotorHomingDeferred() {
@@ -8348,7 +8458,8 @@ bool shouldDeferHomingAtBoot(const char** reason) {
 }
 
 void tryStartDeferredHomingIfReady() {
-  if (!motorHomingDeferred || motorHomingActive || isFlushing || ERROR_CODE != 2) {
+  // Retry when homing was deferred; ERROR_CODE is not part of this gate (cleared on assess pass).
+  if (!motorHomingDeferred || motorHomingActive || isFlushing) {
     return;
   }
   if (isHardwareLikelyDisconnectedForUserAction()) {
@@ -8619,6 +8730,20 @@ void clearFlushStateForCancel() {
   heaterTargetTemp = K;
   m1CurrentLogWindowStartMillis = 0;
   m1CurrentMaxInWindow = 0.0;
+}
+
+void abortFlushPreflight(bool showErrorLed) {
+  applyHeaterPwmDuty(0);
+  heaterOff();
+  logFlushEvent("flush_event", 0, "preflight_abort", true);
+  clearFlushStateForCancel();
+  for (int i = 0; i < totalLeds; i++) {
+    mcp_digitalWrite(getLedPin(i), LOW);
+  }
+  lastActivityMillis = millis();
+  if (showErrorLed && ERROR_CODE != 0) {
+    LEDErrorCode(ERROR_CODE);
+  }
 }
 
 void completeCancelRecoveryReady() {
@@ -9185,7 +9310,8 @@ void LEDErrorCode(int errorCode) { // Modified to accept errorCode
     const char* msg = (errorCode == 1) ? "motor_timeout" : (errorCode == 2) ? "low_battery" :
       (errorCode == 3) ? "heater_overheat" : (errorCode == 4) ? "motor_fault" :
       (errorCode == 5) ? "heater_current_fail" : (errorCode == 6) ? "heater_max_wall" :
-      (errorCode == HEATER_FAILSAFE_ERROR_CODE) ? "heater_failsafe" : "unknown";
+      (errorCode == HEATER_FAILSAFE_ERROR_CODE) ? "heater_failsafe" :
+      (errorCode == HEATER_MAX_TEMP_FAILSAFE_ERROR_CODE) ? "heater_max_temp_failsafe" : "unknown";
     logError("runtime", errorCode, msg, true);
   }
   for (int j = 0; j < totalLeds; j++) {
@@ -9226,8 +9352,8 @@ void updateHeaterPID() {
   }
 
   float v = readBatteryVoltageQuiet();
-  int cap = getEffectiveHeaterPwmCap(v);
-  if (cap <= 0) {
+  int cap = getHeaterPwmCapForVoltage(v);
+  if (cap < 1) {
     applyHeaterPwmDuty(0);
     if (heaterOn || heaterOutputOn) {
       if (checkRuntimeSagDebounced(v, "runtime_sag")) {
@@ -9517,7 +9643,7 @@ void writeResponseToChannel(const String& response) {
   }
 }
 
-// Build 30-value CSV for param read/write
+// Build 32-value CSV for param read/write
 String buildParamCSV() {
   return String(batteryThreshold) + "," +
          String(K) + "," +
@@ -9546,9 +9672,11 @@ String buildParamCSV() {
          String(minIdleBatteryVFloor, 2) + "," +
          String(usableVFull, 2) + "," +
          String(batteryAssessSettleMs) + "," +
-         String(heaterCapV255, 2) + "," +
-         String(heaterCapV170, 2) + "," +
-         String(heaterCapV100, 2);
+         String(heaterCapVFull, 2) + "," +
+         String(heaterPwmReduced) + "," +
+         String(maxHeaterWallTimeS) + "," +
+         String(heaterAbsoluteMaxOnS) + "," +
+         String(MAX_TEMP_FAILSAFE_C, 1);
 }
 
 // Low-level: push value+notify to serial GATT. Does not check serial_streaming_enabled.

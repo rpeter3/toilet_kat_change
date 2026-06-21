@@ -1,0 +1,28 @@
+BLE OTA Rollback Test (manual sequence)
+Run: 2026-06-20
+Port: COM5
+BLE: 58:E6:C5:6C:AF:81
+Firmware variants: 4.1.8-regA / 4.1.8-regB (auto-built)
+
+Sequence executed:
+  1. OTA1 BLE -> ota_0 (4.1.8-regA)  PASS
+  2. OTA2 BLE -> ota_1 (4.1.8-regB)  PASS
+  3. SET_DEV_MODE:1                  PASS
+  4. OTA_ROLLBACK_PREVIOUS (BLE)     PASS
+
+Pre-rollback state:
+  partition: ota_1
+  version:   4.1.8-regB
+  OTA_DIAG:  pending=1, from=ota_1
+
+Post-rollback state:
+  partition: ota_0
+  version:   4.1.8-regA
+  OTA_DIAG:  pending=0, last_trigger=manual, from=ota_1, to=ota_0
+
+RESULT: PASS
+
+Notes:
+- SARAH factory baseline was flashed at start (USB).
+- Full harness preflight failed on SARAH (no SET_DEV_MODE); rollback run used staged OTA1/OTA2 + scripts/_run_rollback_step.py.
+- ota_update.py ENABLE_OTA polling fix applied for stale fea4 responses.

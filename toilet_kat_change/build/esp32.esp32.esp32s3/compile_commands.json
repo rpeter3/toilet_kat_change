@@ -155,60 +155,6 @@
    "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src",
    "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
    "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLE2902.cpp",
-   "-o",
-   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\BLE\\BLE2902.cpp.o"
-  ],
-  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLE2902.cpp"
- },
- {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
-  "arguments": [
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
-   "-MMD",
-   "-c",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/cpp_flags",
-   "-w",
-   "-Os",
-   "-Werror=return-type",
-   "-DF_CPU=240000000L",
-   "-DARDUINO=10607",
-   "-DARDUINO_ESP32S3_DEV",
-   "-DARDUINO_ARCH_ESP32",
-   "-DARDUINO_BOARD=\"ESP32S3_DEV\"",
-   "-DARDUINO_VARIANT=\"esp32s3\"",
-   "-DARDUINO_PARTITION_default",
-   "-DARDUINO_HOST_OS=\"windows\"",
-   "-DARDUINO_FQBN=\"esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,DebugLevel=info,DFUOnBoot=default,FlashMode=dio,FlashSize=16M,LoopCore=1,EventsCore=1,JTAGAdapter=default,PSRAM=opi,USBMode=hwcdc,ZigbeeMode=default\"",
-   "-DESP32=ESP32",
-   "-DCORE_DEBUG_LEVEL=3",
-   "-DARDUINO_RUNNING_CORE=1",
-   "-DARDUINO_EVENT_RUNNING_CORE=1",
-   "-DBOARD_HAS_PSRAM",
-   "-DARDUINO_USB_MODE=1",
-   "-DARDUINO_USB_CDC_ON_BOOT=1",
-   "-DARDUINO_USB_MSC_ON_BOOT=0",
-   "-DARDUINO_USB_DFU_ON_BOOT=0",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/defines",
-   "-IC:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
-   "-iprefix",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/include/",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/includes",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/dio_opi/include",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\variants\\esp32s3",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\Wire\\src",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_MCP23017_Arduino_Library\\src",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPI\\src",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\DualMAX14870MotorShield",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\PID_v1_bc",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\EEPROM\\src",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPIFFS\\src",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src",
-   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
-   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLECharacteristic.cpp",
    "-o",
    "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\BLE\\BLECharacteristic.cpp.o"
@@ -263,11 +209,65 @@
    "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src",
    "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
    "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEAdvertisedDevice.cpp",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEAddress.cpp",
    "-o",
-   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\BLE\\BLEAdvertisedDevice.cpp.o"
+   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\BLE\\BLEAddress.cpp.o"
   ],
-  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEAdvertisedDevice.cpp"
+  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEAddress.cpp"
+ },
+ {
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "arguments": [
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
+   "-MMD",
+   "-c",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/cpp_flags",
+   "-w",
+   "-Os",
+   "-Werror=return-type",
+   "-DF_CPU=240000000L",
+   "-DARDUINO=10607",
+   "-DARDUINO_ESP32S3_DEV",
+   "-DARDUINO_ARCH_ESP32",
+   "-DARDUINO_BOARD=\"ESP32S3_DEV\"",
+   "-DARDUINO_VARIANT=\"esp32s3\"",
+   "-DARDUINO_PARTITION_default",
+   "-DARDUINO_HOST_OS=\"windows\"",
+   "-DARDUINO_FQBN=\"esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,DebugLevel=info,DFUOnBoot=default,FlashMode=dio,FlashSize=16M,LoopCore=1,EventsCore=1,JTAGAdapter=default,PSRAM=opi,USBMode=hwcdc,ZigbeeMode=default\"",
+   "-DESP32=ESP32",
+   "-DCORE_DEBUG_LEVEL=3",
+   "-DARDUINO_RUNNING_CORE=1",
+   "-DARDUINO_EVENT_RUNNING_CORE=1",
+   "-DBOARD_HAS_PSRAM",
+   "-DARDUINO_USB_MODE=1",
+   "-DARDUINO_USB_CDC_ON_BOOT=1",
+   "-DARDUINO_USB_MSC_ON_BOOT=0",
+   "-DARDUINO_USB_DFU_ON_BOOT=0",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/defines",
+   "-IC:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+   "-iprefix",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/include/",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/includes",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/dio_opi/include",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\variants\\esp32s3",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\Wire\\src",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_MCP23017_Arduino_Library\\src",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPI\\src",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\DualMAX14870MotorShield",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\PID_v1_bc",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\EEPROM\\src",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPIFFS\\src",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src",
+   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
+   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLE2902.cpp",
+   "-o",
+   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\BLE\\BLE2902.cpp.o"
+  ],
+  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLE2902.cpp"
  },
  {
   "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
@@ -425,11 +425,11 @@
    "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src",
    "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
    "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEAddress.cpp",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEAdvertisedDevice.cpp",
    "-o",
-   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\BLE\\BLEAddress.cpp.o"
+   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\BLE\\BLEAdvertisedDevice.cpp.o"
   ],
-  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEAddress.cpp"
+  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEAdvertisedDevice.cpp"
  },
  {
   "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
@@ -1343,11 +1343,11 @@
    "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src",
    "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
    "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEService.cpp",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEServiceMap.cpp",
    "-o",
-   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\BLE\\BLEService.cpp.o"
+   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\BLE\\BLEServiceMap.cpp.o"
   ],
-  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEService.cpp"
+  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEServiceMap.cpp"
  },
  {
   "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
@@ -1397,11 +1397,11 @@
    "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src",
    "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
    "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEServiceMap.cpp",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEService.cpp",
    "-o",
-   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\BLE\\BLEServiceMap.cpp.o"
+   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\BLE\\BLEService.cpp.o"
   ],
-  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEServiceMap.cpp"
+  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEService.cpp"
  },
  {
   "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
@@ -2045,11 +2045,11 @@
    "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src",
    "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
    "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
-   "C:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO\\Adafruit_GenericDevice.cpp",
+   "C:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO\\Adafruit_SPIDevice.cpp",
    "-o",
-   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\Adafruit_BusIO\\Adafruit_GenericDevice.cpp.o"
+   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\Adafruit_BusIO\\Adafruit_SPIDevice.cpp.o"
   ],
-  "file": "C:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO\\Adafruit_GenericDevice.cpp"
+  "file": "C:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO\\Adafruit_SPIDevice.cpp"
  },
  {
   "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
@@ -2099,11 +2099,11 @@
    "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src",
    "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
    "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
-   "C:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO\\Adafruit_SPIDevice.cpp",
+   "C:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO\\Adafruit_GenericDevice.cpp",
    "-o",
-   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\Adafruit_BusIO\\Adafruit_SPIDevice.cpp.o"
+   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\Adafruit_BusIO\\Adafruit_GenericDevice.cpp.o"
   ],
-  "file": "C:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO\\Adafruit_SPIDevice.cpp"
+  "file": "C:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO\\Adafruit_GenericDevice.cpp"
  },
  {
   "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
@@ -2423,11 +2423,11 @@
    "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src",
    "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
    "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src\\vfs_api.cpp",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src\\FS.cpp",
    "-o",
-   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\FS\\vfs_api.cpp.o"
+   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\FS\\FS.cpp.o"
   ],
-  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src\\vfs_api.cpp"
+  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src\\FS.cpp"
  },
  {
   "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
@@ -2477,11 +2477,11 @@
    "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src",
    "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
    "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src\\FS.cpp",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src\\vfs_api.cpp",
    "-o",
-   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\FS\\FS.cpp.o"
+   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\FS\\vfs_api.cpp.o"
   ],
-  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src\\FS.cpp"
+  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src\\vfs_api.cpp"
  },
  {
   "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
@@ -2570,6 +2570,94 @@
    "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\core\\HashBuilder.cpp.o"
   ],
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\HashBuilder.cpp"
+ },
+ {
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "arguments": [
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
+   "-MMD",
+   "-c",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/cpp_flags",
+   "-w",
+   "-Os",
+   "-Werror=return-type",
+   "-DF_CPU=240000000L",
+   "-DARDUINO=10607",
+   "-DARDUINO_ESP32S3_DEV",
+   "-DARDUINO_ARCH_ESP32",
+   "-DARDUINO_BOARD=\"ESP32S3_DEV\"",
+   "-DARDUINO_VARIANT=\"esp32s3\"",
+   "-DARDUINO_PARTITION_default",
+   "-DARDUINO_HOST_OS=\"windows\"",
+   "-DARDUINO_FQBN=\"esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,DebugLevel=info,DFUOnBoot=default,FlashMode=dio,FlashSize=16M,LoopCore=1,EventsCore=1,JTAGAdapter=default,PSRAM=opi,USBMode=hwcdc,ZigbeeMode=default\"",
+   "-DESP32=ESP32",
+   "-DCORE_DEBUG_LEVEL=3",
+   "-DARDUINO_RUNNING_CORE=1",
+   "-DARDUINO_EVENT_RUNNING_CORE=1",
+   "-DBOARD_HAS_PSRAM",
+   "-DARDUINO_USB_MODE=1",
+   "-DARDUINO_USB_CDC_ON_BOOT=1",
+   "-DARDUINO_USB_MSC_ON_BOOT=0",
+   "-DARDUINO_USB_DFU_ON_BOOT=0",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/defines",
+   "-IC:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+   "-iprefix",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/include/",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/includes",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/dio_opi/include",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\variants\\esp32s3",
+   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
+   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\FunctionalInterrupt.cpp",
+   "-o",
+   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\core\\FunctionalInterrupt.cpp.o"
+  ],
+  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\FunctionalInterrupt.cpp"
+ },
+ {
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "arguments": [
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
+   "-MMD",
+   "-c",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/cpp_flags",
+   "-w",
+   "-Os",
+   "-Werror=return-type",
+   "-DF_CPU=240000000L",
+   "-DARDUINO=10607",
+   "-DARDUINO_ESP32S3_DEV",
+   "-DARDUINO_ARCH_ESP32",
+   "-DARDUINO_BOARD=\"ESP32S3_DEV\"",
+   "-DARDUINO_VARIANT=\"esp32s3\"",
+   "-DARDUINO_PARTITION_default",
+   "-DARDUINO_HOST_OS=\"windows\"",
+   "-DARDUINO_FQBN=\"esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,DebugLevel=info,DFUOnBoot=default,FlashMode=dio,FlashSize=16M,LoopCore=1,EventsCore=1,JTAGAdapter=default,PSRAM=opi,USBMode=hwcdc,ZigbeeMode=default\"",
+   "-DESP32=ESP32",
+   "-DCORE_DEBUG_LEVEL=3",
+   "-DARDUINO_RUNNING_CORE=1",
+   "-DARDUINO_EVENT_RUNNING_CORE=1",
+   "-DBOARD_HAS_PSRAM",
+   "-DARDUINO_USB_MODE=1",
+   "-DARDUINO_USB_CDC_ON_BOOT=1",
+   "-DARDUINO_USB_MSC_ON_BOOT=0",
+   "-DARDUINO_USB_DFU_ON_BOOT=0",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/defines",
+   "-IC:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+   "-iprefix",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/include/",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/includes",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/dio_opi/include",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\variants\\esp32s3",
+   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
+   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\HardwareSerial.cpp",
+   "-o",
+   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\core\\HardwareSerial.cpp.o"
+  ],
+  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\HardwareSerial.cpp"
  },
  {
   "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
@@ -2785,55 +2873,11 @@
    "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\variants\\esp32s3",
    "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
    "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\HardwareSerial.cpp",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\MD5Builder.cpp",
    "-o",
-   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\core\\HardwareSerial.cpp.o"
+   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\core\\MD5Builder.cpp.o"
   ],
-  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\HardwareSerial.cpp"
- },
- {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
-  "arguments": [
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
-   "-MMD",
-   "-c",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/cpp_flags",
-   "-w",
-   "-Os",
-   "-Werror=return-type",
-   "-DF_CPU=240000000L",
-   "-DARDUINO=10607",
-   "-DARDUINO_ESP32S3_DEV",
-   "-DARDUINO_ARCH_ESP32",
-   "-DARDUINO_BOARD=\"ESP32S3_DEV\"",
-   "-DARDUINO_VARIANT=\"esp32s3\"",
-   "-DARDUINO_PARTITION_default",
-   "-DARDUINO_HOST_OS=\"windows\"",
-   "-DARDUINO_FQBN=\"esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,DebugLevel=info,DFUOnBoot=default,FlashMode=dio,FlashSize=16M,LoopCore=1,EventsCore=1,JTAGAdapter=default,PSRAM=opi,USBMode=hwcdc,ZigbeeMode=default\"",
-   "-DESP32=ESP32",
-   "-DCORE_DEBUG_LEVEL=3",
-   "-DARDUINO_RUNNING_CORE=1",
-   "-DARDUINO_EVENT_RUNNING_CORE=1",
-   "-DBOARD_HAS_PSRAM",
-   "-DARDUINO_USB_MODE=1",
-   "-DARDUINO_USB_CDC_ON_BOOT=1",
-   "-DARDUINO_USB_MSC_ON_BOOT=0",
-   "-DARDUINO_USB_DFU_ON_BOOT=0",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/defines",
-   "-IC:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
-   "-iprefix",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/include/",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/includes",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/dio_opi/include",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\variants\\esp32s3",
-   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
-   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\FunctionalInterrupt.cpp",
-   "-o",
-   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\core\\FunctionalInterrupt.cpp.o"
-  ],
-  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\FunctionalInterrupt.cpp"
+  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\MD5Builder.cpp"
  },
  {
   "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
@@ -2878,50 +2922,6 @@
    "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\core\\IPAddress.cpp.o"
   ],
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\IPAddress.cpp"
- },
- {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
-  "arguments": [
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
-   "-MMD",
-   "-c",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/cpp_flags",
-   "-w",
-   "-Os",
-   "-Werror=return-type",
-   "-DF_CPU=240000000L",
-   "-DARDUINO=10607",
-   "-DARDUINO_ESP32S3_DEV",
-   "-DARDUINO_ARCH_ESP32",
-   "-DARDUINO_BOARD=\"ESP32S3_DEV\"",
-   "-DARDUINO_VARIANT=\"esp32s3\"",
-   "-DARDUINO_PARTITION_default",
-   "-DARDUINO_HOST_OS=\"windows\"",
-   "-DARDUINO_FQBN=\"esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,DebugLevel=info,DFUOnBoot=default,FlashMode=dio,FlashSize=16M,LoopCore=1,EventsCore=1,JTAGAdapter=default,PSRAM=opi,USBMode=hwcdc,ZigbeeMode=default\"",
-   "-DESP32=ESP32",
-   "-DCORE_DEBUG_LEVEL=3",
-   "-DARDUINO_RUNNING_CORE=1",
-   "-DARDUINO_EVENT_RUNNING_CORE=1",
-   "-DBOARD_HAS_PSRAM",
-   "-DARDUINO_USB_MODE=1",
-   "-DARDUINO_USB_CDC_ON_BOOT=1",
-   "-DARDUINO_USB_MSC_ON_BOOT=0",
-   "-DARDUINO_USB_DFU_ON_BOOT=0",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/defines",
-   "-IC:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
-   "-iprefix",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/include/",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/includes",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/dio_opi/include",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\variants\\esp32s3",
-   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
-   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\MD5Builder.cpp",
-   "-o",
-   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\core\\MD5Builder.cpp.o"
-  ],
-  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\MD5Builder.cpp"
  },
  {
   "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",

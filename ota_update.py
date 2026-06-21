@@ -386,7 +386,17 @@ class OTAUpdater:
     async def enable_ota_mode(self) -> bool:
         """Send ENABLE_OTA on fea0, confirm ENABLE_OTA_ACK on fea4, keep connection."""
         print("Sending ENABLE_OTA...")
-        response = await self._write_command_read_response("ENABLE_OTA")
+        if not self.connected:
+            return False
+        await self.client.write_gatt_char(COMMAND_CHARACTERISTIC_UUID, b"ENABLE_OTA")
+        deadline = asyncio.get_event_loop().time() + 15.0
+        response = None
+        while asyncio.get_event_loop().time() < deadline:
+            await asyncio.sleep(0.25)
+            data = await self.client.read_gatt_char(RESPONSE_CHARACTERISTIC_UUID)
+            response = data.decode("utf-8", errors="replace").strip()
+            if "ENABLE_OTA_ACK" in response:
+                break
         print(f"ENABLE_OTA response: {response or '(empty)'}")
         if not response or "ENABLE_OTA_ACK" not in response:
             print("ERROR: Device did not acknowledge ENABLE_OTA")

@@ -277,7 +277,7 @@ The firmware persists error codes, crashes, brownouts, and runtime faults to a f
 - **OTA boot diagnostics**: `ota_boot`, `ota_boot_fail`, `ota_rollback`, `ota_boot_ok`, `ota_spiffs_capture` while verifying or running a recently OTA-installed partition. NVS snapshot available via `GET_OTA_DIAG`.
 - **MCP unavailable**: When I2C expander init fails after retries.
 - **Power tests** (`power_test` log type): Battery/heater preflight, boot heater skip, flush case 0 gates, loaded VMON measurements, and `homing_defer` events (boot skip, retry, completion) via `logPowerTestEvent()`. SPIFFS persistence is selective: routine boot battery/heater PASS paths are Serial/BLE only; flush preflight PASS collapses to one summary line; failures retain full detail.
-- **Flush lifecycle** (`flush_event`, `flush_step`): SPIFFS only when DEV mode is enabled. `flush_status` ticks removed (too verbose). Normal-mode support exports rely on `power_test` flush preflight lines and runtime errors.
+- **Flush lifecycle**: **`flush_event`** always persisted (start / complete / cancel / abort). **`flush_step`** SPIFFS only when DEV mode is enabled. `flush_status` ticks not logged.
 
 **Context for runtime errors**: Each runtime error log includes flush/feed state (`step`, `cut`, `feed`), sensor values (`bat`, `temp`, `m1A`, `heaterA`), and fan status (`off`, `forward`, `reverse`) to aid diagnostics.
 
