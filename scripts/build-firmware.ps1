@@ -21,6 +21,11 @@ if (-not $Fqbn) {
 }
 $SketchDir = Join-Path $Root "toilet_kat_change"
 $BuildDir = Join-Path $SketchDir "build\esp32.esp32.esp32s3"
+$VersionOverrideHeader = Join-Path $SketchDir "software_version_build.h"
+if (Test-Path $VersionOverrideHeader) {
+    Remove-Item -Force $VersionOverrideHeader
+    Write-Host "Removed dev-only version override: software_version_build.h"
+}
 $Cli = "C:\Program Files\Arduino CLI\arduino-cli.exe"
 
 if (-not (Test-Path $Cli)) {

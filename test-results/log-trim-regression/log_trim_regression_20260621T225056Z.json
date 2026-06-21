@@ -1,0 +1,69 @@
+{
+  "run_id": "20260621T225056Z",
+  "started_at": "2026-06-21T22:50:56.474484+00:00",
+  "ended_at": "2026-06-21T22:50:56.475572+00:00",
+  "passed": true,
+  "dry_run": true,
+  "port": "COM6",
+  "chip": "esp32s3",
+  "address": null,
+  "backup_path": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\test-builds\\log-trim-regression\\spiffs_backup_20260621T225056Z.bin",
+  "steps": [
+    {
+      "name": "no_trim",
+      "passed": true,
+      "seeded_bytes": 30000,
+      "observed_log_bytes": 0,
+      "errors": [],
+      "logs_excerpt": "",
+      "started_at": "2026-06-21T22:50:56.475379+00:00",
+      "ended_at": "2026-06-21T22:50:56.475417+00:00",
+      "duration_s": 0.0
+    },
+    {
+      "name": "write_trim",
+      "passed": true,
+      "seeded_bytes": 76800,
+      "observed_log_bytes": 0,
+      "errors": [],
+      "logs_excerpt": "",
+      "started_at": "2026-06-21T22:50:56.475437+00:00",
+      "ended_at": "2026-06-21T22:50:56.475455+00:00",
+      "duration_s": 0.0
+    },
+    {
+      "name": "ota_trim",
+      "passed": true,
+      "seeded_bytes": 45000,
+      "observed_log_bytes": 0,
+      "errors": [],
+      "logs_excerpt": "",
+      "started_at": "2026-06-21T22:50:56.475466+00:00",
+      "ended_at": "2026-06-21T22:50:56.475478+00:00",
+      "duration_s": 0.0
+    },
+    {
+      "name": "sleep_trim",
+      "passed": true,
+      "seeded_bytes": 67000,
+      "observed_log_bytes": 0,
+      "errors": [],
+      "logs_excerpt": "",
+      "started_at": "2026-06-21T22:50:56.475486+00:00",
+      "ended_at": "2026-06-21T22:50:56.475496+00:00",
+      "duration_s": 0.0
+    },
+    {
+      "name": "restore",
+      "passed": true,
+      "seeded_bytes": null,
+      "observed_log_bytes": 0,
+      "errors": [],
+      "logs_excerpt": "",
+      "started_at": "2026-06-21T22:50:56.475504+00:00",
+      "ended_at": "2026-06-21T22:50:56.475552+00:00",
+      "duration_s": 0.0
+    }
+  ],
+  "failures": []
+}
