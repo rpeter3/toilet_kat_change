@@ -447,9 +447,10 @@ class ToiletSystemInterface:
             print("Disconnected from ESP32")
 
     def _parse_param_payload(self, message: str) -> Optional[Dict[str, Any]]:
-        """Strict parser: exactly 30 comma-separated floats. Returns None on invalid."""
+        """Strict parser: exactly len(param_order) comma-separated floats. Returns None on invalid."""
+        expected_count = len(self.param_order)
         values = [v.strip() for v in message.split(",")]
-        if len(values) != 30:
+        if len(values) != expected_count:
             return None
         try:
             floats = [float(v) for v in values]
@@ -473,7 +474,10 @@ class ToiletSystemInterface:
                 return {}
             params = self._parse_param_payload(message)
             if params is None:
-                print("Parameter read failed: invalid payload (expected 30 floats)")
+                print(
+                    f"Parameter read failed: invalid payload "
+                    f"(expected {len(self.param_order)} floats, got {len(message.split(','))})"
+                )
                 return {}
             self.current_params = params
             return params

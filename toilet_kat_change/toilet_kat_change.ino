@@ -7175,16 +7175,12 @@ void flushSequence() {
       break;
 
     case 13: {
-      // Completion cue: all LEDs on/off twice in quick succession.
-      const unsigned long completionFlashPhaseMs = 120;
-      const unsigned long completionFlashTotalMs = completionFlashPhaseMs * 4;
+      // Completion cue: illuminate bottom→top, then extinguish bottom→top.
+      const unsigned long completionStepMs = 40;
+      const unsigned long completionTotalMs = completionStepMs * totalLeds * 2;
       unsigned long elapsed = currentMillis - stepStartMillis;
-      if (elapsed < completionFlashTotalMs) {
-        int phase = (int)(elapsed / completionFlashPhaseMs);
-        bool allOn = (phase == 0 || phase == 2);
-        for (int i = 0; i < totalLeds; i++) {
-          mcp_digitalWrite(getLedPin(i), allOn ? HIGH : LOW);
-        }
+      if (elapsed < completionTotalMs) {
+        updateFlushCompleteLedCue(elapsed);
       } else {
         Serial.println("All LEDs off");
         for (int i = 0; i < totalLeds; i++) {
@@ -8683,6 +8679,27 @@ void flushStartLEDAnimation() {
     mcp_digitalWrite(getLedPin(i), HIGH);
     delay(stepDelayMs);
     feedTaskWatchdog();
+  }
+}
+
+void updateFlushCompleteLedCue(unsigned long elapsedMs) {
+  const unsigned long stepMs = 40;
+  int phase = (int)(elapsedMs / stepMs);
+
+  if (phase < totalLeds) {
+    // Bottom→top cumulative on.
+    for (int i = 0; i < totalLeds; i++) {
+      mcp_digitalWrite(getLedPin(i), i <= phase ? HIGH : LOW);
+    }
+    return;
+  }
+
+  phase -= totalLeds;
+  if (phase < totalLeds) {
+    // Bottom→top cumulative off.
+    for (int i = 0; i < totalLeds; i++) {
+      mcp_digitalWrite(getLedPin(i), i <= phase ? LOW : HIGH);
+    }
   }
 }
 
