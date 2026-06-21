@@ -90,11 +90,14 @@ Validation rules:
 Write 30-value CSV to parameter write characteristic (`...fea6`), then read response from response characteristic (`...fea4`).
 
 Expected responses:
-- `PARAM_WRITE_ACK` -> success
+- `PARAM_WRITE_ACK` -> success (parameters applied to RAM **and** EEPROM commit verified)
 - `AUTH_REQUIRED` -> trust handshake not complete
 - `PARAM_UPDATE_BLOCKED_FLUSH` -> firmware blocked write during flush
 - `PARAM_WRITE_ERR:BAD_FORMAT` -> malformed payload
+- `PARAM_WRITE_ERR:PERSIST_FAILED` -> parameters validated but EEPROM commit failed; RAM reverted to last good flash values
 - any other response -> treat as failure and report raw response
+
+Clients should retry transient failures (`PERSIST_FAILED`, `PARAM_UPDATE_BLOCKED_FLUSH`, empty/stale fea4) up to 5 times with ~500 ms pause. Report success only on `PARAM_WRITE_ACK`.
 
 ---
 

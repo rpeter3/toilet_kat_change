@@ -123,6 +123,49 @@ void trustDoubleBeep();
 #define PARAM_START_ADDR 0
 #define PARAM_MAGIC_NUMBER 0x1234
 #define PARAM_COUNT 32
+#define PARAM_EEPROM_SCHEMA_ADDR 196
+#define PARAM_EEPROM_SCHEMA_V1 0
+#define PARAM_EEPROM_SCHEMA_V2 2
+#define PARAM_EEPROM_FLOAT_EPSILON 1e-4f
+
+struct ParamEepromSnapshot {
+  int batteryThreshold;
+  float K;
+  int F;
+  long T;
+  float thermistorResistance;
+  int r2;
+  float backupTime;
+  int r4;
+  int fanDuration;
+  long H;
+  float continueFeeder;
+  float maxOpeningTime;
+  int typicalOpeningTime;
+  float MOTOR_CUT_TIME;
+  float CUT_MODE_HEAT_TIME;
+  float postCoolingFanDuration;
+  float preFeedFan;
+  float fanReverseTime;
+  float fanReverseStartTime;
+  float backupTimeAfterReopen;
+  float CUT_MODE_TEMP;
+  float heaterLowerToleranceC;
+  float heaterUpperToleranceC;
+  float COOL_OPEN_TEMP_C;
+  long MAX_COOL_WAIT_S;
+  float minLoadedBatteryV;
+  float maxBatterySagV;
+  float minIdleBatteryVFloor;
+  float usableVFull;
+  uint16_t batteryAssessSettleMs;
+  float heaterCapVFull;
+  int heaterPwmReduced;
+  long maxHeaterWallTimeS;
+  long heaterAbsoluteMaxOnS;
+  float MAX_TEMP_FAILSAFE_C;
+};
+
 #define HW_VERSION_ADDR 200
 #define HW_VERSION_MAGIC 0xFADE
 #define FLUSH_COUNT_MAGIC_ADDR 300
@@ -228,12 +271,12 @@ struct HWCFGConfigStore {
 #  if __has_include("software_version_build.h")
 #    include "software_version_build.h"
 #  else
-const char* SOFTWARE_VERSION_NUMBER = "4.2.2";
+const char* SOFTWARE_VERSION_NUMBER = "4.2.4";
 const char* FACTORY_SOFTWARE_DATE = "2026-06-18";
 const char* SOFTWARE_BUILD_DATE = "2026-06-21";  // YYYY-MM-DD — update with each build
 #  endif
 #else
-const char* SOFTWARE_VERSION_NUMBER = "4.2.2";
+const char* SOFTWARE_VERSION_NUMBER = "4.2.4";
 const char* FACTORY_SOFTWARE_DATE = "2026-06-18";
 const char* SOFTWARE_BUILD_DATE = "2026-06-21";  // YYYY-MM-DD — update with each build
 #endif
@@ -254,6 +297,8 @@ String buildParamCSV();
 String buildMotorFaultStatusSnapshot();
 void saveParametersToEEPROM();
 void loadParametersFromEEPROM();
+void runDeferredParamEepromSchemaStampIfNeeded();
+bool reclaimNvsSpaceForParamEeprom();
 void loadFlushCountFromEEPROM();
 bool saveFlushCountToEEPROM();
 void incrementFlushCount();
@@ -869,6 +914,8 @@ bool hardwareMatrixInitialized = false;
 HWCFGConfigStore hwcfgStore = {};
 bool hwcfgStoreInitialized = false;
 bool hwcfgSafeFault = false;
+bool hwcfgActiveOnSpiffs = false;
+static bool g_pendingParamEepromSchemaStamp = false;
 HardwareMatrix hardwareMatrixScratchActive = {};
 HardwareMatrix hardwareMatrixScratchLastGood = {};
 // HWCFG scratch/snapshot buffers kept at file scope to avoid large loopTask stack frames.
@@ -1613,17 +1660,24 @@ class param_write_characteristic_callbacks: public BLECharacteristicCallbacks {
     }
     
     saveParametersToEEPROM();
-    if (eepromErrorState) {
-      if (lastEEPROMWriteVerified) {
-        eepromErrorState = false;
-        eepromWakeAlertActive = false;
-        if (ERROR_CODE == EEPROM_INVALID_ERROR_CODE) ERROR_CODE = 0;
-        Serial.println("EEPROM recovery successful from BLE parameter write.");
-        sendSerialToBLE("EEPROM RECOVERED - latched error cleared");
-      } else {
-        Serial.println("EEPROM recovery attempt failed - still in EEPROM error state");
-        sendSerialToBLE("EEPROM RECOVERY FAILED - write not verified");
+    if (!lastEEPROMWriteVerified) {
+      Serial.println("Param write rejected: EEPROM persist failed");
+      SerialBLE_println("Param write rejected: EEPROM persist failed");
+      loadParametersFromEEPROM();
+      heaterTargetTemp = K;
+      if (param_read_characteristic) {
+        param_read_characteristic->setValue(buildParamCSV().c_str());
       }
+      writeResponseToChannel("PARAM_WRITE_ERR:PERSIST_FAILED");
+      return;
+    }
+
+    if (eepromErrorState) {
+      eepromErrorState = false;
+      eepromWakeAlertActive = false;
+      if (ERROR_CODE == EEPROM_INVALID_ERROR_CODE) ERROR_CODE = 0;
+      Serial.println("EEPROM recovery successful from BLE parameter write.");
+      sendSerialToBLE("EEPROM RECOVERED - latched error cleared");
     }
     
     if (param_read_characteristic) {
@@ -1891,19 +1945,57 @@ void server_setup(bool includeOTA = false) {
   Serial.println("Characteristic defined! Now your client can read it!");
 }
 
-// Function to save parameters to EEPROM
-void saveParametersToEEPROM() {
-  logBootTiming("eeprom_params_save_start");
-  unsigned long beginStart = millis();
-  EEPROM.begin(EEPROM_SIZE);
-  Serial.printf("Boot timing: eeprom_params_begin,%lums\n", millis() - beginStart);
-  lastEEPROMWriteVerified = false;
-  
-  // Write magic number to verify valid data
-  EEPROM.put(PARAM_START_ADDR, PARAM_MAGIC_NUMBER);
-  
-  // Write parameters in order
-  int addr = sizeof(PARAM_MAGIC_NUMBER);
+static void captureParamEepromSnapshot(ParamEepromSnapshot& snap) {
+  snap.batteryThreshold = batteryThreshold;
+  snap.K = K;
+  snap.F = F;
+  snap.T = T;
+  snap.thermistorResistance = thermistorResistance;
+  snap.r2 = r2;
+  snap.backupTime = backupTime;
+  snap.r4 = r4;
+  snap.fanDuration = fanDuration;
+  snap.H = H;
+  snap.continueFeeder = continueFeeder;
+  snap.maxOpeningTime = maxOpeningTime;
+  snap.typicalOpeningTime = typicalOpeningTime;
+  snap.MOTOR_CUT_TIME = MOTOR_CUT_TIME;
+  snap.CUT_MODE_HEAT_TIME = CUT_MODE_HEAT_TIME;
+  snap.postCoolingFanDuration = postCoolingFanDuration;
+  snap.preFeedFan = preFeedFan;
+  snap.fanReverseTime = fanReverseTime;
+  snap.fanReverseStartTime = fanReverseStartTime;
+  snap.backupTimeAfterReopen = backupTimeAfterReopen;
+  snap.CUT_MODE_TEMP = CUT_MODE_TEMP;
+  snap.heaterLowerToleranceC = heaterLowerToleranceC;
+  snap.heaterUpperToleranceC = heaterUpperToleranceC;
+  snap.COOL_OPEN_TEMP_C = COOL_OPEN_TEMP_C;
+  snap.MAX_COOL_WAIT_S = MAX_COOL_WAIT_S;
+  snap.minLoadedBatteryV = minLoadedBatteryV;
+  snap.maxBatterySagV = maxBatterySagV;
+  snap.minIdleBatteryVFloor = minIdleBatteryVFloor;
+  snap.usableVFull = usableVFull;
+  snap.batteryAssessSettleMs = batteryAssessSettleMs;
+  snap.heaterCapVFull = heaterCapVFull;
+  snap.heaterPwmReduced = heaterPwmReduced;
+  snap.maxHeaterWallTimeS = maxHeaterWallTimeS;
+  snap.heaterAbsoluteMaxOnS = heaterAbsoluteMaxOnS;
+  snap.MAX_TEMP_FAILSAFE_C = MAX_TEMP_FAILSAFE_C;
+}
+
+static bool eepromFloatNear(float a, float b) {
+  if (a == b) {
+    return true;
+  }
+  float diff = a - b;
+  return diff < PARAM_EEPROM_FLOAT_EPSILON && diff > -PARAM_EEPROM_FLOAT_EPSILON;
+}
+
+static bool looksLikeLegacyHeaterCapVoltage(float v) {
+  return v == v && v >= 10.0f && v <= 13.5f;
+}
+
+static int writeParamBlobToEeprom(int addr) {
   EEPROM.put(addr, batteryThreshold); addr += sizeof(batteryThreshold);
   EEPROM.put(addr, K); addr += sizeof(K);
   EEPROM.put(addr, F); addr += sizeof(F);
@@ -1939,9 +2031,186 @@ void saveParametersToEEPROM() {
   EEPROM.put(addr, maxHeaterWallTimeS); addr += sizeof(maxHeaterWallTimeS);
   EEPROM.put(addr, heaterAbsoluteMaxOnS); addr += sizeof(heaterAbsoluteMaxOnS);
   EEPROM.put(addr, MAX_TEMP_FAILSAFE_C); addr += sizeof(MAX_TEMP_FAILSAFE_C);
+  return addr;
+}
+
+static int loadBatteryAssessTailFromEeprom(int addr, uint16_t schema) {
+  float loadedMinLoadedBatteryV = minLoadedBatteryV;
+  float loadedMaxBatterySagV = maxBatterySagV;
+  float loadedMinIdleBatteryVFloor = minIdleBatteryVFloor;
+  float loadedUsableVFull = usableVFull;
+  uint16_t loadedBatteryAssessSettleMs = batteryAssessSettleMs;
+  float loadedHeaterCapVFull = heaterCapVFull;
+  int loadedHeaterPwmReduced = heaterPwmReduced;
+  long loadedMaxHeaterWallTimeS = maxHeaterWallTimeS;
+
+  EEPROM.get(addr, loadedMinLoadedBatteryV); addr += sizeof(loadedMinLoadedBatteryV);
+  EEPROM.get(addr, loadedMaxBatterySagV); addr += sizeof(loadedMaxBatterySagV);
+  EEPROM.get(addr, loadedMinIdleBatteryVFloor); addr += sizeof(loadedMinIdleBatteryVFloor);
+  EEPROM.get(addr, loadedUsableVFull); addr += sizeof(loadedUsableVFull);
+  EEPROM.get(addr, loadedBatteryAssessSettleMs); addr += sizeof(loadedBatteryAssessSettleMs);
+  EEPROM.get(addr, loadedHeaterCapVFull); addr += sizeof(loadedHeaterCapVFull);
+  EEPROM.get(addr, loadedHeaterPwmReduced); addr += sizeof(loadedHeaterPwmReduced);
+  EEPROM.get(addr, loadedMaxHeaterWallTimeS); addr += sizeof(loadedMaxHeaterWallTimeS);
+
+  minLoadedBatteryV = loadedMinLoadedBatteryV;
+  maxBatterySagV = loadedMaxBatterySagV;
+  minIdleBatteryVFloor = loadedMinIdleBatteryVFloor;
+  usableVFull = loadedUsableVFull;
+  batteryAssessSettleMs = loadedBatteryAssessSettleMs;
+
+  if (schema == PARAM_EEPROM_SCHEMA_V2) {
+    heaterCapVFull = loadedHeaterCapVFull;
+    heaterPwmReduced = loadedHeaterPwmReduced;
+    maxHeaterWallTimeS = loadedMaxHeaterWallTimeS;
+  } else {
+    float slot28AsFloat = 0.0f;
+    float slot29AsFloat = 0.0f;
+    memcpy(&slot28AsFloat, &loadedHeaterPwmReduced, sizeof(float));
+    memcpy(&slot29AsFloat, &loadedMaxHeaterWallTimeS, sizeof(float));
+    if (looksLikeLegacyHeaterCapVoltage(slot28AsFloat)) {
+      Serial.println("EEPROM heater PWM migration: legacy voltage slots detected");
+      heaterCapVFull = looksLikeLegacyHeaterCapVoltage(loadedHeaterCapVFull)
+                           ? loadedHeaterCapVFull
+                           : kBatteryAssessDefaultHeaterCapVFull;
+      heaterPwmReduced = kBatteryAssessDefaultHeaterPwmReduced;
+    } else {
+      heaterCapVFull = loadedHeaterCapVFull;
+      heaterPwmReduced = loadedHeaterPwmReduced;
+    }
+    if (looksLikeLegacyHeaterCapVoltage(slot29AsFloat)) {
+      maxHeaterWallTimeS = kBatteryAssessDefaultMaxHeaterWallTimeS;
+    } else {
+      maxHeaterWallTimeS = loadedMaxHeaterWallTimeS;
+    }
+  }
+  return addr;
+}
+
+static bool verifyParametersReadBackFromEEPROM(const ParamEepromSnapshot& expected) {
+  int addr = sizeof(PARAM_MAGIC_NUMBER);
+  int readInt = 0;
+  long readLong = 0;
+  float readFloat = 0.0f;
+  uint16_t readU16 = 0;
+
+#define VERIFY_INT(field, label) \
+  EEPROM.get(addr, readInt); addr += sizeof(readInt); \
+  if (readInt != expected.field) { \
+    Serial.printf("EEPROM verify mismatch %s: expected %d read %d\n", label, expected.field, readInt); \
+    SerialBLE_print("EEPROM verify mismatch "); SerialBLE_println(label); \
+    return false; \
+  }
+
+#define VERIFY_LONG(field, label) \
+  EEPROM.get(addr, readLong); addr += sizeof(readLong); \
+  if (readLong != expected.field) { \
+    Serial.printf("EEPROM verify mismatch %s: expected %ld read %ld\n", label, expected.field, readLong); \
+    SerialBLE_print("EEPROM verify mismatch "); SerialBLE_println(label); \
+    return false; \
+  }
+
+#define VERIFY_FLOAT(field, label) \
+  EEPROM.get(addr, readFloat); addr += sizeof(readFloat); \
+  if (!eepromFloatNear(readFloat, expected.field)) { \
+    Serial.printf("EEPROM verify mismatch %s: expected %.6f read %.6f\n", label, expected.field, readFloat); \
+    SerialBLE_print("EEPROM verify mismatch "); SerialBLE_println(label); \
+    return false; \
+  }
+
+#define VERIFY_U16(field, label) \
+  EEPROM.get(addr, readU16); addr += sizeof(readU16); \
+  if (readU16 != expected.field) { \
+    Serial.printf("EEPROM verify mismatch %s: expected %u read %u\n", label, expected.field, readU16); \
+    SerialBLE_print("EEPROM verify mismatch "); SerialBLE_println(label); \
+    return false; \
+  }
+
+  VERIFY_INT(batteryThreshold, "batteryThreshold");
+  VERIFY_FLOAT(K, "K");
+  VERIFY_INT(F, "F");
+  VERIFY_LONG(T, "T");
+  VERIFY_FLOAT(thermistorResistance, "thermistorResistance");
+  VERIFY_INT(r2, "r2");
+  VERIFY_FLOAT(backupTime, "backupTime");
+  VERIFY_INT(r4, "r4");
+  VERIFY_INT(fanDuration, "fanDuration");
+  VERIFY_LONG(H, "H");
+  VERIFY_FLOAT(continueFeeder, "continueFeeder");
+  VERIFY_FLOAT(maxOpeningTime, "maxOpeningTime");
+  VERIFY_INT(typicalOpeningTime, "typicalOpeningTime");
+  VERIFY_FLOAT(MOTOR_CUT_TIME, "MOTOR_CUT_TIME");
+  VERIFY_FLOAT(CUT_MODE_HEAT_TIME, "CUT_MODE_HEAT_TIME");
+  VERIFY_FLOAT(postCoolingFanDuration, "postCoolingFanDuration");
+  VERIFY_FLOAT(preFeedFan, "preFeedFan");
+  VERIFY_FLOAT(fanReverseTime, "fanReverseTime");
+  VERIFY_FLOAT(fanReverseStartTime, "fanReverseStartTime");
+  VERIFY_FLOAT(backupTimeAfterReopen, "backupTimeAfterReopen");
+  VERIFY_FLOAT(CUT_MODE_TEMP, "CUT_MODE_TEMP");
+  VERIFY_FLOAT(heaterLowerToleranceC, "heaterLowerToleranceC");
+  VERIFY_FLOAT(heaterUpperToleranceC, "heaterUpperToleranceC");
+  VERIFY_FLOAT(COOL_OPEN_TEMP_C, "COOL_OPEN_TEMP_C");
+  VERIFY_LONG(MAX_COOL_WAIT_S, "MAX_COOL_WAIT_S");
+  VERIFY_FLOAT(minLoadedBatteryV, "minLoadedBatteryV");
+  VERIFY_FLOAT(maxBatterySagV, "maxBatterySagV");
+  VERIFY_FLOAT(minIdleBatteryVFloor, "minIdleBatteryVFloor");
+  VERIFY_FLOAT(usableVFull, "usableVFull");
+  VERIFY_U16(batteryAssessSettleMs, "batteryAssessSettleMs");
+  VERIFY_FLOAT(heaterCapVFull, "heaterCapVFull");
+  VERIFY_INT(heaterPwmReduced, "heaterPwmReduced");
+  VERIFY_LONG(maxHeaterWallTimeS, "maxHeaterWallTimeS");
+  VERIFY_LONG(heaterAbsoluteMaxOnS, "heaterAbsoluteMaxOnS");
+  VERIFY_FLOAT(MAX_TEMP_FAILSAFE_C, "MAX_TEMP_FAILSAFE_C");
+
+#undef VERIFY_INT
+#undef VERIFY_LONG
+#undef VERIFY_FLOAT
+#undef VERIFY_U16
+
+  uint16_t schemaRead = 0;
+  EEPROM.get(PARAM_EEPROM_SCHEMA_ADDR, schemaRead);
+  if (schemaRead != PARAM_EEPROM_SCHEMA_V2) {
+    Serial.printf("EEPROM verify mismatch schema: expected %u read %u\n",
+                  (unsigned)PARAM_EEPROM_SCHEMA_V2, (unsigned)schemaRead);
+    SerialBLE_println("EEPROM verify mismatch schema");
+    return false;
+  }
+  return true;
+}
+
+// Function to save parameters to EEPROM
+void saveParametersToEEPROM() {
+  logBootTiming("eeprom_params_save_start");
+  unsigned long beginStart = millis();
+  EEPROM.begin(EEPROM_SIZE);
+  Serial.printf("Boot timing: eeprom_params_begin,%lums\n", millis() - beginStart);
+  lastEEPROMWriteVerified = false;
+
+  ParamEepromSnapshot expected;
+  captureParamEepromSnapshot(expected);
+  
+  // Write magic number to verify valid data
+  EEPROM.put(PARAM_START_ADDR, PARAM_MAGIC_NUMBER);
+  
+  // Write parameters in order
+  int addr = sizeof(PARAM_MAGIC_NUMBER);
+  addr = writeParamBlobToEeprom(addr);
+  EEPROM.put(PARAM_EEPROM_SCHEMA_ADDR, PARAM_EEPROM_SCHEMA_V2);
   
   unsigned long commitStart = millis();
-  bool commitOk = EEPROM.commit();
+  bool commitOk = false;
+  reclaimNvsSpaceForParamEeprom();
+  for (int commitAttempt = 0; commitAttempt < 5; commitAttempt += 1) {
+    if (commitAttempt > 0) {
+      delay(50);
+    }
+    commitOk = EEPROM.commit();
+    if (commitOk) {
+      break;
+    }
+    Serial.printf("EEPROM commit failed (attempt %d/5), reclaiming NVS and retrying\n", commitAttempt + 1);
+    reclaimNvsSpaceForParamEeprom();
+  }
   char commitMsg[64];
   snprintf(commitMsg, sizeof(commitMsg), "eeprom_params_commit,%lums,ok=%d",
            millis() - commitStart, commitOk ? 1 : 0);
@@ -1951,12 +2220,14 @@ void saveParametersToEEPROM() {
   uint16_t verifyMagic;
   EEPROM.get(PARAM_START_ADDR, verifyMagic);
   
-  if (commitOk && verifyMagic == PARAM_MAGIC_NUMBER) {
+  if (commitOk && verifyMagic == PARAM_MAGIC_NUMBER &&
+      verifyParametersReadBackFromEEPROM(expected)) {
     lastEEPROMWriteVerified = true;
     Serial.println("Parameters saved to EEPROM - verification successful");
     SerialBLE_println("Parameters saved to EEPROM - verification successful");
     logBootTiming("eeprom_params_save_verified");
   } else {
+    lastEEPROMWriteVerified = false;
     Serial.printf("ERROR: EEPROM write verification failed! Commit OK: %s, Expected: 0x%04X, Read: 0x%04X\n", 
                   commitOk ? "true" : "false", PARAM_MAGIC_NUMBER, verifyMagic);
     SerialBLE_print("ERROR: EEPROM write verification failed! Expected: 0x");
@@ -2316,6 +2587,14 @@ void loadParametersFromEEPROM() {
   SerialBLE_println();
   
   if (magic == PARAM_MAGIC_NUMBER) {
+    uint16_t schema = PARAM_EEPROM_SCHEMA_V1;
+    EEPROM.get(PARAM_EEPROM_SCHEMA_ADDR, schema);
+    if (schema == 0xFFFF) {
+      schema = PARAM_EEPROM_SCHEMA_V1;
+    }
+    Serial.printf("EEPROM param schema: %u\n", (unsigned)schema);
+    bool needSchemaMigrate = (schema != PARAM_EEPROM_SCHEMA_V2);
+
     // Valid data found, load parameters
     int addr = sizeof(PARAM_MAGIC_NUMBER);
     EEPROM.get(addr, batteryThreshold); addr += sizeof(batteryThreshold);
@@ -2381,45 +2660,7 @@ void loadParametersFromEEPROM() {
     }
 
     // Battery assessment parameters (may be absent in older EEPROM layouts)
-    float loadedMinLoadedBatteryV = minLoadedBatteryV;
-    float loadedMaxBatterySagV = maxBatterySagV;
-    float loadedMinIdleBatteryVFloor = minIdleBatteryVFloor;
-    float loadedUsableVFull = usableVFull;
-    uint16_t loadedBatteryAssessSettleMs = batteryAssessSettleMs;
-    float loadedSlot27 = 0.0f;
-    float loadedSlot28 = 0.0f;
-    float loadedSlot29 = 0.0f;
-    EEPROM.get(addr, loadedMinLoadedBatteryV); addr += sizeof(loadedMinLoadedBatteryV);
-    EEPROM.get(addr, loadedMaxBatterySagV); addr += sizeof(loadedMaxBatterySagV);
-    EEPROM.get(addr, loadedMinIdleBatteryVFloor); addr += sizeof(loadedMinIdleBatteryVFloor);
-    EEPROM.get(addr, loadedUsableVFull); addr += sizeof(loadedUsableVFull);
-    EEPROM.get(addr, loadedBatteryAssessSettleMs); addr += sizeof(loadedBatteryAssessSettleMs);
-    EEPROM.get(addr, loadedSlot27); addr += sizeof(loadedSlot27);
-    EEPROM.get(addr, loadedSlot28); addr += sizeof(loadedSlot28);
-    EEPROM.get(addr, loadedSlot29); addr += sizeof(loadedSlot29);
-    minLoadedBatteryV = loadedMinLoadedBatteryV;
-    maxBatterySagV = loadedMaxBatterySagV;
-    minIdleBatteryVFloor = loadedMinIdleBatteryVFloor;
-    usableVFull = loadedUsableVFull;
-    batteryAssessSettleMs = loadedBatteryAssessSettleMs;
-    auto looksLikeLegacyHeaterCapVoltage = [](float v) {
-      return v == v && v >= 10.0f && v <= 13.5f;
-    };
-    if (looksLikeLegacyHeaterCapVoltage(loadedSlot28)) {
-      Serial.println("EEPROM heater PWM migration: legacy voltage slots detected");
-      heaterCapVFull = looksLikeLegacyHeaterCapVoltage(loadedSlot27)
-                           ? loadedSlot27
-                           : kBatteryAssessDefaultHeaterCapVFull;
-      heaterPwmReduced = kBatteryAssessDefaultHeaterPwmReduced;
-    } else {
-      heaterCapVFull = loadedSlot27;
-      heaterPwmReduced = (int)loadedSlot28;
-    }
-    if (looksLikeLegacyHeaterCapVoltage(loadedSlot29)) {
-      maxHeaterWallTimeS = kBatteryAssessDefaultMaxHeaterWallTimeS;
-    } else {
-      maxHeaterWallTimeS = (long)loadedSlot29;
-    }
+    addr = loadBatteryAssessTailFromEeprom(addr, schema);
     if (!validateBatteryAssessParams()) {
       applyBatteryAssessDefaults();
     }
@@ -2461,6 +2702,9 @@ void loadParametersFromEEPROM() {
     SerialBLE_println();
     EEPROM.end();
     logBootTiming("eeprom_params_load_valid_done");
+    if (needSchemaMigrate) {
+      g_pendingParamEepromSchemaStamp = true;
+    }
     return;
   }
 
@@ -2497,6 +2741,24 @@ void loadParametersFromEEPROM() {
     enterEEPROMInvalidErrorState("magic mismatch");
     logBootTiming("eeprom_params_corrupt_done");
     return;
+  }
+}
+
+void runDeferredParamEepromSchemaStampIfNeeded() {
+  if (!g_pendingParamEepromSchemaStamp) {
+    return;
+  }
+  Serial.println("EEPROM schema migration: stamping V2 layout");
+  SerialBLE_println("EEPROM schema migration: stamping V2 layout");
+  reclaimNvsSpaceForParamEeprom();
+  saveParametersToEEPROM();
+  if (lastEEPROMWriteVerified) {
+    g_pendingParamEepromSchemaStamp = false;
+    Serial.println("EEPROM schema V2 stamped successfully");
+    SerialBLE_println("EEPROM schema V2 stamped successfully");
+  } else {
+    Serial.println("EEPROM schema stamp deferred (NVS persist failed, will retry next boot)");
+    SerialBLE_println("EEPROM schema stamp deferred");
   }
 }
 
@@ -3385,6 +3647,47 @@ bool saveHWCFGBlob(const HWCFGConfigStore& store, bool updateLastGood) {
   return saved;
 }
 
+static bool eraseHwcfgNvsKey(const char* key) {
+  nvs_handle_t nvsHandle;
+  esp_err_t err = nvs_open(HWCFG_CONFIG_NAMESPACE, NVS_READWRITE, &nvsHandle);
+  if (err != ESP_OK) {
+    return false;
+  }
+  err = nvs_erase_key(nvsHandle, key);
+  if (err == ESP_OK) {
+    err = nvs_commit(nvsHandle);
+  } else if (err == ESP_ERR_NVS_NOT_FOUND) {
+    err = ESP_OK;
+  }
+  nvs_close(nvsHandle);
+  return err == ESP_OK;
+}
+
+bool reclaimNvsSpaceForParamEeprom() {
+  bool reclaimed = false;
+  if (hwcfgActiveOnSpiffs || SPIFFS.exists(HWCFG_ACTIVE_FILE)) {
+    if (eraseHwcfgNvsKey(HWCFG_ACTIVE_KEY)) {
+      Serial.println("Reclaimed NVS: erased hwcfg/active (SPIFFS copy retained)");
+      reclaimed = true;
+    }
+    // Orphan lkg NVS key may remain after active-only migration; SPIFFS is authoritative.
+    if (eraseHwcfgNvsKey(HWCFG_LAST_GOOD_KEY)) {
+      Serial.println("Reclaimed NVS: erased hwcfg/lkg (SPIFFS authoritative)");
+      reclaimed = true;
+    }
+  } else if (SPIFFS.exists(HWCFG_LAST_GOOD_FILE)) {
+    if (eraseHwcfgNvsKey(HWCFG_LAST_GOOD_KEY)) {
+      Serial.println("Reclaimed NVS: erased hwcfg/lkg (SPIFFS copy retained)");
+      reclaimed = true;
+    }
+  }
+  if (reclaimed) {
+    SerialBLE_println("Reclaimed NVS space for param EEPROM");
+    logBootTiming("nvs_reclaim_hwcfg_done");
+  }
+  return reclaimed;
+}
+
 bool migrateHWCFGBlobFromNVSToSPIFFS(const char* key, const HWCFGConfigStore& store) {
   const char* path = hwcfgFilePathForKey(key);
   if (path == NULL) {
@@ -3392,6 +3695,12 @@ bool migrateHWCFGBlobFromNVSToSPIFFS(const char* key, const HWCFGConfigStore& st
   }
   if (saveHWCFGBlobFile(path, store)) {
     Serial.printf("Migrated HWCFG %s record from NVS to SPIFFS\n", key);
+    if (eraseHwcfgNvsKey(key)) {
+      Serial.printf("Reclaimed NVS: erased hwcfg/%s after SPIFFS migration\n", key);
+    }
+    if (strcmp(key, HWCFG_ACTIVE_KEY) == 0) {
+      hwcfgActiveOnSpiffs = true;
+    }
     return true;
   }
   return false;
@@ -3468,6 +3777,8 @@ bool initializeHWCFGStore() {
     hwcfgStore = hwcfgScratchActive;
     hwcfgStoreInitialized = true;
     hwcfgSafeFault = false;
+    hwcfgActiveOnSpiffs = true;
+    reclaimNvsSpaceForParamEeprom();
     logBootTiming("hwcfg_path,spiffs_active");
     return true;
   }
@@ -3488,8 +3799,10 @@ bool initializeHWCFGStore() {
     hwcfgStore = hwcfgScratchLastGood;
     hwcfgStoreInitialized = true;
     hwcfgSafeFault = false;
+    hwcfgActiveOnSpiffs = true;
     logBootTiming("hwcfg_last_good_save_start");
     saveHWCFGBlob(hwcfgStore, false);
+    reclaimNvsSpaceForParamEeprom();
     logBootTiming("hwcfg_path,spiffs_last_good");
     return true;
   }
@@ -3516,6 +3829,8 @@ bool initializeHWCFGStore() {
     return false;
   }
   hwcfgSafeFault = false;
+  hwcfgActiveOnSpiffs = true;
+  reclaimNvsSpaceForParamEeprom();
   logBootTiming("hwcfg_path,defaults_saved");
   return true;
 }
@@ -5772,6 +6087,8 @@ void initCorePlatformServices() {
   if (!initializeHWCFGStore()) {
     Serial.println("WARNING: HWCFG store failed to initialize");
     SerialBLE_println("WARNING: HWCFG store init failed");
+  } else {
+    reclaimNvsSpaceForParamEeprom();
   }
   logBootTiming("hwcfg_done");
   if (ignoreM12Faults) {
@@ -5918,6 +6235,7 @@ void setup() {
     logBootTiming("eeprom_load_start");
     loadParametersFromEEPROM();
     loadFlushCountFromEEPROM();
+    runDeferredParamEepromSchemaStampIfNeeded();
     logBootTiming("eeprom_load_done");
     logBootCheckpoint("eeprom_ok");
     knownResistor = thermistorResistance;
@@ -5979,6 +6297,7 @@ void setup() {
   logBootTiming("eeprom_load_start");
   loadParametersFromEEPROM();
   loadFlushCountFromEEPROM();
+  runDeferredParamEepromSchemaStampIfNeeded();
   logBootTiming("eeprom_load_done");
   logBootCheckpoint("eeprom_ok");
   knownResistor = thermistorResistance;

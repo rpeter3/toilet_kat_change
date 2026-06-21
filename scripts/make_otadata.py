@@ -26,8 +26,8 @@ def make_entry(seq: int, label: str, ota_state: int = 0xFFFFFFFF) -> bytes:
 
 def make_otadata(active_label: str, active_seq: int | None = None) -> bytes:
     if active_seq is None:
-        # even seq -> ota_0, odd seq -> ota_1 (ESP-IDF bootloader convention)
-        active_seq = 2 if active_label == "ota_0" else 3
+        # odd seq -> ota_0, even seq -> ota_1 (ESP-IDF bootloader convention)
+        active_seq = 1 if active_label == "ota_0" else 2
 
     entry = make_entry(active_seq, active_label)
     sector0 = bytearray(0x1000)

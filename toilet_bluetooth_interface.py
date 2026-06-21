@@ -31,6 +31,9 @@ UPDATE_CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea3"
 OTA_ENABLE_WAIT_S = 4.0
 OTA_ROLLBACK_RESPONSE_TIMEOUT_S = 5.0
 OTA_ROLLBACK_POLL_INTERVAL_S = 0.15
+MAX_PARAM_WRITE_ATTEMPTS = 5
+PARAM_WRITE_RETRY_DELAY_S = 0.5
+PARAM_WRITE_PERSIST_FAILED = "PARAM_WRITE_ERR:PERSIST_FAILED"
 # Legacy: pre-refactor firmware used fea0 for commands, responses, and params
 CHARACTERISTIC_UUID = COMMAND_CHARACTERISTIC_UUID
 DEVICE_NAME = "ESP32 Toilet"
@@ -535,6 +538,13 @@ class ToiletSystemInterface:
                 return response
         return response
 
+    def _should_retry_param_write(self, response: str) -> bool:
+        if response == "AUTH_REQUIRED":
+            return False
+        if response.startswith("PARAM_WRITE_ERR:") and response != PARAM_WRITE_PERSIST_FAILED:
+            return False
+        return True
+
     async def update_params(self, new_params: Dict[str, Any]) -> bool:
         """Update parameters on ESP32"""
         if not self.connected:
@@ -554,33 +564,75 @@ class ToiletSystemInterface:
             message = ",".join(message_parts)
             print(f"Sending message: {message[:60]}...")
             
-            # Guard behind trust; write to fea6, read ack from fea4
             if not self.trusted:
                 print("Trust handshake required before parameter update. Starting trust flow...")
                 if not await self.trust_handshake():
                     print("Parameter update aborted: trust handshake failed or timed out.")
                     return False
-            await self.client.write_gatt_char(
-                PARAM_WRITE_CHARACTERISTIC_UUID,
-                message.encode("utf-8"),
-                response=True,
-            )
-            await asyncio.sleep(0.2)
-            response = await self._read_param_write_response()
-            if response == "PARAM_WRITE_ACK":
-                print("Parameters updated successfully")
-                return True
-            if response == "PARAM_UPDATE_BLOCKED_FLUSH":
-                print("Parameter update rejected: flush in progress (firmware blocked this write).")
-                return False
-            if response == "AUTH_REQUIRED":
-                self.trusted = False  # Per spec: reset local trust state
-                print("Parameter update rejected: trust handshake required. Run trust handshake and retry.")
-                return False
-            if response.startswith("PARAM_WRITE_ERR:"):
-                print(f"Parameter update rejected: {response}")
-                return False
-            print(f"Parameter update failed: unexpected response: {response}")
+
+            for attempt in range(1, MAX_PARAM_WRITE_ATTEMPTS + 1):
+                try:
+                    await self.client.write_gatt_char(
+                        PARAM_WRITE_CHARACTERISTIC_UUID,
+                        message.encode("utf-8"),
+                        response=True,
+                    )
+                    await asyncio.sleep(0.2)
+                    response = await self._read_param_write_response()
+                    if response == "PARAM_WRITE_ACK":
+                        if attempt > 1:
+                            print(f"Parameters updated successfully on attempt {attempt}")
+                        else:
+                            print("Parameters updated successfully")
+                        return True
+                    if response == "AUTH_REQUIRED":
+                        self.trusted = False
+                        print("Parameter update rejected: trust handshake required. Run trust handshake and retry.")
+                        return False
+                    if response.startswith("PARAM_WRITE_ERR:") and response != PARAM_WRITE_PERSIST_FAILED:
+                        print(f"Parameter update rejected: {response}")
+                        return False
+
+                    if response == PARAM_WRITE_PERSIST_FAILED:
+                        print(
+                            f"Parameter persist failed (attempt {attempt}/{MAX_PARAM_WRITE_ATTEMPTS}): "
+                            "device could not save to EEPROM"
+                        )
+                    elif response == "PARAM_UPDATE_BLOCKED_FLUSH":
+                        print(
+                            f"Flush in progress (attempt {attempt}/{MAX_PARAM_WRITE_ATTEMPTS}), retrying..."
+                        )
+                    else:
+                        print(
+                            f"Parameter update failed (attempt {attempt}/{MAX_PARAM_WRITE_ATTEMPTS}): "
+                            f"{response or 'empty response'}"
+                        )
+
+                    if not self._should_retry_param_write(response) or attempt == MAX_PARAM_WRITE_ATTEMPTS:
+                        if response == "PARAM_UPDATE_BLOCKED_FLUSH":
+                            print("Parameter update rejected: flush in progress (firmware blocked this write).")
+                        elif response == PARAM_WRITE_PERSIST_FAILED:
+                            print(
+                                "Parameter update rejected: device failed to save parameters after "
+                                f"{MAX_PARAM_WRITE_ATTEMPTS} attempts."
+                            )
+                        elif response:
+                            print(f"Parameter update failed: unexpected response: {response}")
+                        return False
+                except Exception as attempt_error:
+                    if attempt == MAX_PARAM_WRITE_ATTEMPTS:
+                        print(
+                            f"Failed to update parameters after {MAX_PARAM_WRITE_ATTEMPTS} attempts: "
+                            f"{attempt_error}"
+                        )
+                        return False
+                    print(
+                        f"Parameter write error (attempt {attempt}/{MAX_PARAM_WRITE_ATTEMPTS}): "
+                        f"{attempt_error}"
+                    )
+
+                await asyncio.sleep(PARAM_WRITE_RETRY_DELAY_S)
+
             return False
             
         except Exception as e:
