@@ -373,6 +373,11 @@ void clearMotorHomingDeferred();
 void applyLoadedMotorHomingDeferred();
 bool shouldDeferHomingAtBoot(const char** reason);
 void tryStartDeferredHomingIfReady();
+const char* motorHomingPhaseName(uint8_t phase);
+void resetMotorHomingRetryState(const char* reason);
+bool canStartDeferredHomingRetry();
+void recordMotorHomingFailure(uint8_t phase, unsigned long elapsedMs, int openSw, int closeSw, int m1Nfault);
+void abortMotorHomingOnTimeout(uint8_t phase);
 float readTemperature();
 float readM1Current();
 float readHeaterCurrent();
@@ -441,6 +446,7 @@ bool saveDevModeSetting(bool enabled);
 bool setDevModeEnabled(bool enabled);
 String buildDevModeStatusMessage();
 void logMotorFaultDebug(const char* context);
+void pollM1FaultLogOnly();
 float readMainThermistorResistanceOhms();
 bool isHardwareLikelyDisconnectedForUserAction();
 void playHardwareNotConnectedAlert();
@@ -692,6 +698,7 @@ const char* HOMING_DEFERRED_NVS_KEY = "homing_deferred";
 const char* HOMING_DEFER_REASON_NVS_KEY = "homing_defer_reason";
 const size_t HOMING_DEFER_REASON_MAX = 32;
 const unsigned long HOMING_RETRY_CHECK_INTERVAL_MS = 5000;
+const uint8_t HOMING_DEFER_MAX_CONSECUTIVE_FAILURES = 3;
 const char* HW_MATRIX_NAMESPACE = "hwmeta";
 const char* HW_MATRIX_ACTIVE_KEY = "matrix";
 const char* HW_MATRIX_LAST_GOOD_KEY = "matrix_lkg";
@@ -713,6 +720,10 @@ unsigned long lastM12RecoveryCycleMillis = 0;
 unsigned long m12RecoverySuccessCount = 0;
 unsigned long m12RecoveryFailureCount = 0;
 unsigned long suppressedM12RecoveryCycles = 0;
+
+const unsigned long M1_FAULT_POLL_INTERVAL_MS = 250;
+const uint8_t M1_FAULT_DEBOUNCE_SAMPLES = 3;
+const unsigned long M1_FAULT_HELD_LOG_MS = 5000;
 
 unsigned long lastActivityMillis = 0;
 bool bleEnabled = true;
@@ -900,6 +911,8 @@ bool motorHomingStartOpenSwitchClosed = false;
 bool motorHomingDeferred = false;
 char motorHomingDeferReason[HOMING_DEFER_REASON_MAX] = "";
 unsigned long lastHomingRetryCheckMs = 0;
+static uint8_t motorHomingConsecutiveFailures = 0;
+static bool motorHomingRetrySuppressed = false;
 static bool lastBootHeaterTestSkipped = false;
 static const char* lastBootHeaterSkipReason = nullptr;
 const uint16_t VIRGIN_EEPROM_MAGIC = 0xFFFF;
@@ -6734,8 +6747,13 @@ void loop() {
         }
       } else if (!isFlushing && motorHomingDeferred && !motorHomingActive) {
         if (!button1DisconnectAlertedForCurrentPress) {
-          SerialBLE_println("Flush blocked: charge battery / homing pending");
-          Serial.println("Flush blocked: homing deferred (charge battery)");
+          if (motorHomingRetrySuppressed) {
+            SerialBLE_println("Flush blocked: homing failed (power cycle after repair)");
+            Serial.println("Flush blocked: homing failed (power cycle after repair)");
+          } else {
+            SerialBLE_println("Flush blocked: charge battery / homing pending");
+            Serial.println("Flush blocked: homing deferred (charge battery)");
+          }
           int level = batteryAssessment.valid ? batteryAssessment.usablePercent : 0;
           showBatteryLevelFeedback(level, false);
           button1DisconnectAlertedForCurrentPress = true;
@@ -6951,6 +6969,7 @@ void loop() {
     }
   }
   maintainEEPROMErrorIndicator();
+  pollM1FaultLogOnly();
   feedTaskWatchdog();
   delay(1);
 }
@@ -8574,7 +8593,8 @@ bool assessBatteryUsable(const char* tag, bool forceRefresh, bool* outFlushAllow
   storeBatteryAssessment(vIdle, vLoadWorst, sagWorst, capDuty, assessPassed);
   batteryAssessment.inProgress = false;
   clearLowBatteryErrorIfRecovered(assessPassed);
-  if (assessPassed && motorHomingDeferred && !motorHomingActive && !isFlushing) {
+  if (assessPassed && motorHomingDeferred && !motorHomingActive && !isFlushing &&
+      canStartDeferredHomingRetry()) {
     logPowerTestEvent("homing_defer", "assess_pass kick homing", true);
     startMotorHoming(true);
   }
@@ -8751,7 +8771,96 @@ void clearMotorHomingDeferredFromNvs() {
   nvs_close(nvsHandle);
 }
 
+const char* motorHomingPhaseName(uint8_t phase) {
+  switch (phase) {
+    case HOMING_INIT: return "INIT";
+    case HOMING_PARTIAL_CLOSE: return "PARTIAL_CLOSE";
+    case HOMING_CLOSE_EXTRA: return "CLOSE_EXTRA";
+    case HOMING_OPEN_FULL: return "OPEN_FULL";
+    default: return "UNKNOWN";
+  }
+}
+
+void resetMotorHomingRetryState(const char* reason) {
+  uint8_t priorFailures = motorHomingConsecutiveFailures;
+  motorHomingConsecutiveFailures = 0;
+  motorHomingRetrySuppressed = false;
+  if (reason && priorFailures > 0) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "retry_state_reset reason=%s prior_failures=%u",
+             reason, (unsigned)priorFailures);
+    logPowerTestEvent("homing_defer", msg, true);
+  }
+}
+
+bool canStartDeferredHomingRetry() {
+  return !motorHomingRetrySuppressed;
+}
+
+void recordMotorHomingFailure(uint8_t phase, unsigned long elapsedMs, int openSw, int closeSw, int m1Nfault) {
+  motorHomingConsecutiveFailures++;
+  const char* phaseName = motorHomingPhaseName(phase);
+  const char* deferReason = motorHomingDeferReason[0] ? motorHomingDeferReason : "unknown";
+
+  char msg[160];
+  snprintf(msg, sizeof(msg),
+           "attempt_fail attempt=%u/%u phase=%s reason=motor_timeout elapsed_ms=%lu open_sw=%d close_sw=%d m1_nfault=%d defer_reason=%s",
+           (unsigned)motorHomingConsecutiveFailures,
+           (unsigned)HOMING_DEFER_MAX_CONSECUTIVE_FAILURES,
+           phaseName,
+           elapsedMs,
+           openSw,
+           closeSw,
+           m1Nfault,
+           deferReason);
+  logPowerTestEvent("homing_defer", msg, true);
+
+  if (motorHomingConsecutiveFailures >= HOMING_DEFER_MAX_CONSECUTIVE_FAILURES) {
+    motorHomingRetrySuppressed = true;
+    snprintf(msg, sizeof(msg),
+             "retry_exhausted failures=%u/%u last_phase=%s action=power_cycle_to_retry flush_blocked=1",
+             (unsigned)motorHomingConsecutiveFailures,
+             (unsigned)HOMING_DEFER_MAX_CONSECUTIVE_FAILURES,
+             phaseName);
+    logPowerTestEvent("homing_defer", msg, true);
+    Serial.println("Homing retries STOPPED (3 failures). Fix mechanism, then power cycle to retry.");
+    SerialBLE_println("Homing retries STOPPED (3 failures). Fix mechanism, then power cycle to retry.");
+    logError("runtime", 1, "homing_retry_exhausted", true);
+  }
+}
+
+void abortMotorHomingOnTimeout(uint8_t phase) {
+  unsigned long elapsedMs = millis() - motorHomingPhaseStartMillis;
+  int openSw = (digitalRead(microswitchOpenPin) == LOW) ? 1 : 0;
+  int closeSw = (digitalRead(microswitchClosePin) == LOW) ? 1 : 0;
+  int m1Nfault = digitalRead(M1NFAULT_PIN);
+  const char* phaseName = motorHomingPhaseName(phase);
+
+  char humanLine[128];
+  snprintf(humanLine, sizeof(humanLine),
+           "Homing FAILED (timeout): phase=%s elapsed_ms=%lu open_sw=%d close_sw=%d m1_nfault=%d",
+           phaseName, elapsedMs, openSw, closeSw, m1Nfault);
+  Serial.println(humanLine);
+  SerialBLE_println(humanLine);
+
+  if (motorHomingDeferred) {
+    recordMotorHomingFailure(phase, elapsedMs, openSw, closeSw, m1Nfault);
+  }
+
+  if (ERROR_CODE == 0) {
+    ERROR_CODE = 1;
+    flashLeds();
+    stopEverything();
+    LEDErrorCode(ERROR_CODE);
+  }
+  motors.setM1Speed(0);
+  mechanismMotorRunning = false;
+  motorHomingActive = false;
+  motorHomingPhase = HOMING_IDLE;
+}
+
 void deferMotorHoming(const char* reason) {
+  resetMotorHomingRetryState(nullptr);
   motorHomingDeferred = true;
   if (reason) {
     strncpy(motorHomingDeferReason, reason, HOMING_DEFER_REASON_MAX - 1);
@@ -8781,6 +8890,7 @@ void clearMotorHomingDeferred() {
   motorHomingDeferReason[0] = '\0';
   clearMotorHomingDeferredFromNvs();
   logPowerTestEvent("homing_defer", "complete deferred_cleared", true);
+  resetMotorHomingRetryState("homing_success");
 
   clearLowBatteryErrorIfRecovered(true);
 }
@@ -8839,6 +8949,15 @@ void tryStartDeferredHomingIfReady() {
   }
   lastHomingRetryCheckMs = now;
 
+  if (motorHomingRetrySuppressed) {
+    char msg[80];
+    snprintf(msg, sizeof(msg), "retry_suppressed failures=%u/%u waiting_for_power_cycle",
+             (unsigned)motorHomingConsecutiveFailures,
+             (unsigned)HOMING_DEFER_MAX_CONSECUTIVE_FAILURES);
+    logPowerTestEvent("homing_defer", msg, true);
+    return;
+  }
+
   if (!isBatteryOkForHeaterTest()) {
     float v = readBatteryVoltageQuiet();
     char msg[80];
@@ -8847,7 +8966,12 @@ void tryStartDeferredHomingIfReady() {
     return;
   }
 
-  logPowerTestEvent("homing_defer", "retry_start battery_ok", true);
+  char msg[128];
+  snprintf(msg, sizeof(msg), "retry_start attempt=%u/%u battery_ok defer_reason=%s",
+           (unsigned)(motorHomingConsecutiveFailures + 1),
+           (unsigned)HOMING_DEFER_MAX_CONSECUTIVE_FAILURES,
+           motorHomingDeferReason[0] ? motorHomingDeferReason : "unknown");
+  logPowerTestEvent("homing_defer", msg, true);
   startMotorHoming(true);
 }
 
@@ -9623,16 +9747,7 @@ void updateMotorHoming() {
     }
     case HOMING_PARTIAL_CLOSE: {
       if (millis() - motorHomingPhaseStartMillis > maxOpeningTimeMs()) {
-        if (ERROR_CODE == 0) {
-          ERROR_CODE = 1;
-          flashLeds();
-          stopEverything();
-          LEDErrorCode(ERROR_CODE);
-        }
-        motors.setM1Speed(0);
-        mechanismMotorRunning = false;
-        motorHomingActive = false;
-        motorHomingPhase = HOMING_IDLE;
+        abortMotorHomingOnTimeout(motorHomingPhase);
         return;
       }
       if (digitalRead(microswitchOpenPin) != LOW) {
@@ -9656,16 +9771,7 @@ void updateMotorHoming() {
     }
     case HOMING_OPEN_FULL: {
       if (millis() - motorHomingPhaseStartMillis > maxOpeningTimeMs()) {
-        if (ERROR_CODE == 0) {
-          ERROR_CODE = 1;
-          flashLeds();
-          stopEverything();
-          LEDErrorCode(ERROR_CODE);
-        }
-        motors.setM1Speed(0);
-        mechanismMotorRunning = false;
-        motorHomingActive = false;
-        motorHomingPhase = HOMING_IDLE;
+        abortMotorHomingOnTimeout(motorHomingPhase);
         return;
       }
       if (digitalRead(microswitchOpenPin) == LOW) {
@@ -9849,6 +9955,81 @@ float readHeaterCurrent() {
   SerialBLE_print("Heater current:");
   SerialBLE_println(current);
   return current;
+}
+
+static void logM1FaultObservedEvent(const char* event, int m1NfaultRaw, float m1A, unsigned suppressedHeld) {
+  char msg[160];
+  if (motorHomingActive) {
+    snprintf(msg, sizeof(msg), "%s M1NFAULT=%d m1A=%.2f homing=%s",
+             event, m1NfaultRaw, m1A, motorHomingPhaseName(motorHomingPhase));
+  } else if (suppressedHeld > 0) {
+    snprintf(msg, sizeof(msg), "%s M1NFAULT=%d m1A=%.2f suppressed=%u",
+             event, m1NfaultRaw, m1A, suppressedHeld);
+  } else {
+    snprintf(msg, sizeof(msg), "%s M1NFAULT=%d m1A=%.2f",
+             event, m1NfaultRaw, m1A);
+  }
+  Serial.println(msg);
+  SerialBLE_println(msg);
+  logError("m1_fault", 0, msg, true);
+}
+
+void pollM1FaultLogOnly() {
+  static unsigned long lastPollMs = 0;
+  static uint8_t debounceCount = 0;
+  static bool faultEpisodeActive = false;
+  static unsigned long lastHeldLogMs = 0;
+  static unsigned long suppressedHeldLogs = 0;
+
+  if (!isM1MotorActive()) {
+    if (faultEpisodeActive) {
+      int m1NfaultRaw = digitalRead(M1NFAULT_PIN);
+      float m1A = readM1Current();
+      logM1FaultObservedEvent("nfault_cleared", m1NfaultRaw, m1A, 0);
+      faultEpisodeActive = false;
+    }
+    debounceCount = 0;
+    lastHeldLogMs = 0;
+    suppressedHeldLogs = 0;
+    return;
+  }
+
+  unsigned long now = millis();
+  if (lastPollMs != 0 && (now - lastPollMs) < M1_FAULT_POLL_INTERVAL_MS) {
+    return;
+  }
+  lastPollMs = now;
+
+  int m1NfaultRaw = digitalRead(M1NFAULT_PIN);
+  float m1A = readM1Current();
+
+  if (getM1Fault()) {
+    if (debounceCount < M1_FAULT_DEBOUNCE_SAMPLES) {
+      debounceCount++;
+    }
+    if (debounceCount >= M1_FAULT_DEBOUNCE_SAMPLES) {
+      if (!faultEpisodeActive) {
+        logM1FaultObservedEvent("nfault_asserted", m1NfaultRaw, m1A, 0);
+        faultEpisodeActive = true;
+        lastHeldLogMs = now;
+        suppressedHeldLogs = 0;
+      } else if (lastHeldLogMs == 0 || (now - lastHeldLogMs >= M1_FAULT_HELD_LOG_MS)) {
+        logM1FaultObservedEvent("nfault_held", m1NfaultRaw, m1A, suppressedHeldLogs);
+        lastHeldLogMs = now;
+        suppressedHeldLogs = 0;
+      } else {
+        suppressedHeldLogs++;
+      }
+    }
+  } else {
+    if (faultEpisodeActive) {
+      logM1FaultObservedEvent("nfault_cleared", m1NfaultRaw, m1A, 0);
+      faultEpisodeActive = false;
+    }
+    debounceCount = 0;
+    lastHeldLogMs = 0;
+    suppressedHeldLogs = 0;
+  }
 }
 
 // Enhanced motor fault checking for all 3 motors
