@@ -273,14 +273,14 @@ struct HWCFGConfigStore {
 #  if __has_include("software_version_build.h")
 #    include "software_version_build.h"
 #  else
-const char* SOFTWARE_VERSION_NUMBER = "4.2.4";
+const char* SOFTWARE_VERSION_NUMBER = "4.2.5";
 const char* FACTORY_SOFTWARE_DATE = "2026-06-18";
-const char* SOFTWARE_BUILD_DATE = "2026-06-21";  // YYYY-MM-DD — update with each build
+const char* SOFTWARE_BUILD_DATE = "2026-06-24";  // YYYY-MM-DD — update with each build
 #  endif
 #else
-const char* SOFTWARE_VERSION_NUMBER = "4.2.4";
+const char* SOFTWARE_VERSION_NUMBER = "4.2.5";
 const char* FACTORY_SOFTWARE_DATE = "2026-06-18";
-const char* SOFTWARE_BUILD_DATE = "2026-06-21";  // YYYY-MM-DD — update with each build
+const char* SOFTWARE_BUILD_DATE = "2026-06-24";  // YYYY-MM-DD — update with each build
 #endif
 
 // Forward declarations
@@ -375,6 +375,11 @@ void clearMotorHomingDeferred();
 void applyLoadedMotorHomingDeferred();
 bool shouldDeferHomingAtBoot(const char** reason);
 void tryStartDeferredHomingIfReady();
+const char* motorHomingPhaseName(uint8_t phase);
+void resetMotorHomingRetryState(const char* reason);
+bool canStartDeferredHomingRetry();
+void recordMotorHomingFailure(uint8_t phase, unsigned long elapsedMs, int openSw, int closeSw, int m1Nfault);
+void abortMotorHomingOnTimeout(uint8_t phase);
 float readTemperature();
 float readM1Current();
 float readHeaterCurrent();
@@ -443,6 +448,7 @@ bool saveDevModeSetting(bool enabled);
 bool setDevModeEnabled(bool enabled);
 String buildDevModeStatusMessage();
 void logMotorFaultDebug(const char* context);
+void pollM1FaultLogOnly();
 float readMainThermistorResistanceOhms();
 bool isHardwareLikelyDisconnectedForUserAction();
 void playHardwareNotConnectedAlert();
@@ -694,6 +700,7 @@ const char* HOMING_DEFERRED_NVS_KEY = "homing_deferred";
 const char* HOMING_DEFER_REASON_NVS_KEY = "homing_defer_reason";
 const size_t HOMING_DEFER_REASON_MAX = 32;
 const unsigned long HOMING_RETRY_CHECK_INTERVAL_MS = 5000;
+const uint8_t HOMING_DEFER_MAX_CONSECUTIVE_FAILURES = 3;
 const char* HW_MATRIX_NAMESPACE = "hwmeta";
 const char* HW_MATRIX_ACTIVE_KEY = "matrix";
 const char* HW_MATRIX_LAST_GOOD_KEY = "matrix_lkg";
@@ -716,256 +723,262 @@ unsigned long m12RecoverySuccessCount = 0;
 unsigned long m12RecoveryFailureCount = 0;
 unsigned long suppressedM12RecoveryCycles = 0;
 
+const unsigned long M1_FAULT_POLL_INTERVAL_MS = 250;
+const uint8_t M1_FAULT_DEBOUNCE_SAMPLES = 3;
+const unsigned long M1_FAULT_HELD_LOG_MS = 5000;
+
 unsigned long lastActivityMillis = 0;
 bool bleEnabled = true;
 
-#line 720 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 731 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void noteBleDiagnosticActivity();
-#line 756 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 767 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool otaTransferInProgress();
-#line 825 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 836 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static unsigned long maxOpeningTimeMs();
-#line 1010 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 1023 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool enforceHeaterToleranceGap(const char* sourceTag, bool notifyBle);
-#line 1746 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 1759 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void mcp_setup();
-#line 1792 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 1805 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void mcp_digitalWrite(int pin, int value);
-#line 1800 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 1813 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 int mcp_digitalRead(int pin);
-#line 1948 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 1961 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static void captureParamEepromSnapshot(ParamEepromSnapshot& snap);
-#line 1986 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 1999 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static bool eepromFloatNear(float a, float b);
-#line 1994 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2007 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static bool looksLikeLegacyHeaterCapVoltage(float v);
-#line 1998 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2011 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static int writeParamBlobToEeprom(int addr);
-#line 2037 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2050 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static int loadBatteryAssessTailFromEeprom(int addr, uint16_t schema);
-#line 2090 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2103 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static bool verifyParametersReadBackFromEEPROM(const ParamEepromSnapshot& expected);
-#line 2341 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2354 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static bool detectCoredump(size_t* outSize);
-#line 2382 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2395 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static String base64EncodeBuffer(const uint8_t* data, size_t len);
-#line 2455 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2468 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static String getCurrentContextString();
-#line 2512 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2525 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void logFlushEvent(const char* type, int code, const char* msg, bool includeContext);
-#line 2519 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2532 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void setFlushStep(int newStep, bool logTransition);
-#line 2855 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2868 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void copyBoundedString(char* dest, size_t destSize, const char* src);
-#line 2867 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2880 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool isIso8601DateOrEmpty(const char* dateValue);
-#line 2895 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2908 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool isSafeFieldString(const char* text, bool allowEmpty);
-#line 2915 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2928 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 uint32_t computeHardwareMatrixCRC(const HardwareMatrix& matrix);
-#line 2929 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
-void refreshHardwareMatrixCRC(HardwareMatrix& matrix);
-#line 2933 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
-void setHardwareComponentDefaults(HardwareComponentEntry& entry, const char* version, const char* description, const char* installDate);
 #line 2942 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+void refreshHardwareMatrixCRC(HardwareMatrix& matrix);
+#line 2946 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+void setHardwareComponentDefaults(HardwareComponentEntry& entry, const char* version, const char* description, const char* installDate);
+#line 2955 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void initializeDefaultHardwareMatrix(HardwareMatrix& matrix);
-#line 2961 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2974 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool syncSoftwareVersionMatrixEntry(HardwareMatrix& matrix);
-#line 2979 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 2992 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool tryLoadHardwareMatrixFromNvs(const char* key, HardwareMatrix& outMatrix, String& validationError, bool* outRepaired);
-#line 2990 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3003 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool validateHardwareMatrix(const HardwareMatrix& matrix, String* errorCode);
-#line 3050 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3063 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool loadHardwareMatrixBlob(const char* key, HardwareMatrix& outMatrix);
-#line 3069 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3082 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool saveHardwareMatrixBlob(const HardwareMatrix& matrix, bool updateLastKnownGood);
-#line 3267 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3280 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 uint32_t computeCRC32Bytes(const uint8_t* bytes, size_t len);
-#line 3279 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3292 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 uint32_t computeHWCFGCRC(const HWCFGConfigStore& store);
-#line 3284 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3297 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void refreshHWCFGCRC(HWCFGConfigStore& store);
-#line 3288 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3301 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool parseStrictFloat(const String& input, float& out);
-#line 3309 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3322 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool isKnownParameterKey(const String& key);
-#line 3324 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3337 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool validateParameterBlob(const String& componentName, const String& paramsBlob, String& errorCode);
-#line 3444 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3457 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool applyParameterBlobToRuntime(const String& paramsBlob, String& errorCode);
-#line 3529 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3542 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 int findHWCFGProfileIndex(const String& componentName, const String& componentVersion);
-#line 3540 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3553 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 int allocateHWCFGProfileSlot();
-#line 3549 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3562 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 const char * hwcfgFilePathForKey(const char* key);
-#line 3559 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3572 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool loadHWCFGBlobFromNVS(const char* key, HWCFGConfigStore& outStore);
-#line 3576 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3589 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool loadHWCFGBlobFromSPIFFS(const char* path, HWCFGConfigStore& outStore);
-#line 3593 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3606 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool loadHWCFGBlob(const char* key, HWCFGConfigStore& outStore);
-#line 3601 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3614 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool saveHWCFGBlobFile(const char* path, const HWCFGConfigStore& store);
-#line 3639 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3652 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool saveHWCFGBlob(const HWCFGConfigStore& store, bool updateLastGood);
-#line 3650 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3663 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static bool eraseHwcfgNvsKey(const char* key);
-#line 3691 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3704 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool migrateHWCFGBlobFromNVSToSPIFFS(const char* key, const HWCFGConfigStore& store);
-#line 3709 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3722 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool validateHWCFGStore(const HWCFGConfigStore& store, String& errorCode);
-#line 3756 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3769 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void initializeDefaultHWCFG(HWCFGConfigStore& store);
-#line 3838 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3851 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 String buildHWCFGActiveSummary(bool lastGood);
-#line 3862 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 3875 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool validateCandidateChange(const String& componentName, const String& newVersion, int& outProfileIndex, String& reason);
-#line 4443 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 4456 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static void initDefaultOtaDiag(OtaDiagStore& diag);
-#line 4452 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 4465 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static void copyPartitionLabel(const esp_partition_t* part, char* buf, size_t len);
-#line 4464 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 4477 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static const esp_partition_t* findPartitionBySubtype(uint8_t subtype);
-#line 4474 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 4487 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static const char * otaResetReasonToString(esp_reset_reason_t reason);
-#line 4490 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 4503 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static bool otaIsAbnormalResetReason(esp_reset_reason_t reason);
-#line 4495 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 4508 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static void loadOtaDiag(OtaDiagStore& diag);
-#line 4525 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 4538 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static bool saveOtaDiag(const OtaDiagStore& diag);
-#line 4561 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 4574 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static bool captureSpiffsLogTailToNvs(OtaDiagStore& diag);
-#line 4773 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 4786 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static bool otaPartitionHasAppImage(const esp_partition_t* part);
-#line 4784 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 4797 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static const esp_partition_t* findAlternateOtaSlotPartition();
-#line 4804 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 4817 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static bool persistRollbackSubtype(uint8_t subtype);
-#line 4821 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 4834 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static bool applyRollbackBootPartition(const esp_partition_t* rollback_partition, String* errorCode);
-#line 4852 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 4865 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static const esp_partition_t* resolveRollbackTargetPartition(bool* usedAlternateOut);
-#line 5081 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 5094 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static String getFirmwareRollbackBusyError();
-#line 5091 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 5104 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static const char * getFirmwareRollbackBusyErrorCode();
-#line 5481 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 5494 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void heaterEmergencyShutdown();
-#line 5561 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 5574 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void enableM12Drivers();
-#line 5566 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
-void disableM12Drivers();
-#line 5571 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
-bool getM1Fault();
-#line 5575 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
-bool getM2Fault();
 #line 5579 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+void disableM12Drivers();
+#line 5584 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+bool getM1Fault();
+#line 5588 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+bool getM2Fault();
+#line 5592 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool getM12Fault();
-#line 5583 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 5596 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void clearHeaterRtcSession();
-#line 5623 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 5636 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static size_t getErrorLogFileSize();
-#line 5820 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 5833 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static bool subscribeLoopTaskToWdt();
-#line 5830 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 5843 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static void initTaskWatchdogCore();
-#line 5904 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 5917 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void latchHeaterFailsafeError(const char* msg);
-#line 6101 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 6114 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void testHeaterCurrent(bool lowBatteryAsError);
-#line 6203 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 6216 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void setup();
-#line 6371 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 6384 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void loop();
-#line 6992 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 7011 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void flushSequence();
-#line 7561 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 7580 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void flashLowBattLeds(int n);
-#line 7584 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 7603 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void circleLeds();
-#line 7595 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 7614 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void resetFeedButtonLeds();
-#line 7604 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 7623 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void updateFeedButtonLeds(bool forceImmediate);
-#line 7837 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 7856 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void publishOTAStatus(const String& status, bool notify);
-#line 7847 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 7866 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void publishOTAErrorStatus(const char* reasonCode, const char* detail);
-#line 8148 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8167 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static float batteryVoltageFromAdc(int analogValue);
-#line 8153 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8172 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static int batteryChargeLevelFromVoltage(float batteryVoltage);
-#line 8238 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8257 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static int usablePercentFromVLoad(float vLoad);
-#line 8248 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8267 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static bool shouldRefreshBatteryCache(bool forceRefresh);
-#line 8261 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8280 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static void storeBatteryAssessment(float vIdle, float vLoadWorst, float sagWorst, int capDuty, bool assessPassed);
-#line 8274 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8293 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static void clearLowBatteryErrorIfRecovered(bool assessPassed);
-#line 8285 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8304 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static void resetRuntimeSagStrikes();
-#line 8290 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8309 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static bool checkRuntimeSagDebounced(float v, const char* reason);
-#line 8313 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8332 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static float heaterCurrentFromAdc(int analogValue);
-#line 8322 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8341 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 static void emitBatteryReportLine(const char* line);
-#line 8375 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8394 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void logPowerTestEvent(const char* phase, const char* msg, bool includeContext, bool persist);
-#line 8388 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8407 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool measureBatteryUnderLoad(float* vIdle, float* vLoad, int testDuty, uint16_t settleMs, const char* testTag);
-#line 8441 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8460 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool assessBatteryUsable(const char* tag, bool forceRefresh, bool* outFlushAllowed);
-#line 8611 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 8631 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool isFlushAllowedByBattery(bool forceRefresh);
-#line 8882 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 9006 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 float readBatteryTemperature();
-#line 8922 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 9046 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 int getBatteryChargeLevel();
-#line 8960 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 9084 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void displayBatteryChargeLevel();
-#line 8988 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 9112 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void flashLEDsAcknowledgment();
-#line 8999 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 9123 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void flushStartLEDAnimation();
-#line 9014 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 9138 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void updateFlushCompleteLedCue(unsigned long elapsedMs);
-#line 9237 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 9361 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 float clampLedProgress(float value);
-#line 9243 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 9367 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 int clampLedIndex(int index);
-#line 9265 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 9389 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void allocateLedStepsFromDurations(const unsigned long durationsMs[5], int totalSteps);
-#line 9334 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 9458 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void rebuildLedSectionBoundaries();
-#line 9344 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 9468 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 int computeSectionTargetLedIndex(int section, float progress);
-#line 9364 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 9488 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void determineLedSectionAndProgress(unsigned long currentMillis, float currentTemp, int &section, float &progress);
-#line 9462 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 9586 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void calculateSequenceTiming();
-#line 9516 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 9640 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void updateLEDs();
-#line 9571 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 9695 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void locateMotorPos();
-#line 9585 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 9709 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void startMotorHoming(bool batteryPreflightPassed);
-#line 9710 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 9816 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void checkMotorFaults();
-#line 9796 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 9902 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void setFanSpeed(int speed);
-#line 9815 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 9921 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 bool getM3Fault();
-#line 9898 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 9960 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+static void logM1FaultObservedEvent(const char* event, int m1NfaultRaw, float m1A, unsigned suppressedHeld);
+#line 10079 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void checkAllMotorFaults();
-#line 10103 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 10284 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void captureSerialOutput();
-#line 10109 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 10290 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void streamSerialToBLE();
-#line 720 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
+#line 731 "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\toilet_kat_change.ino"
 void noteBleDiagnosticActivity() {
   lastActivityMillis = millis();
   bleIdleStartTime = millis();
@@ -1149,6 +1162,8 @@ bool motorHomingStartOpenSwitchClosed = false;
 bool motorHomingDeferred = false;
 char motorHomingDeferReason[HOMING_DEFER_REASON_MAX] = "";
 unsigned long lastHomingRetryCheckMs = 0;
+static uint8_t motorHomingConsecutiveFailures = 0;
+static bool motorHomingRetrySuppressed = false;
 static bool lastBootHeaterTestSkipped = false;
 static const char* lastBootHeaterSkipReason = nullptr;
 const uint16_t VIRGIN_EEPROM_MAGIC = 0xFFFF;
@@ -6983,8 +6998,13 @@ void loop() {
         }
       } else if (!isFlushing && motorHomingDeferred && !motorHomingActive) {
         if (!button1DisconnectAlertedForCurrentPress) {
-          SerialBLE_println("Flush blocked: charge battery / homing pending");
-          Serial.println("Flush blocked: homing deferred (charge battery)");
+          if (motorHomingRetrySuppressed) {
+            SerialBLE_println("Flush blocked: homing failed (power cycle after repair)");
+            Serial.println("Flush blocked: homing failed (power cycle after repair)");
+          } else {
+            SerialBLE_println("Flush blocked: charge battery / homing pending");
+            Serial.println("Flush blocked: homing deferred (charge battery)");
+          }
           int level = batteryAssessment.valid ? batteryAssessment.usablePercent : 0;
           showBatteryLevelFeedback(level, false);
           button1DisconnectAlertedForCurrentPress = true;
@@ -7200,6 +7220,7 @@ void loop() {
     }
   }
   maintainEEPROMErrorIndicator();
+  pollM1FaultLogOnly();
   feedTaskWatchdog();
   delay(1);
 }
@@ -8823,7 +8844,8 @@ bool assessBatteryUsable(const char* tag, bool forceRefresh, bool* outFlushAllow
   storeBatteryAssessment(vIdle, vLoadWorst, sagWorst, capDuty, assessPassed);
   batteryAssessment.inProgress = false;
   clearLowBatteryErrorIfRecovered(assessPassed);
-  if (assessPassed && motorHomingDeferred && !motorHomingActive && !isFlushing) {
+  if (assessPassed && motorHomingDeferred && !motorHomingActive && !isFlushing &&
+      canStartDeferredHomingRetry()) {
     logPowerTestEvent("homing_defer", "assess_pass kick homing", true);
     startMotorHoming(true);
   }
@@ -9000,7 +9022,96 @@ void clearMotorHomingDeferredFromNvs() {
   nvs_close(nvsHandle);
 }
 
+const char* motorHomingPhaseName(uint8_t phase) {
+  switch (phase) {
+    case HOMING_INIT: return "INIT";
+    case HOMING_PARTIAL_CLOSE: return "PARTIAL_CLOSE";
+    case HOMING_CLOSE_EXTRA: return "CLOSE_EXTRA";
+    case HOMING_OPEN_FULL: return "OPEN_FULL";
+    default: return "UNKNOWN";
+  }
+}
+
+void resetMotorHomingRetryState(const char* reason) {
+  uint8_t priorFailures = motorHomingConsecutiveFailures;
+  motorHomingConsecutiveFailures = 0;
+  motorHomingRetrySuppressed = false;
+  if (reason && priorFailures > 0) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "retry_state_reset reason=%s prior_failures=%u",
+             reason, (unsigned)priorFailures);
+    logPowerTestEvent("homing_defer", msg, true);
+  }
+}
+
+bool canStartDeferredHomingRetry() {
+  return !motorHomingRetrySuppressed;
+}
+
+void recordMotorHomingFailure(uint8_t phase, unsigned long elapsedMs, int openSw, int closeSw, int m1Nfault) {
+  motorHomingConsecutiveFailures++;
+  const char* phaseName = motorHomingPhaseName(phase);
+  const char* deferReason = motorHomingDeferReason[0] ? motorHomingDeferReason : "unknown";
+
+  char msg[160];
+  snprintf(msg, sizeof(msg),
+           "attempt_fail attempt=%u/%u phase=%s reason=motor_timeout elapsed_ms=%lu open_sw=%d close_sw=%d m1_nfault=%d defer_reason=%s",
+           (unsigned)motorHomingConsecutiveFailures,
+           (unsigned)HOMING_DEFER_MAX_CONSECUTIVE_FAILURES,
+           phaseName,
+           elapsedMs,
+           openSw,
+           closeSw,
+           m1Nfault,
+           deferReason);
+  logPowerTestEvent("homing_defer", msg, true);
+
+  if (motorHomingConsecutiveFailures >= HOMING_DEFER_MAX_CONSECUTIVE_FAILURES) {
+    motorHomingRetrySuppressed = true;
+    snprintf(msg, sizeof(msg),
+             "retry_exhausted failures=%u/%u last_phase=%s action=power_cycle_to_retry flush_blocked=1",
+             (unsigned)motorHomingConsecutiveFailures,
+             (unsigned)HOMING_DEFER_MAX_CONSECUTIVE_FAILURES,
+             phaseName);
+    logPowerTestEvent("homing_defer", msg, true);
+    Serial.println("Homing retries STOPPED (3 failures). Fix mechanism, then power cycle to retry.");
+    SerialBLE_println("Homing retries STOPPED (3 failures). Fix mechanism, then power cycle to retry.");
+    logError("runtime", 1, "homing_retry_exhausted", true);
+  }
+}
+
+void abortMotorHomingOnTimeout(uint8_t phase) {
+  unsigned long elapsedMs = millis() - motorHomingPhaseStartMillis;
+  int openSw = (digitalRead(microswitchOpenPin) == LOW) ? 1 : 0;
+  int closeSw = (digitalRead(microswitchClosePin) == LOW) ? 1 : 0;
+  int m1Nfault = digitalRead(M1NFAULT_PIN);
+  const char* phaseName = motorHomingPhaseName(phase);
+
+  char humanLine[128];
+  snprintf(humanLine, sizeof(humanLine),
+           "Homing FAILED (timeout): phase=%s elapsed_ms=%lu open_sw=%d close_sw=%d m1_nfault=%d",
+           phaseName, elapsedMs, openSw, closeSw, m1Nfault);
+  Serial.println(humanLine);
+  SerialBLE_println(humanLine);
+
+  if (motorHomingDeferred) {
+    recordMotorHomingFailure(phase, elapsedMs, openSw, closeSw, m1Nfault);
+  }
+
+  if (ERROR_CODE == 0) {
+    ERROR_CODE = 1;
+    flashLeds();
+    stopEverything();
+    LEDErrorCode(ERROR_CODE);
+  }
+  motors.setM1Speed(0);
+  mechanismMotorRunning = false;
+  motorHomingActive = false;
+  motorHomingPhase = HOMING_IDLE;
+}
+
 void deferMotorHoming(const char* reason) {
+  resetMotorHomingRetryState(nullptr);
   motorHomingDeferred = true;
   if (reason) {
     strncpy(motorHomingDeferReason, reason, HOMING_DEFER_REASON_MAX - 1);
@@ -9030,6 +9141,7 @@ void clearMotorHomingDeferred() {
   motorHomingDeferReason[0] = '\0';
   clearMotorHomingDeferredFromNvs();
   logPowerTestEvent("homing_defer", "complete deferred_cleared", true);
+  resetMotorHomingRetryState("homing_success");
 
   clearLowBatteryErrorIfRecovered(true);
 }
@@ -9088,6 +9200,15 @@ void tryStartDeferredHomingIfReady() {
   }
   lastHomingRetryCheckMs = now;
 
+  if (motorHomingRetrySuppressed) {
+    char msg[80];
+    snprintf(msg, sizeof(msg), "retry_suppressed failures=%u/%u waiting_for_power_cycle",
+             (unsigned)motorHomingConsecutiveFailures,
+             (unsigned)HOMING_DEFER_MAX_CONSECUTIVE_FAILURES);
+    logPowerTestEvent("homing_defer", msg, true);
+    return;
+  }
+
   if (!isBatteryOkForHeaterTest()) {
     float v = readBatteryVoltageQuiet();
     char msg[80];
@@ -9096,7 +9217,12 @@ void tryStartDeferredHomingIfReady() {
     return;
   }
 
-  logPowerTestEvent("homing_defer", "retry_start battery_ok", true);
+  char msg[128];
+  snprintf(msg, sizeof(msg), "retry_start attempt=%u/%u battery_ok defer_reason=%s",
+           (unsigned)(motorHomingConsecutiveFailures + 1),
+           (unsigned)HOMING_DEFER_MAX_CONSECUTIVE_FAILURES,
+           motorHomingDeferReason[0] ? motorHomingDeferReason : "unknown");
+  logPowerTestEvent("homing_defer", msg, true);
   startMotorHoming(true);
 }
 
@@ -9872,16 +9998,7 @@ void updateMotorHoming() {
     }
     case HOMING_PARTIAL_CLOSE: {
       if (millis() - motorHomingPhaseStartMillis > maxOpeningTimeMs()) {
-        if (ERROR_CODE == 0) {
-          ERROR_CODE = 1;
-          flashLeds();
-          stopEverything();
-          LEDErrorCode(ERROR_CODE);
-        }
-        motors.setM1Speed(0);
-        mechanismMotorRunning = false;
-        motorHomingActive = false;
-        motorHomingPhase = HOMING_IDLE;
+        abortMotorHomingOnTimeout(motorHomingPhase);
         return;
       }
       if (digitalRead(microswitchOpenPin) != LOW) {
@@ -9905,16 +10022,7 @@ void updateMotorHoming() {
     }
     case HOMING_OPEN_FULL: {
       if (millis() - motorHomingPhaseStartMillis > maxOpeningTimeMs()) {
-        if (ERROR_CODE == 0) {
-          ERROR_CODE = 1;
-          flashLeds();
-          stopEverything();
-          LEDErrorCode(ERROR_CODE);
-        }
-        motors.setM1Speed(0);
-        mechanismMotorRunning = false;
-        motorHomingActive = false;
-        motorHomingPhase = HOMING_IDLE;
+        abortMotorHomingOnTimeout(motorHomingPhase);
         return;
       }
       if (digitalRead(microswitchOpenPin) == LOW) {
@@ -10098,6 +10206,81 @@ float readHeaterCurrent() {
   SerialBLE_print("Heater current:");
   SerialBLE_println(current);
   return current;
+}
+
+static void logM1FaultObservedEvent(const char* event, int m1NfaultRaw, float m1A, unsigned suppressedHeld) {
+  char msg[160];
+  if (motorHomingActive) {
+    snprintf(msg, sizeof(msg), "%s M1NFAULT=%d m1A=%.2f homing=%s",
+             event, m1NfaultRaw, m1A, motorHomingPhaseName(motorHomingPhase));
+  } else if (suppressedHeld > 0) {
+    snprintf(msg, sizeof(msg), "%s M1NFAULT=%d m1A=%.2f suppressed=%u",
+             event, m1NfaultRaw, m1A, suppressedHeld);
+  } else {
+    snprintf(msg, sizeof(msg), "%s M1NFAULT=%d m1A=%.2f",
+             event, m1NfaultRaw, m1A);
+  }
+  Serial.println(msg);
+  SerialBLE_println(msg);
+  logError("m1_fault", 0, msg, true);
+}
+
+void pollM1FaultLogOnly() {
+  static unsigned long lastPollMs = 0;
+  static uint8_t debounceCount = 0;
+  static bool faultEpisodeActive = false;
+  static unsigned long lastHeldLogMs = 0;
+  static unsigned long suppressedHeldLogs = 0;
+
+  if (!isM1MotorActive()) {
+    if (faultEpisodeActive) {
+      int m1NfaultRaw = digitalRead(M1NFAULT_PIN);
+      float m1A = readM1Current();
+      logM1FaultObservedEvent("nfault_cleared", m1NfaultRaw, m1A, 0);
+      faultEpisodeActive = false;
+    }
+    debounceCount = 0;
+    lastHeldLogMs = 0;
+    suppressedHeldLogs = 0;
+    return;
+  }
+
+  unsigned long now = millis();
+  if (lastPollMs != 0 && (now - lastPollMs) < M1_FAULT_POLL_INTERVAL_MS) {
+    return;
+  }
+  lastPollMs = now;
+
+  int m1NfaultRaw = digitalRead(M1NFAULT_PIN);
+  float m1A = readM1Current();
+
+  if (getM1Fault()) {
+    if (debounceCount < M1_FAULT_DEBOUNCE_SAMPLES) {
+      debounceCount++;
+    }
+    if (debounceCount >= M1_FAULT_DEBOUNCE_SAMPLES) {
+      if (!faultEpisodeActive) {
+        logM1FaultObservedEvent("nfault_asserted", m1NfaultRaw, m1A, 0);
+        faultEpisodeActive = true;
+        lastHeldLogMs = now;
+        suppressedHeldLogs = 0;
+      } else if (lastHeldLogMs == 0 || (now - lastHeldLogMs >= M1_FAULT_HELD_LOG_MS)) {
+        logM1FaultObservedEvent("nfault_held", m1NfaultRaw, m1A, suppressedHeldLogs);
+        lastHeldLogMs = now;
+        suppressedHeldLogs = 0;
+      } else {
+        suppressedHeldLogs++;
+      }
+    }
+  } else {
+    if (faultEpisodeActive) {
+      logM1FaultObservedEvent("nfault_cleared", m1NfaultRaw, m1A, 0);
+      faultEpisodeActive = false;
+    }
+    debounceCount = 0;
+    lastHeldLogMs = 0;
+    suppressedHeldLogs = 0;
+  }
 }
 
 // Enhanced motor fault checking for all 3 motors

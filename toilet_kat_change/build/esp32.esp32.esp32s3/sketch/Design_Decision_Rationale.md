@@ -164,9 +164,10 @@ Behavior:
 - Deferred state is persisted in NVS (`homing_deferred`, optional `homing_defer_reason` string) so position-unknown survives reboot and charge cycles.
 - `ERROR_CODE = 2` and the error LED are latched while deferred (mechanism not at known position / charge required).
 - `loop()` polls every ~5 s via `tryStartDeferredHomingIfReady()`; when battery preflight passes, homing auto-retries; deferred state and `ERROR_CODE 2` clear only on homing success in `updateMotorHoming()`.
+- **Consecutive failure cap:** up to 3 deferred homing failures per power session (`HOMING_DEFER_MAX_CONSECUTIVE_FAILURES`). Each timeout logs `Homing FAILED (timeout): phase=...` on Serial/BLE and `[homing_defer] attempt_fail attempt=N/3 phase=...` to SPIFFS. After 3 failures, `motorHomingRetrySuppressed` stops further M1 commands until power cycle; `[homing_defer] retry_exhausted failures=3/3 ...` and `logError("runtime", 1, "homing_retry_exhausted")` are recorded. Throttled `[homing_defer] retry_suppressed ...` while waiting. `motorHomingDeferred` stays true (flush blocked). Counter resets on power cycle or successful homing (`retry_state_reset reason=homing_success`).
 - Flush start is blocked while `motorHomingDeferred`; flush case 0 battery gates remain as redundant safety.
 - Deep-sleep wake does not run homing (unchanged); deferred retry logic in `loop()` still applies. NVS reload on wake re-applies `ERROR_CODE 2` via `applyLoadedMotorHomingDeferred()`.
-- `logPowerTestEvent("homing_defer", ...)` records boot skip, retry checks, retry start, and completion.
+- `logPowerTestEvent("homing_defer", ...)` records boot skip, retry checks, retry start (`attempt=N/3`), attempt_fail, retry_exhausted, retry_suppressed, retry_state_reset, and completion.
 
 Rationale:
 
