@@ -121,8 +121,8 @@ Note: `docs/heater_failsafe_flow.png` may be updated later to show the absolute 
 
 Behavior:
 
-- **Usable battery assessment** (`assessBatteryUsable`): user-facing battery % (LED bar, `GET_BATTERY`, flush block) is derived from a scaled heater load pulse, not idle open-circuit VMON. Assessment steps through duties up to `getHeaterPwmCapForVoltage(vIdle)`, records worst loaded voltage/sag, and maps usable % from `MIN_LOADED_BATTERY_V` (0%) to `USABLE_V_FULL` (100%).
-- **Unified flush block**: `batteryThreshold` (default 15% high barrier, 10% compostable) is the minimum usable % before flush. Flush is blocked at the button handler and re-checked in flush case 0; both use the same cached assessment. `assessPassed` must also prove the pack can sustain `capDuty` (255 or `heaterPwmReduced`).
+- **Usable battery assessment** (`assessBatteryUsable`): user-facing battery % (LED bar, `GET_BATTERY`, flush block) is derived from a scaled heater load pulse, not idle open-circuit VMON. Assessment steps through duties up to `getHeaterPwmCapForVoltage(vIdle)`, records worst loaded voltage/sag, and maps usable % from `minLoadedBatteryV` (0%, default 10.0 V) to `usableVFull` (100%, default 11.4 V). Packs above 11.4 V under load report 100% (full plateau / ageing buffer). Soft margin for brownout is the 10.0 V floor vs ~9.5 V hardware brownout, not a large % threshold.
+- **Unified flush block**: `batteryThreshold` (default 1% for both materials) is the minimum usable % before flush. Flush is blocked at the button handler and re-checked in flush case 0; both use the same cached assessment. `assessPassed` must also prove the pack can sustain `capDuty` (255 or `heaterPwmReduced`).
 - **Two-tier heater PWM** (`getHeaterPwmCapForVoltage`): VMON at/above `heaterCapVFull` → PWM 255; below → `heaterPwmReduced` (255 high barrier, 170 compostable). No 255/170/100 voltage ladder or runtime preflight derate cascade.
 - **Max heater wall time** (`maxHeaterWallTimeS`, default 200 s): fixed BLE/EEPROM parameter sets flush step 6 timeout before error 6 (`heater_max_wall`); replaces per-flush `(ramp + hold) * 1.2` calculation. Error 6 is an **advisory**: flush continues with progress LEDs, each occurrence is logged to SPIFFS, preflight does not block on code 6, first occurrence silently latches code 6, recurring consecutive occurrence shows LED/buzzer after completion flash, cleared when a latched advisory flush completes without re-triggering.
 - **Loaded VMON preflight** (`measureBatteryUnderLoad`, legacy helper): still available for single-step tests; boot/flush/homing paths now use `assessBatteryUsable` instead of idle % plus light-duty-only load test.
@@ -159,22 +159,24 @@ Rationale:
 Behavior:
 
 - Cold boot runs battery/brownout preflight (same gates as boot heater test) before `startMotorHoming()`.
-- Homing is **skipped** when battery preflight fails, brownout streak caused heater-test skip, or NVS `homing_deferred` is already set from a prior session; M1 is not run on a weak pack.
+- Homing is **skipped** when battery preflight fails or brownout streak caused heater-test skip; M1 is not run on a weak pack.
+- If NVS `homing_deferred` is already set from a prior session **and** battery/brownout preflight now passes, cold boot **resumes homing immediately** (`[homing_defer] boot_resume battery_ok`) without latching `ERROR_CODE 2`.
+- If NVS `homing_deferred` is set and battery/brownout still blocks, boot keeps the defer and latches `ERROR_CODE 2` via `applyLoadedMotorHomingDeferred()` (`boot_skip persisted`).
 - Deferred state is persisted in NVS (`homing_deferred`, optional `homing_defer_reason` string) so position-unknown survives reboot and charge cycles.
-- `ERROR_CODE = 2` and the error LED are latched while deferred (mechanism not at known position / charge required).
+- `ERROR_CODE = 2` and the error LED are latched only while deferred **and** battery/brownout still insufficient (true charge-required signal). A full pack must not flash a false low-battery indication.
 - `loop()` polls every ~5 s via `tryStartDeferredHomingIfReady()`; when battery preflight passes, homing auto-retries; deferred state and `ERROR_CODE 2` clear only on homing success in `updateMotorHoming()`.
 - **Consecutive failure cap:** up to 3 deferred homing failures per power session (`HOMING_DEFER_MAX_CONSECUTIVE_FAILURES`). Each timeout logs `Homing FAILED (timeout): phase=...` on Serial/BLE and `[homing_defer] attempt_fail attempt=N/3 phase=...` to SPIFFS. After 3 failures, `motorHomingRetrySuppressed` stops further M1 commands until power cycle; `[homing_defer] retry_exhausted failures=3/3 ...` and `logError("runtime", 1, "homing_retry_exhausted")` are recorded. Throttled `[homing_defer] retry_suppressed ...` while waiting. `motorHomingDeferred` stays true (flush blocked). Counter resets on power cycle or successful homing (`retry_state_reset reason=homing_success`).
 - Flush start is blocked while `motorHomingDeferred`; flush case 0 battery gates remain as redundant safety.
-- Deep-sleep wake does not run homing (unchanged); deferred retry logic in `loop()` still applies. NVS reload on wake re-applies `ERROR_CODE 2` via `applyLoadedMotorHomingDeferred()`.
-- `logPowerTestEvent("homing_defer", ...)` records boot skip, retry checks, retry start (`attempt=N/3`), attempt_fail, retry_exhausted, retry_suppressed, retry_state_reset, and completion.
+- Deep-sleep wake does not run homing (unchanged); deferred retry logic in `loop()` still applies. NVS reload on wake calls `applyLoadedMotorHomingDeferred()`: latches `ERROR_CODE 2` only if battery still blocks; otherwise logs `boot_resume pending` and leaves retry to `loop()`.
+- `logPowerTestEvent("homing_defer", ...)` records boot skip, boot resume, retry checks, retry start (`attempt=N/3`), attempt_fail, retry_exhausted, retry_suppressed, retry_state_reset, and completion.
 
 Rationale:
 
 - M1 homing draws stall-level current; on a very low battery it can brownout the ESP like the heater test or flush clamp.
 - Skipping homing without persistence leaves the unit unaware after recharge: mechanism position unknown, flush unsafe, no operator signal.
-- NVS flag (not RAM-only `ERROR_CODE`) survives power cycle; re-applying `ERROR_CODE 2` on boot when the flag is loaded gives visible LED indication.
+- NVS flag (not RAM-only `ERROR_CODE`) survives power cycle. Re-applying `ERROR_CODE 2` on boot is only appropriate while the pack is still too weak; after recharge, resume (or pending-retry) without a misleading low-battery LED flash.
 - Auto-retry on battery recovery avoids requiring a power cycle after charging; the operator does not need to know internal state.
-- `ERROR_CODE 2` is cleared only after successful homing, not when voltage merely recovers — position is the gating concern, not voltage alone.
+- `ERROR_CODE 2` is cleared only after successful homing, not when voltage merely recovers — position is the gating concern, not voltage alone. Voltage recovery may suppress the LED latch and kick/resume homing, but the NVS defer flag remains until homing succeeds.
 - Flush blocked while deferred prevents entering case 0 motor/heater sequence with unknown mechanism state.
 - Aligns with the non-blocking homing design in the heater fail-safe section: homing stays async in `loop()`, TWDT feeding continues.
 

@@ -136,7 +136,7 @@ class ToiletSystemInterface:
 
         # Parameter definitions with descriptions and units (defaults = 1.5mil High Barrier Plastic from material_parameters.csv)
         self.param_definitions = {
-            "batteryThreshold": {"description": "Minimum usable battery percent before flush", "units": "%", "default": 15.0},
+            "batteryThreshold": {"description": "Minimum usable battery percent before flush", "units": "%", "default": 1.0},
             "K": {"description": "Temperature setpoint", "units": "°C", "default": 140.0},
             "F": {"description": "How long to feed the bag at the START of a flush", "units": "sec", "default": 8.0},
             "T": {"description": "Cooling Time", "units": "sec", "default": 60.0},
@@ -158,22 +158,25 @@ class ToiletSystemInterface:
             "heaterUpperToleranceC": {"description": "Heater OFF threshold above target (temp >= target + upper can be negative)", "units": "°C", "default": 2.0},
             "COOL_OPEN_TEMP_C": {"description": "Open sealer when thermistor cools below this temperature", "units": "°C", "default": 80.0},
             "MAX_COOL_WAIT_S": {"description": "Safety timeout for cooling stage before forcing open", "units": "sec", "default": 180.0},
-            "minLoadedBatteryV": {"description": "Minimum loaded battery voltage during flush preflight heater test", "units": "V", "default": 11.2},
+            "minLoadedBatteryV": {"description": "Minimum loaded battery voltage during flush preflight heater test", "units": "V", "default": 10.0},
             "maxBatterySagV": {"description": "Maximum allowed battery sag during flush preflight heater test", "units": "V", "default": 0.85},
-            "minIdleBatteryVFloor": {"description": "Minimum idle battery voltage floor before flush preflight", "units": "V", "default": 11.3},
-            "usableVFull": {"description": "Loaded battery voltage mapped to 100 percent usable", "units": "V", "default": 12.4},
+            "minIdleBatteryVFloor": {"description": "Minimum idle battery voltage floor before flush preflight", "units": "V", "default": 10.0},
+            "usableVFull": {"description": "Loaded battery voltage mapped to 100 percent usable", "units": "V", "default": 11.4},
             "batteryAssessSettleMs": {"description": "Heater pulse settle time during battery assessment", "units": "ms", "default": 50.0},
             "heaterCapVFull": {"description": "VMON voltage for full heater PWM (255); below this, reduced PWM applies", "units": "V", "default": 11.23},
             "heaterPwmReduced": {"description": "Heater PWM duty when VMON is below heaterCapVFull", "units": "0-255", "default": 255.0},
             "maxHeaterWallTimeS": {"description": "Maximum heater phase duration in flush step 6 before error 6", "units": "sec", "default": 200.0},
             "heaterAbsoluteMaxOnS": {"description": "Maximum continuous heater PWM on-time before fail-safe error 8", "units": "sec", "default": 200.0},
             "MAX_TEMP_FAILSAFE_C": {"description": "Absolute thermistor temperature ceiling before fail-safe error 9", "units": "°C", "default": 200.0},
+            "battMvCalA": {"description": "Battery VMON_CAL quadratic coefficient A (V = A*mV^2 + B*mV + C)", "units": "", "default": 0.000009091},
+            "battMvCalB": {"description": "Battery VMON_CAL quadratic coefficient B", "units": "", "default": -0.019148},
+            "battMvCalC": {"description": "Battery VMON_CAL quadratic coefficient C", "units": "V", "default": 17.397361},
         }
         
         # Predefined parameter sets for different materials (match material_parameters.csv)
         self.parameter_sets = {
             "1.5mil High Barrier Plastic": {
-                "batteryThreshold": 15.0,
+                "batteryThreshold": 1.0,
                 "K": 140.0,
                 "F": 8.0,
                 "T": 60.0,
@@ -195,19 +198,22 @@ class ToiletSystemInterface:
                 "heaterUpperToleranceC": 2.0,
                 "COOL_OPEN_TEMP_C": 80.0,
                 "MAX_COOL_WAIT_S": 180.0,
-                "minLoadedBatteryV": 11.2,
+                "minLoadedBatteryV": 10.0,
                 "maxBatterySagV": 0.85,
-                "minIdleBatteryVFloor": 11.3,
-                "usableVFull": 12.4,
+                "minIdleBatteryVFloor": 10.0,
+                "usableVFull": 11.4,
                 "batteryAssessSettleMs": 50.0,
                 "heaterCapVFull": 11.23,
                 "heaterPwmReduced": 255.0,
                 "maxHeaterWallTimeS": 200.0,
                 "heaterAbsoluteMaxOnS": 200.0,
                 "MAX_TEMP_FAILSAFE_C": 200.0,
+                "battMvCalA": 0.000009091,
+                "battMvCalB": -0.019148,
+                "battMvCalC": 17.397361,
             },
             "Compostable 1.5mil": {
-                "batteryThreshold": 10.0,
+                "batteryThreshold": 1.0,
                 "K": 80.0,
                 "F": 8.0,
                 "T": 40.0,
@@ -229,20 +235,23 @@ class ToiletSystemInterface:
                 "heaterUpperToleranceC": 2.0,
                 "COOL_OPEN_TEMP_C": 65.0,
                 "MAX_COOL_WAIT_S": 180.0,
-                "minLoadedBatteryV": 11.2,
+                "minLoadedBatteryV": 10.0,
                 "maxBatterySagV": 0.85,
-                "minIdleBatteryVFloor": 11.3,
-                "usableVFull": 12.4,
+                "minIdleBatteryVFloor": 10.0,
+                "usableVFull": 11.4,
                 "batteryAssessSettleMs": 50.0,
                 "heaterCapVFull": 11.23,
                 "heaterPwmReduced": 170.0,
                 "maxHeaterWallTimeS": 200.0,
                 "heaterAbsoluteMaxOnS": 200.0,
                 "MAX_TEMP_FAILSAFE_C": 200.0,
+                "battMvCalA": 0.000009091,
+                "battMvCalB": -0.019148,
+                "battMvCalC": 17.397361,
             }
         }
         
-        # Parameter order (32 values, as expected by ESP32 BLE)
+        # Parameter order (35 values, as expected by ESP32 BLE)
         self.param_order = [
             "batteryThreshold", "K", "F", "T", "backupTime",
             "fanDuration", "H", "continueFeeder", "maxOpeningTime", "typicalOpeningTime",
@@ -252,6 +261,7 @@ class ToiletSystemInterface:
             "minLoadedBatteryV", "maxBatterySagV", "minIdleBatteryVFloor", "usableVFull",
             "batteryAssessSettleMs", "heaterCapVFull", "heaterPwmReduced", "maxHeaterWallTimeS",
             "heaterAbsoluteMaxOnS", "MAX_TEMP_FAILSAFE_C",
+            "battMvCalA", "battMvCalB", "battMvCalC",
         ]
         self.min_heater_tolerance_gap_c = 2.0
         self.hardware_components: List[str] = [

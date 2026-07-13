@@ -20,6 +20,7 @@
 #include <SPIFFS.h>
 #include <esp_core_dump.h>
 #include <esp_partition.h>
+#include <stdlib.h>
 #include "ota_diag_types.h"
 #define LED_PHASE_COUNT 5
 
@@ -62,6 +63,13 @@ const int heaterCurrentPin = 12; // GPIO12 (HS_OUT) - Heater current sense outpu
 // Battery voltage monitoring
 const int batteryVoltagePin = 10;  // GPIO10 (VMON) - Battery voltage monitoring
 const int batteryTempPin = 5;      // GPIO5 (B_TEMP) - Battery temperature monitoring
+// ESP32-S3 ADC: trimmed mean of oneshots; drop outliers then average
+const int ADC_AVG_SAMPLES = 32;
+const int ADC_AVG_TRIM = 2;
+// Quadratic fit: V_batt from eFuse-calibrated VMON mV (analogReadMilliVolts)
+constexpr float kBattMvCalA = 0.000009091f;
+constexpr float kBattMvCalB = -0.019148f;
+constexpr float kBattMvCalC = 17.397361f;
 
 // Custom I2C instance
 TwoWire myI2C = TwoWire(0);
@@ -122,10 +130,11 @@ void trustDoubleBeep();
 #define EEPROM_SIZE 512
 #define PARAM_START_ADDR 0
 #define PARAM_MAGIC_NUMBER 0x1234
-#define PARAM_COUNT 32
+#define PARAM_COUNT 35
 #define PARAM_EEPROM_SCHEMA_ADDR 196
 #define PARAM_EEPROM_SCHEMA_V1 0
 #define PARAM_EEPROM_SCHEMA_V2 2
+#define PARAM_EEPROM_SCHEMA_V3 3
 #define PARAM_EEPROM_FLOAT_EPSILON 1e-4f
 
 struct ParamEepromSnapshot {
@@ -164,6 +173,9 @@ struct ParamEepromSnapshot {
   long maxHeaterWallTimeS;
   long heaterAbsoluteMaxOnS;
   float MAX_TEMP_FAILSAFE_C;
+  float battMvCalA;
+  float battMvCalB;
+  float battMvCalC;
 };
 
 #define HW_VERSION_ADDR 200
@@ -357,6 +369,12 @@ void applyBatteryAssessParamsFromCsv(const float* parameters_list, int count);
 void applyHeaterFailsafeDefaults();
 bool validateHeaterFailsafeParams();
 void applyHeaterFailsafeParamsFromCsv(const float* parameters_list, int count);
+void applyBattMvCalDefaults();
+bool validateBattMvCalParams();
+void applyBattMvCalParamsFromCsv(const float* parameters_list, int count);
+void clearChargeHistory();
+void updateChargingDetection();
+void updateChargingLedFlash();
 void renderBatteryLevelLeds(int chargeLevel);
 void showBatteryLevelFeedback(int chargeLevel, bool enterDisplayMode);
 void logPowerTestEvent(const char* phase, const char* msg, bool includeContext = false, bool persist = true);
@@ -567,7 +585,7 @@ const int typicalOpeningTime = 5; //parameters_list[12] */
 
 // Parameters (defaults: 1.5mil High Barrier Plastic from material_parameters.csv)
 // Can't have global constant variables in C
-int batteryThreshold = 15; //parameters_list[0] minimum usable % before flush
+int batteryThreshold = 1; //parameters_list[0] minimum usable % before flush
 float K = 140.0; //parameters_list[1]
 int F = 8; //parameters_list[2]
 long T = 60; //parameters_list[3] - Estimated cooling time for LED pacing (seconds)
@@ -595,10 +613,10 @@ long MAX_COOL_WAIT_S = 180; //parameters_list[21] - Safety fallback max cooling 
 
 // Battery assessment defaults (material_parameters.csv / BLE presets)
 namespace {
-constexpr float kBatteryAssessDefaultMinLoadedV = 11.2f;
+constexpr float kBatteryAssessDefaultMinLoadedV = 10.0f; // 0% usable + hard abort (~0.5 V above brownout)
 constexpr float kBatteryAssessDefaultMaxSagV = 0.85f;
-constexpr float kBatteryAssessDefaultMinIdleVFloor = 11.3f;
-constexpr float kBatteryAssessDefaultUsableVFull = 12.4f;
+constexpr float kBatteryAssessDefaultMinIdleVFloor = 10.0f;
+constexpr float kBatteryAssessDefaultUsableVFull = 11.4f; // 100% usable under load (plateau above this)
 constexpr uint16_t kBatteryAssessDefaultSettleMs = 50;
 constexpr float kBatteryAssessDefaultHeaterCapVFull = 11.23f;
 constexpr int kBatteryAssessDefaultHeaterPwmReduced = 255;
@@ -617,6 +635,9 @@ int heaterPwmReduced = kBatteryAssessDefaultHeaterPwmReduced; //parameters_list[
 long maxHeaterWallTimeS = kBatteryAssessDefaultMaxHeaterWallTimeS; //parameters_list[29]
 long heaterAbsoluteMaxOnS = kDefaultHeaterAbsoluteMaxOnS; //parameters_list[30]
 float MAX_TEMP_FAILSAFE_C = kDefaultMaxTempFailsafeC; //parameters_list[31]
+float battMvCalA = kBattMvCalA; //parameters_list[32]
+float battMvCalB = kBattMvCalB; //parameters_list[33]
+float battMvCalC = kBattMvCalC; //parameters_list[34]
 float heaterTargetTemp = 140.0;    // Active heater target (K or CUT_MODE_TEMP)
 
 const int FLUSH_STEP_CANCEL_COOL = 14;
@@ -689,7 +710,39 @@ unsigned long bleWakeGuardLastKick = 0;
 const unsigned long BLE_WAKE_GUARD_MS = 30 * 1000;
 const unsigned long BLE_WAKE_GUARD_INTERVAL_MS = 5000;
 const unsigned long BLE_TIMEOUT = 10 * 60 * 1000; // 10 minutes in milliseconds
-const unsigned long INACTIVITY_SLEEP_MS = 2 * 60 * 1000;  // 2 minutes - then deep sleep
+const unsigned long INACTIVITY_SLEEP_MS = 5 * 60 * 1000;  // 5 minutes - then deep sleep
+
+// Idle charging detection from VMON_CAL mV drift (lookback up to inactivity sleep window)
+const unsigned long CHARGE_SAMPLE_INTERVAL_MS = 5000UL;
+const int CHARGE_HISTORY_LEN = (int)(INACTIVITY_SLEEP_MS / CHARGE_SAMPLE_INTERVAL_MS);  // 60
+const unsigned long CHARGE_MIN_SPAN_MS = 45000UL;
+const int CHARGE_SMOOTH_SAMPLES = 4;
+const float CHARGE_RISE_MV = 0.5f;
+const float CHARGE_CLEAR_RISE_MV = 0.3f;
+const float CHARGE_SLOPE_MV_PER_MIN = 0.1f;
+const float CHARGE_CLEAR_SLOPE_MV_PER_MIN = 0.05f;
+const float CHARGE_DROP_RESET_MV = 5.0f;
+const unsigned long CHARGE_LED_FLASH_MS = 700UL;
+
+struct ChargeSample {
+  float mv;
+  unsigned long ms;
+};
+
+static ChargeSample chargeHistory[CHARGE_HISTORY_LEN];
+static int chargeHistoryCount = 0;
+static int chargeHistoryHead = 0;
+static bool hasLastChargeMv = false;
+static float lastChargeMv = 0.0f;
+static unsigned long lastChargeSampleMs = 0;
+bool isCharging = false;
+static float lastSmoothedRiseMv = 0.0f;
+static float lastSlopeMvPerMin = 0.0f;
+static unsigned long chargeLedFlashLastMs = 0;
+static bool chargeLedFlashOn = true;
+static int batteryChargeFlashLedIndex = -1;  // tip of battery bar while displaying
+const unsigned long BATTERY_DISPLAY_MS = 3000UL;
+const unsigned long BATTERY_DISPLAY_CHARGING_MS = 5000UL;
 
 // Runtime DEV mode (persisted in NVS): when enabled, BLE stays on and inactivity sleep is disabled.
 const char* DEV_MODE_NAMESPACE = "system";
@@ -1184,6 +1237,9 @@ class server_callbacks: public BLEServerCallbacks {
       if (!validateHeaterFailsafeParams()) {
         applyHeaterFailsafeDefaults();
       }
+      if (!validateBattMvCalParams()) {
+        applyBattMvCalDefaults();
+      }
       if (!(isFlushing && cutBag && case6CutMotorRun)) {
         heaterTargetTemp = K;
       }
@@ -1668,6 +1724,12 @@ class param_write_characteristic_callbacks: public BLECharacteristicCallbacks {
       loadParametersFromEEPROM();
       return;
     }
+    if (!validateBattMvCalParams()) {
+      writeResponseToChannel("PARAM_WRITE_ERR:BAD_FORMAT");
+      Serial.println("Param write rejected: invalid battery VMON_CAL coefficients");
+      loadParametersFromEEPROM();
+      return;
+    }
     if (!(isFlushing && cutBag && case6CutMotorRun)) {
       heaterTargetTemp = K;
     }
@@ -1994,6 +2056,9 @@ static void captureParamEepromSnapshot(ParamEepromSnapshot& snap) {
   snap.maxHeaterWallTimeS = maxHeaterWallTimeS;
   snap.heaterAbsoluteMaxOnS = heaterAbsoluteMaxOnS;
   snap.MAX_TEMP_FAILSAFE_C = MAX_TEMP_FAILSAFE_C;
+  snap.battMvCalA = battMvCalA;
+  snap.battMvCalB = battMvCalB;
+  snap.battMvCalC = battMvCalC;
 }
 
 static bool eepromFloatNear(float a, float b) {
@@ -2044,6 +2109,9 @@ static int writeParamBlobToEeprom(int addr) {
   EEPROM.put(addr, maxHeaterWallTimeS); addr += sizeof(maxHeaterWallTimeS);
   EEPROM.put(addr, heaterAbsoluteMaxOnS); addr += sizeof(heaterAbsoluteMaxOnS);
   EEPROM.put(addr, MAX_TEMP_FAILSAFE_C); addr += sizeof(MAX_TEMP_FAILSAFE_C);
+  EEPROM.put(addr, battMvCalA); addr += sizeof(battMvCalA);
+  EEPROM.put(addr, battMvCalB); addr += sizeof(battMvCalB);
+  EEPROM.put(addr, battMvCalC); addr += sizeof(battMvCalC);
   return addr;
 }
 
@@ -2072,7 +2140,7 @@ static int loadBatteryAssessTailFromEeprom(int addr, uint16_t schema) {
   usableVFull = loadedUsableVFull;
   batteryAssessSettleMs = loadedBatteryAssessSettleMs;
 
-  if (schema == PARAM_EEPROM_SCHEMA_V2) {
+  if (schema >= PARAM_EEPROM_SCHEMA_V2) {
     heaterCapVFull = loadedHeaterCapVFull;
     heaterPwmReduced = loadedHeaterPwmReduced;
     maxHeaterWallTimeS = loadedMaxHeaterWallTimeS;
@@ -2174,6 +2242,28 @@ static bool verifyParametersReadBackFromEEPROM(const ParamEepromSnapshot& expect
   VERIFY_LONG(maxHeaterWallTimeS, "maxHeaterWallTimeS");
   VERIFY_LONG(heaterAbsoluteMaxOnS, "heaterAbsoluteMaxOnS");
   VERIFY_FLOAT(MAX_TEMP_FAILSAFE_C, "MAX_TEMP_FAILSAFE_C");
+  // Exact compare: PARAM_EEPROM_FLOAT_EPSILON (1e-4) is larger than battMvCalA
+  EEPROM.get(addr, readFloat); addr += sizeof(readFloat);
+  if (readFloat != expected.battMvCalA) {
+    Serial.printf("EEPROM verify mismatch battMvCalA: expected %.9f read %.9f\n",
+                  expected.battMvCalA, readFloat);
+    SerialBLE_println("EEPROM verify mismatch battMvCalA");
+    return false;
+  }
+  EEPROM.get(addr, readFloat); addr += sizeof(readFloat);
+  if (readFloat != expected.battMvCalB) {
+    Serial.printf("EEPROM verify mismatch battMvCalB: expected %.9f read %.9f\n",
+                  expected.battMvCalB, readFloat);
+    SerialBLE_println("EEPROM verify mismatch battMvCalB");
+    return false;
+  }
+  EEPROM.get(addr, readFloat); addr += sizeof(readFloat);
+  if (readFloat != expected.battMvCalC) {
+    Serial.printf("EEPROM verify mismatch battMvCalC: expected %.9f read %.9f\n",
+                  expected.battMvCalC, readFloat);
+    SerialBLE_println("EEPROM verify mismatch battMvCalC");
+    return false;
+  }
 
 #undef VERIFY_INT
 #undef VERIFY_LONG
@@ -2182,9 +2272,9 @@ static bool verifyParametersReadBackFromEEPROM(const ParamEepromSnapshot& expect
 
   uint16_t schemaRead = 0;
   EEPROM.get(PARAM_EEPROM_SCHEMA_ADDR, schemaRead);
-  if (schemaRead != PARAM_EEPROM_SCHEMA_V2) {
+  if (schemaRead != PARAM_EEPROM_SCHEMA_V3) {
     Serial.printf("EEPROM verify mismatch schema: expected %u read %u\n",
-                  (unsigned)PARAM_EEPROM_SCHEMA_V2, (unsigned)schemaRead);
+                  (unsigned)PARAM_EEPROM_SCHEMA_V3, (unsigned)schemaRead);
     SerialBLE_println("EEPROM verify mismatch schema");
     return false;
   }
@@ -2208,7 +2298,7 @@ void saveParametersToEEPROM() {
   // Write parameters in order
   int addr = sizeof(PARAM_MAGIC_NUMBER);
   addr = writeParamBlobToEeprom(addr);
-  EEPROM.put(PARAM_EEPROM_SCHEMA_ADDR, PARAM_EEPROM_SCHEMA_V2);
+  EEPROM.put(PARAM_EEPROM_SCHEMA_ADDR, PARAM_EEPROM_SCHEMA_V3);
   
   unsigned long commitStart = millis();
   bool commitOk = false;
@@ -2606,7 +2696,7 @@ void loadParametersFromEEPROM() {
       schema = PARAM_EEPROM_SCHEMA_V1;
     }
     Serial.printf("EEPROM param schema: %u\n", (unsigned)schema);
-    bool needSchemaMigrate = (schema != PARAM_EEPROM_SCHEMA_V2);
+    bool needSchemaMigrate = (schema != PARAM_EEPROM_SCHEMA_V3);
 
     // Valid data found, load parameters
     int addr = sizeof(PARAM_MAGIC_NUMBER);
@@ -2697,6 +2787,23 @@ void loadParametersFromEEPROM() {
       applyHeaterFailsafeDefaults();
     }
 
+    if (schema >= PARAM_EEPROM_SCHEMA_V3) {
+      float loadedBattMvCalA = kBattMvCalA;
+      float loadedBattMvCalB = kBattMvCalB;
+      float loadedBattMvCalC = kBattMvCalC;
+      EEPROM.get(addr, loadedBattMvCalA); addr += sizeof(loadedBattMvCalA);
+      EEPROM.get(addr, loadedBattMvCalB); addr += sizeof(loadedBattMvCalB);
+      EEPROM.get(addr, loadedBattMvCalC); addr += sizeof(loadedBattMvCalC);
+      battMvCalA = loadedBattMvCalA;
+      battMvCalB = loadedBattMvCalB;
+      battMvCalC = loadedBattMvCalC;
+      if (!validateBattMvCalParams()) {
+        applyBattMvCalDefaults();
+      }
+    } else {
+      applyBattMvCalDefaults();
+    }
+
     heaterTargetTemp = K;
     
     Serial.println("Parameters loaded from EEPROM");
@@ -2761,14 +2868,14 @@ void runDeferredParamEepromSchemaStampIfNeeded() {
   if (!g_pendingParamEepromSchemaStamp) {
     return;
   }
-  Serial.println("EEPROM schema migration: stamping V2 layout");
-  SerialBLE_println("EEPROM schema migration: stamping V2 layout");
+  Serial.println("EEPROM schema migration: stamping V3 layout");
+  SerialBLE_println("EEPROM schema migration: stamping V3 layout");
   reclaimNvsSpaceForParamEeprom();
   saveParametersToEEPROM();
   if (lastEEPROMWriteVerified) {
     g_pendingParamEepromSchemaStamp = false;
-    Serial.println("EEPROM schema V2 stamped successfully");
-    SerialBLE_println("EEPROM schema V2 stamped successfully");
+    Serial.println("EEPROM schema V3 stamped successfully");
+    SerialBLE_println("EEPROM schema V3 stamped successfully");
   } else {
     Serial.println("EEPROM schema stamp deferred (NVS persist failed, will retry next boot)");
     SerialBLE_println("EEPROM schema stamp deferred");
@@ -3331,6 +3438,7 @@ bool isKnownParameterKey(const String& key) {
          key == "usableVFull" || key == "batteryAssessSettleMs" ||
          key == "heaterCapVFull" || key == "heaterPwmReduced" || key == "maxHeaterWallTimeS" ||
          key == "heaterAbsoluteMaxOnS" || key == "MAX_TEMP_FAILSAFE_C" ||
+         key == "battMvCalA" || key == "battMvCalB" || key == "battMvCalC" ||
          key == "heaterCapV255" || key == "heaterCapV170" || key == "heaterCapV100";
 }
 
@@ -3401,7 +3509,7 @@ bool validateParameterBlob(const String& componentName, const String& paramsBlob
         errorCode = "OUT_OF_RANGE";
         return false;
       }
-      if (key == "minIdleBatteryVFloor" && (numericValue < 10.5f || numericValue > 13.0f)) {
+      if (key == "minIdleBatteryVFloor" && (numericValue < 10.0f || numericValue > 13.0f)) {
         errorCode = "OUT_OF_RANGE";
         return false;
       }
@@ -3434,6 +3542,18 @@ bool validateParameterBlob(const String& componentName, const String& paramsBlob
         return false;
       }
       if (key == "MAX_TEMP_FAILSAFE_C" && (numericValue < 50.0f || numericValue > 250.0f)) {
+        errorCode = "OUT_OF_RANGE";
+        return false;
+      }
+      if (key == "battMvCalA" && (numericValue < 1e-7f || numericValue > 1e-4f)) {
+        errorCode = "OUT_OF_RANGE";
+        return false;
+      }
+      if (key == "battMvCalB" && (numericValue < -0.1f || numericValue > 0.0f)) {
+        errorCode = "OUT_OF_RANGE";
+        return false;
+      }
+      if (key == "battMvCalC" && (numericValue < 10.0f || numericValue > 25.0f)) {
         errorCode = "OUT_OF_RANGE";
         return false;
       }
@@ -3511,6 +3631,9 @@ bool applyParameterBlobToRuntime(const String& paramsBlob, String& errorCode) {
       else if (key == "maxHeaterWallTimeS") maxHeaterWallTimeS = (long)numericValue;
       else if (key == "heaterAbsoluteMaxOnS") heaterAbsoluteMaxOnS = (long)numericValue;
       else if (key == "MAX_TEMP_FAILSAFE_C") MAX_TEMP_FAILSAFE_C = numericValue;
+      else if (key == "battMvCalA") battMvCalA = numericValue;
+      else if (key == "battMvCalB") battMvCalB = numericValue;
+      else if (key == "battMvCalC") battMvCalC = numericValue;
       else if (key == "heaterCapV100") { /* legacy: ignored */ }
       else {
         errorCode = "UNKNOWN_PARAM";
@@ -3526,6 +3649,10 @@ bool applyParameterBlobToRuntime(const String& paramsBlob, String& errorCode) {
     return false;
   }
   if (!validateHeaterFailsafeParams()) {
+    errorCode = "OUT_OF_RANGE";
+    return false;
+  }
+  if (!validateBattMvCalParams()) {
     errorCode = "OUT_OF_RANGE";
     return false;
   }
@@ -6367,12 +6494,17 @@ void setup() {
         clearMotorHomingDeferred();
       }
       logPowerTestEvent("homing_defer", "boot_skip hw_disconnected", true);
-    } else if (shouldDeferHomingAtBoot(&deferReason)) {
-      if (motorHomingDeferred) {
-        applyLoadedMotorHomingDeferred();
+    } else if (motorHomingDeferred) {
+      // Persisted defer from a prior low-battery session: resume immediately when
+      // battery is OK now — do not flash ERROR 2 (false "low battery" on a full pack).
+      if (!lastBootHeaterTestSkipped && isBatteryOkForHeaterTest()) {
+        logPowerTestEvent("homing_defer", "boot_resume battery_ok", true);
+        startMotorHoming(true);
       } else {
-        deferMotorHoming(deferReason);
+        applyLoadedMotorHomingDeferred();
       }
+    } else if (shouldDeferHomingAtBoot(&deferReason)) {
+      deferMotorHoming(deferReason);
     } else {
       startMotorHoming();
     }
@@ -6388,6 +6520,8 @@ void loop() {
   }
   processPendingFirmwareRollback();
   maintainEEPROMErrorIndicator();
+  updateChargingDetection();
+  updateChargingLedFlash();
 
   // OTA mode handling
   if (otaEnabled) {
@@ -6548,11 +6682,14 @@ void loop() {
 
       bothButtonsPressed = true;
       batteryDisplayMode = true;
-      batteryDisplayStartTime = millis();
       dualButtonHoldStartTime = millis();
       dualButtonHoldActive = true;
       factoryRollbackHoldWarned = false;
       displayBatteryChargeLevel();
+      // Start the visible display window after assess completes (assess can take seconds).
+      batteryDisplayStartTime = millis();
+      chargeLedFlashLastMs = 0;
+      chargeLedFlashOn = true;
     } else if (isFlushing) {
       bool continueFlushRecovery = acceptFlushCancel(button1Pressed, button2Pressed);
       bothButtonsPressed = true;
@@ -6640,8 +6777,10 @@ void loop() {
   }
 
   if (batteryDisplayMode && !bothButtonsPressedNow &&
-      (millis() - batteryDisplayStartTime > 3000)) {
+      (millis() - batteryDisplayStartTime >
+       (isCharging ? BATTERY_DISPLAY_CHARGING_MS : BATTERY_DISPLAY_MS))) {
     batteryDisplayMode = false;
+    batteryChargeFlashLedIndex = -1;
     for (int i = 0; i < totalLeds; i++) {
       mcp_digitalWrite(getLedPin(i), LOW);
     }
@@ -6872,11 +7011,11 @@ void loop() {
   button1WasPressed = button1Pressed;
   button2WasPressed = button2Pressed;
 
-  // Inactivity deep sleep: 2 minutes with no activity, wake on GPIO2 (controlPanelWake)
+  // Inactivity deep sleep: 5 minutes with no activity, wake on GPIO2 (controlPanelWake)
   // Only enter when wake button is released (HIGH) so pin does not trigger immediate wake.
   // Fan pins are held LOW for legacy boards where fan power may be bypassed.
   if (!devModeEnabled && !otaEnabled && !batteryDisplayMode && !isFlushing && !motorHomingActive &&
-      !mechanismMotorRunning && !fanRunning &&
+      !mechanismMotorRunning && !fanRunning && !isCharging &&
       (millis() - lastActivityMillis >= INACTIVITY_SLEEP_MS) &&
       (digitalRead(controlPanelWake) == HIGH)) {
     heaterOff();
@@ -6901,6 +7040,7 @@ void loop() {
     }
     shutdownBleForPowerDown("inactivity_deep_sleep");
     esp_task_wdt_reset();
+    clearChargeHistory();
     esp_deep_sleep_start();
   }
 
@@ -8164,9 +8304,232 @@ void playHardwareNotConnectedAlert() {
   }
 }
 
-static float batteryVoltageFromAdc(int analogValue) {
-  float voltage = analogValue * (3.3f / 4095.0f);
-  return voltage * 7.317f;
+static int cmpUint32(const void* a, const void* b) {
+  uint32_t va = *(const uint32_t*)a;
+  uint32_t vb = *(const uint32_t*)b;
+  return (va > vb) - (va < vb);
+}
+
+static void readAdcAveraged(int pin, float* outAdc, float* outMvCal) {
+  uint32_t adcSamples[ADC_AVG_SAMPLES];
+  uint32_t mvSamples[ADC_AVG_SAMPLES];
+
+  for (int i = 0; i < ADC_AVG_SAMPLES; i++) {
+    adcSamples[i] = (uint32_t)analogRead(pin);
+    mvSamples[i] = analogReadMilliVolts(pin);
+  }
+
+  qsort(adcSamples, ADC_AVG_SAMPLES, sizeof(uint32_t), cmpUint32);
+  qsort(mvSamples, ADC_AVG_SAMPLES, sizeof(uint32_t), cmpUint32);
+
+  const int start = ADC_AVG_TRIM;
+  const int end = ADC_AVG_SAMPLES - ADC_AVG_TRIM;
+  const int count = end - start;
+
+  uint32_t adcSum = 0;
+  uint32_t mvSum = 0;
+  for (int i = start; i < end; i++) {
+    adcSum += adcSamples[i];
+    mvSum += mvSamples[i];
+  }
+
+  *outAdc = (float)adcSum / (float)count;
+  *outMvCal = (float)mvSum / (float)count;
+}
+
+static float batteryVoltageFromMvCal(float mvCal) {
+  return (battMvCalA * mvCal * mvCal) + (battMvCalB * mvCal) + battMvCalC;
+}
+
+static float sampleBatteryVoltage(float* outAdc, float* outMvCal) {
+  float adc = 0.0f;
+  float mvCal = 0.0f;
+  readAdcAveraged(batteryVoltagePin, &adc, &mvCal);
+  if (outAdc) {
+    *outAdc = adc;
+  }
+  if (outMvCal) {
+    *outMvCal = mvCal;
+  }
+  return batteryVoltageFromMvCal(mvCal);
+}
+
+void clearChargeHistory() {
+  chargeHistoryCount = 0;
+  chargeHistoryHead = 0;
+  hasLastChargeMv = false;
+  lastChargeMv = 0.0f;
+  isCharging = false;
+  lastSmoothedRiseMv = 0.0f;
+  lastSlopeMvPerMin = 0.0f;
+  chargeLedFlashLastMs = 0;
+  chargeLedFlashOn = true;
+  batteryChargeFlashLedIndex = -1;
+}
+
+static void pushChargeSample(float mv, unsigned long ms) {
+  chargeHistory[chargeHistoryHead].mv = mv;
+  chargeHistory[chargeHistoryHead].ms = ms;
+  chargeHistoryHead = (chargeHistoryHead + 1) % CHARGE_HISTORY_LEN;
+  if (chargeHistoryCount < CHARGE_HISTORY_LEN) {
+    chargeHistoryCount++;
+  }
+}
+
+static int chargeHistoryIndex(int ageFromOldest) {
+  int oldestIdx = (chargeHistoryHead - chargeHistoryCount + CHARGE_HISTORY_LEN) % CHARGE_HISTORY_LEN;
+  return (oldestIdx + ageFromOldest) % CHARGE_HISTORY_LEN;
+}
+
+static ChargeSample oldestChargeSample() {
+  return chargeHistory[chargeHistoryIndex(0)];
+}
+
+static ChargeSample newestChargeSample() {
+  return chargeHistory[chargeHistoryIndex(chargeHistoryCount - 1)];
+}
+
+static float meanChargeEdge(bool newestEdge, int n) {
+  if (chargeHistoryCount <= 0 || n <= 0) {
+    return 0.0f;
+  }
+  if (n > chargeHistoryCount) {
+    n = chargeHistoryCount;
+  }
+  if (n > chargeHistoryCount / 2) {
+    n = chargeHistoryCount / 2;
+    if (n < 1) {
+      n = 1;
+    }
+  }
+
+  float sum = 0.0f;
+  if (newestEdge) {
+    int start = chargeHistoryCount - n;
+    for (int i = 0; i < n; i++) {
+      sum += chargeHistory[chargeHistoryIndex(start + i)].mv;
+    }
+  } else {
+    for (int i = 0; i < n; i++) {
+      sum += chargeHistory[chargeHistoryIndex(i)].mv;
+    }
+  }
+  return sum / (float)n;
+}
+
+static float chargeSlopeMvPerMin() {
+  if (chargeHistoryCount < 2) {
+    return 0.0f;
+  }
+
+  ChargeSample oldest = oldestChargeSample();
+  double sumT = 0.0;
+  double sumV = 0.0;
+  double sumTT = 0.0;
+  double sumTV = 0.0;
+  const int n = chargeHistoryCount;
+
+  for (int i = 0; i < n; i++) {
+    ChargeSample s = chargeHistory[chargeHistoryIndex(i)];
+    double tMin = (double)(s.ms - oldest.ms) / 60000.0;
+    double v = (double)s.mv;
+    sumT += tMin;
+    sumV += v;
+    sumTT += tMin * tMin;
+    sumTV += tMin * v;
+  }
+
+  double denom = (double)n * sumTT - sumT * sumT;
+  if (denom <= 1e-12) {
+    return 0.0f;
+  }
+  return (float)(((double)n * sumTV - sumT * sumV) / denom);
+}
+
+static bool chargingDetectionBusy() {
+  return isFlushing || heaterOn || heaterOutputOn || batteryAssessment.inProgress ||
+         motorHomingActive || otaEnabled;
+}
+
+void updateChargingDetection() {
+  if (chargingDetectionBusy()) {
+    // Keep history/flag, but ignore drop-detect against a pre-load sample after heater/assess.
+    hasLastChargeMv = false;
+    return;
+  }
+
+  unsigned long now = millis();
+  if (lastChargeSampleMs != 0 && (now - lastChargeSampleMs) < CHARGE_SAMPLE_INTERVAL_MS) {
+    return;
+  }
+  lastChargeSampleMs = now;
+
+  float mvCal = 0.0f;
+  sampleBatteryVoltage(nullptr, &mvCal);
+
+  if (hasLastChargeMv && (lastChargeMv - mvCal) >= CHARGE_DROP_RESET_MV) {
+    clearChargeHistory();
+    lastChargeSampleMs = now;
+  }
+
+  pushChargeSample(mvCal, now);
+  lastChargeMv = mvCal;
+  hasLastChargeMv = true;
+  lastSmoothedRiseMv = 0.0f;
+  lastSlopeMvPerMin = 0.0f;
+
+  if (chargeHistoryCount < (CHARGE_SMOOTH_SAMPLES * 2)) {
+    return;
+  }
+
+  ChargeSample oldest = oldestChargeSample();
+  ChargeSample newest = newestChargeSample();
+  unsigned long spanMs = newest.ms - oldest.ms;
+  if (spanMs < CHARGE_MIN_SPAN_MS) {
+    return;
+  }
+
+  lastSmoothedRiseMv = meanChargeEdge(true, CHARGE_SMOOTH_SAMPLES) -
+                       meanChargeEdge(false, CHARGE_SMOOTH_SAMPLES);
+  lastSlopeMvPerMin = chargeSlopeMvPerMin();
+
+  const bool rising =
+      (lastSmoothedRiseMv >= CHARGE_RISE_MV) ||
+      (lastSlopeMvPerMin >= CHARGE_SLOPE_MV_PER_MIN);
+  const bool flat =
+      (lastSmoothedRiseMv < CHARGE_CLEAR_RISE_MV) &&
+      (lastSlopeMvPerMin < CHARGE_CLEAR_SLOPE_MV_PER_MIN);
+
+  if (rising) {
+    if (!isCharging) {
+      lastActivityMillis = millis();  // reset 5 min inactivity window when charging starts
+    }
+    isCharging = true;
+  } else if (flat) {
+    isCharging = false;
+  }
+}
+
+void updateChargingLedFlash() {
+  if (!batteryDisplayMode || !isCharging || batteryChargeFlashLedIndex < 0) {
+    chargeLedFlashLastMs = 0;
+    chargeLedFlashOn = true;
+    return;
+  }
+
+  unsigned long now = millis();
+  if (chargeLedFlashLastMs == 0) {
+    chargeLedFlashLastMs = now;
+    chargeLedFlashOn = true;
+    mcp_digitalWrite(getLedPin(batteryChargeFlashLedIndex), HIGH);
+    return;
+  }
+  if ((now - chargeLedFlashLastMs) < CHARGE_LED_FLASH_MS) {
+    return;
+  }
+  chargeLedFlashLastMs = now;
+  chargeLedFlashOn = !chargeLedFlashOn;
+  mcp_digitalWrite(getLedPin(batteryChargeFlashLedIndex), chargeLedFlashOn ? HIGH : LOW);
 }
 
 static int batteryChargeLevelFromVoltage(float batteryVoltage) {
@@ -8193,7 +8556,7 @@ bool validateBatteryAssessParams() {
   if (maxBatterySagV != maxBatterySagV || maxBatterySagV < 0.05f || maxBatterySagV > 2.0f) {
     return false;
   }
-  if (minIdleBatteryVFloor != minIdleBatteryVFloor || minIdleBatteryVFloor < 10.5f || minIdleBatteryVFloor > 13.0f) {
+  if (minIdleBatteryVFloor != minIdleBatteryVFloor || minIdleBatteryVFloor < 10.0f || minIdleBatteryVFloor > 13.0f) {
     return false;
   }
   if (usableVFull != usableVFull || usableVFull <= minLoadedBatteryV || usableVFull > 13.5f) {
@@ -8251,6 +8614,34 @@ void applyHeaterFailsafeParamsFromCsv(const float* parameters_list, int count) {
   if (count >= 32) {
     heaterAbsoluteMaxOnS = (long)parameters_list[30];
     MAX_TEMP_FAILSAFE_C = parameters_list[31];
+  }
+  applyBattMvCalParamsFromCsv(parameters_list, count);
+}
+
+void applyBattMvCalDefaults() {
+  battMvCalA = kBattMvCalA;
+  battMvCalB = kBattMvCalB;
+  battMvCalC = kBattMvCalC;
+}
+
+bool validateBattMvCalParams() {
+  if (battMvCalA != battMvCalA || battMvCalA < 1e-7f || battMvCalA > 1e-4f) {
+    return false;
+  }
+  if (battMvCalB != battMvCalB || battMvCalB < -0.1f || battMvCalB > 0.0f) {
+    return false;
+  }
+  if (battMvCalC != battMvCalC || battMvCalC < 10.0f || battMvCalC > 25.0f) {
+    return false;
+  }
+  return true;
+}
+
+void applyBattMvCalParamsFromCsv(const float* parameters_list, int count) {
+  if (count >= 35) {
+    battMvCalA = parameters_list[32];
+    battMvCalB = parameters_list[33];
+    battMvCalC = parameters_list[34];
   }
 }
 
@@ -8326,7 +8717,7 @@ static bool checkRuntimeSagDebounced(float v, const char* reason) {
 }
 
 float readBatteryVoltageQuiet() {
-  return batteryVoltageFromAdc(analogRead(batteryVoltagePin));
+  return sampleBatteryVoltage(nullptr, nullptr);
 }
 
 static float heaterCurrentFromAdc(int analogValue) {
@@ -8369,12 +8760,13 @@ void streamBatteryAssessReport(const char* tag) {
   }
 
   snprintf(line, sizeof(line),
-           "summary vLoadWorst=%.2fV sagWorst=%.2fV usable=%d%% passed=%d flushAllowed=%d",
+           "summary vLoadWorst=%.2fV sagWorst=%.2fV usable=%d%% passed=%d flushAllowed=%d charging=%d",
            batteryAssessment.vLoadWorst,
            batteryAssessment.sagWorst,
            batteryAssessment.usablePercent,
            batteryAssessment.assessPassed ? 1 : 0,
-           batteryAssessment.flushAllowed ? 1 : 0);
+           batteryAssessment.flushAllowed ? 1 : 0,
+           isCharging ? 1 : 0);
   emitBatteryReportLine(line);
 
   snprintf(line, sizeof(line),
@@ -8387,8 +8779,7 @@ void streamBatteryAssessReport(const char* tag) {
 }
 
 float minIdleBatteryV() {
-  float fromThreshold = 11.0f + (batteryThreshold / 100.0f) * 1.6f;
-  return (fromThreshold > minIdleBatteryVFloor) ? fromThreshold : minIdleBatteryVFloor;
+  return minIdleBatteryVFloor;
 }
 
 void logPowerTestEvent(const char* phase, const char* msg, bool includeContext, bool persist) {
@@ -8904,15 +9295,27 @@ void applyLoadedMotorHomingDeferred() {
     logPowerTestEvent("homing_defer", "cleared hw_disconnected", true);
     return;
   }
-  ERROR_CODE = 2;
-  LEDErrorCode(2);
+  // Latch ERROR 2 only while battery/brownout still blocks homing. A charged pack
+  // keeps the NVS defer flag (position unknown / flush blocked) but must not flash
+  // a false low-battery indication.
+  const bool batteryStillBlocks =
+      lastBootHeaterTestSkipped || !isBatteryOkForHeaterTest();
   char msg[96];
-  snprintf(msg, sizeof(msg), "boot_skip persisted reason=%s",
-           motorHomingDeferReason[0] ? motorHomingDeferReason : "unknown");
+  if (batteryStillBlocks) {
+    ERROR_CODE = 2;
+    LEDErrorCode(2);
+    snprintf(msg, sizeof(msg), "boot_skip persisted reason=%s",
+             motorHomingDeferReason[0] ? motorHomingDeferReason : "unknown");
+  } else {
+    snprintf(msg, sizeof(msg), "boot_resume pending reason=%s",
+             motorHomingDeferReason[0] ? motorHomingDeferReason : "unknown");
+  }
   logPowerTestEvent("homing_defer", msg, true);
 }
 
 bool shouldDeferHomingAtBoot(const char** reason) {
+  // Persisted defer is handled by cold-boot setup (resume if battery OK).
+  // This branch remains as a safe default if called while the flag is set.
   if (motorHomingDeferred) {
     if (reason) {
       *reason = motorHomingDeferReason[0] ? motorHomingDeferReason : "nvs_persisted";
@@ -8976,19 +9379,19 @@ void tryStartDeferredHomingIfReady() {
 }
 
 float readBatteryVoltage() {
-  int analogValue = analogRead(batteryVoltagePin);
-  float batteryVoltage = batteryVoltageFromAdc(analogValue);
-  float voltage = analogValue * (3.3f / 4095.0f);
+  float adc = 0.0f;
+  float mvCal = 0.0f;
+  float batteryVoltage = sampleBatteryVoltage(&adc, &mvCal);
 
   if (!batteryAssessment.inProgress) {
     int chargeLevel = batteryAssessment.valid ? batteryAssessment.usablePercent
                                               : usablePercentFromVLoad(batteryVoltage);
     const char* usableSuffix = batteryAssessment.valid ? " cached" : "";
 
-    Serial.printf("Battery Debug: ADC=%d, VMON=%.3fV, Battery=%.2fV, Usable=%d%%%s\n",
-                  analogValue, voltage, batteryVoltage, chargeLevel, usableSuffix);
+    Serial.printf("Battery Debug: ADC=%.1f, VMON_CAL=%.1fmV, Battery=%.2fV, Usable=%d%%%s, charging=%d\n",
+                  adc, mvCal, batteryVoltage, chargeLevel, usableSuffix, isCharging ? 1 : 0);
     if (serial_streaming_enabled) {
-      sendSerialToBLE("BAT_ADC: " + String(analogValue) + ", USABLE: " + String(chargeLevel) + "%\n");
+      sendSerialToBLE("BAT_ADC: " + String(adc, 1) + ", USABLE: " + String(chargeLevel) + "%\n");
     }
   }
   return batteryVoltage;
@@ -9060,7 +9463,14 @@ void renderBatteryLevelLeds(int chargeLevel) {
     mcp_digitalWrite(getLedPin(i), HIGH);
   }
 
-  if (chargeLevel <= 20) {
+  // Tip of the bar (last illuminated toward empty); flash this when charging.
+  if (ledsToLight > 0) {
+    batteryChargeFlashLedIndex = totalLeds - ledsToLight;
+  } else {
+    batteryChargeFlashLedIndex = totalLeds - 1;
+  }
+
+  if (chargeLevel < 14) {
     for (int flash = 0; flash < 3; flash++) {
       mcp_digitalWrite(getLedPin(totalLeds - 1), HIGH);
       delay(200);
@@ -9068,6 +9478,10 @@ void renderBatteryLevelLeds(int chargeLevel) {
       mcp_digitalWrite(getLedPin(totalLeds - 1), LOW);
       delay(200);
       feedTaskWatchdog();
+    }
+    // Restore tip LED after low-battery flash pattern (ends OFF).
+    if (ledsToLight > 0) {
+      mcp_digitalWrite(getLedPin(batteryChargeFlashLedIndex), HIGH);
     }
   }
 }
@@ -9085,6 +9499,16 @@ void displayBatteryChargeLevel() {
   assessBatteryUsable("display", true, nullptr);
   streamBatteryAssessReport("display");
 
+  // Averaged ADC/VMON_CAL sample after assess (for divider troubleshooting over Serial + BLE serial)
+  float adc = 0.0f;
+  float mvCal = 0.0f;
+  float batteryFromAdc = sampleBatteryVoltage(&adc, &mvCal);
+  char adcLine[128];
+  snprintf(adcLine, sizeof(adcLine),
+           "Battery Debug: ADC=%.1f, VMON_CAL=%.1fmV, Battery=%.2fV, charging=%d",
+           adc, mvCal, batteryFromAdc, isCharging ? 1 : 0);
+  emitBatteryReportLine(adcLine);
+
   int chargeLevel = batteryAssessment.usablePercent;
   float batteryVoltage = batteryAssessment.vIdle;
   float vLoadWorst = batteryAssessment.vLoadWorst;
@@ -9092,21 +9516,24 @@ void displayBatteryChargeLevel() {
   float mainTemp = readTemperature();
   float batteryTemp = readBatteryTemperatureQuiet();
 
-  char summary[160];
+  char summary[176];
   snprintf(summary, sizeof(summary),
-           "Battery: idle=%.2fV usable=%d%% vLoadWorst=%.2fV flushOK=%d, T=%.1fC batT=%.1fC",
+           "Battery: idle=%.2fV usable=%d%% vLoadWorst=%.2fV flushOK=%d charging=%d, T=%.1fC batT=%.1fC",
            batteryVoltage,
            chargeLevel,
            vLoadWorst,
            batteryAssessment.flushAllowed ? 1 : 0,
+           isCharging ? 1 : 0,
            mainTemp,
            batteryTemp);
-  Serial.println(summary);
-  if (serial_streaming_enabled) {
-    sendSerialToBLE(String(summary) + "\n");
-  }
+  emitBatteryReportLine(summary);
 
   renderBatteryLevelLeds(chargeLevel);
+  chargeLedFlashLastMs = 0;
+  chargeLedFlashOn = true;
+  if (isCharging && batteryChargeFlashLedIndex >= 0) {
+    mcp_digitalWrite(getLedPin(batteryChargeFlashLedIndex), HIGH);
+  }
 }
 
 void flashLEDsAcknowledgment() {
@@ -10199,7 +10626,7 @@ void writeResponseToChannel(const String& response) {
   }
 }
 
-// Build 32-value CSV for param read/write
+// Build 35-value CSV for param read/write
 String buildParamCSV() {
   return String(batteryThreshold) + "," +
          String(K) + "," +
@@ -10232,7 +10659,10 @@ String buildParamCSV() {
          String(heaterPwmReduced) + "," +
          String(maxHeaterWallTimeS) + "," +
          String(heaterAbsoluteMaxOnS) + "," +
-         String(MAX_TEMP_FAILSAFE_C, 1);
+         String(MAX_TEMP_FAILSAFE_C, 1) + "," +
+         String(battMvCalA, 9) + "," +
+         String(battMvCalB, 9) + "," +
+         String(battMvCalC, 9);
 }
 
 // Low-level: push value+notify to serial GATT. Does not check serial_streaming_enabled.

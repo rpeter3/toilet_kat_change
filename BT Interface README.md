@@ -49,7 +49,7 @@ The system supports 30 configurable parameters over BLE. Default values are set 
 
 | Parameter | Description | Units | Default |
 |-----------|-------------|-------|---------|
-| batteryThreshold | Minimum usable battery percent before flush | % | 7 |
+| batteryThreshold | Minimum usable battery percent before flush | % | 1 |
 | K | Temperature setpoint for PID control | °C | 140.0 |
 | F | How long to feed the bag at the START of a flush | seconds | 8 |
 | T | Cooling Time | seconds | 60 |
@@ -71,10 +71,10 @@ The system supports 30 configurable parameters over BLE. Default values are set 
 | heaterUpperToleranceC | Heater OFF threshold above target | °C | 2.0 |
 | COOL_OPEN_TEMP_C | Open sealer when thermistor cools below this temperature | °C | 80.0 |
 | MAX_COOL_WAIT_S | Safety timeout for cooling stage before forcing open | seconds | 180 |
-| minLoadedBatteryV | Minimum loaded battery voltage during flush preflight heater test | V | 11.2 |
+| minLoadedBatteryV | Minimum loaded battery voltage during flush preflight heater test | V | 10.0 |
 | maxBatterySagV | Maximum allowed battery sag during flush preflight heater test | V | 0.85 |
-| minIdleBatteryVFloor | Minimum idle battery voltage floor before flush preflight | V | 11.3 |
-| usableVFull | Loaded battery voltage mapped to 100% usable | V | 12.4 |
+| minIdleBatteryVFloor | Minimum idle battery voltage floor before flush preflight | V | 10.0 |
+| usableVFull | Loaded battery voltage mapped to 100% usable | V | 11.4 |
 | batteryAssessSettleMs | Heater pulse settle time during battery assessment | ms | 50 |
 | heaterCapV255 | Idle battery voltage for maximum heater PWM cap during assessment | V | 11.23 |
 | heaterCapV170 | Idle battery voltage for 170 heater PWM cap during assessment | V | 11.22 |

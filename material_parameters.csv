@@ -1,5 +1,5 @@
 Parameter,Description,1.5mil High Barrier Plastic,Compostable 1.5mil
-batteryThreshold,Minimum usable battery percent before flush,15,10
+batteryThreshold,Minimum usable battery percent before flush,1,1
 K,Temperature setpoint,140,80
 F,How long to feed the bag at the START of a flush,8,8
 T,Cooling Time,60,40
@@ -21,13 +21,16 @@ heaterLowerToleranceC,Heater ON threshold below target (temp <= target - lower),
 heaterUpperToleranceC,Heater OFF threshold above target (temp >= target + upper can be negative),2,2
 COOL_OPEN_TEMP_C,Open sealer when thermistor cools below this temperature °C,80,65
 MAX_COOL_WAIT_S,Safety timeout for cooling stage before forcing open sec,180,180
-minLoadedBatteryV,Minimum loaded battery voltage during flush preflight heater test V,11.2,11.2
+minLoadedBatteryV,Minimum loaded battery voltage during flush preflight heater test V,10.0,10.0
 maxBatterySagV,Maximum allowed battery sag during flush preflight heater test V,0.85,0.85
-minIdleBatteryVFloor,Minimum idle battery voltage floor before flush preflight V,11.3,11.3
-usableVFull,Loaded battery voltage mapped to 100 percent usable V,12.4,12.4
+minIdleBatteryVFloor,Minimum idle battery voltage floor before flush preflight V,10.0,10.0
+usableVFull,Loaded battery voltage mapped to 100 percent usable V,11.4,11.4
 batteryAssessSettleMs,Heater pulse settle time during battery assessment ms,50,50
 heaterCapVFull,VMON voltage for full heater PWM 255 below this reduced PWM applies V,11.23,11.23
 heaterPwmReduced,Heater PWM duty when VMON is below heaterCapVFull,255,170
 maxHeaterWallTimeS,Maximum heater phase duration in flush step 6 before error 6 sec,200,200
 heaterAbsoluteMaxOnS,Maximum continuous heater PWM on-time before fail-safe error 8 sec,200,200
 MAX_TEMP_FAILSAFE_C,Absolute thermistor temperature ceiling before fail-safe error 9 °C,200,200
+battMvCalA,Battery VMON_CAL quadratic coefficient A (V = A*mV^2 + B*mV + C),0.000009091,0.000009091
+battMvCalB,Battery VMON_CAL quadratic coefficient B,-0.019148,-0.019148
+battMvCalC,Battery VMON_CAL quadratic coefficient C V,17.397361,17.397361

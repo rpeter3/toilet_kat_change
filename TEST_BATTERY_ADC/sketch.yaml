@@ -1,0 +1,7 @@
+profiles:
+  esp32s3:
+    notes: Lightweight battery ADC test - avoid full erase and high baud flakiness
+    fqbn: esp32:esp32:esp32s3:UploadSpeed=115200,USBMode=hwcdc,CDCOnBoot=cdc,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240,FlashMode=dio,FlashSize=16M,PartitionScheme=custom,DebugLevel=none,PSRAM=opi,LoopCore=1,EventsCore=1,EraseFlash=none,JTAGAdapter=default,ZigbeeMode=default
+    platforms:
+      - platform: esp32:esp32 (3.3.3)
+default_profile: esp32s3
