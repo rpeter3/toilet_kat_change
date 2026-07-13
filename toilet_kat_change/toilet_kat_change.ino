@@ -614,7 +614,7 @@ long MAX_COOL_WAIT_S = 180; //parameters_list[21] - Safety fallback max cooling 
 // Battery assessment defaults (material_parameters.csv / BLE presets)
 namespace {
 constexpr float kBatteryAssessDefaultMinLoadedV = 10.0f; // 0% usable + hard abort (~0.5 V above brownout)
-constexpr float kBatteryAssessDefaultMaxSagV = 0.85f;
+constexpr float kBatteryAssessDefaultMaxSagV = 0.85f; // retained for BLE/CSV layout; not used as a pass/fail gate
 constexpr float kBatteryAssessDefaultMinIdleVFloor = 10.0f;
 constexpr float kBatteryAssessDefaultUsableVFull = 11.4f; // 100% usable under load (plateau above this)
 constexpr uint16_t kBatteryAssessDefaultSettleMs = 50;
@@ -8503,6 +8503,18 @@ void updateChargingDetection() {
   if (rising) {
     if (!isCharging) {
       lastActivityMillis = millis();  // reset 5 min inactivity window when charging starts
+      char msg[160];
+      snprintf(msg, sizeof(msg),
+               "CHARGING_DETECTED: mv=%.1f rise=%.2fmV slope=%.2fmV/min span=%lums "
+               "(th rise=%.2f slope=%.2f)",
+               mvCal,
+               lastSmoothedRiseMv,
+               lastSlopeMvPerMin,
+               (unsigned long)spanMs,
+               CHARGE_RISE_MV,
+               CHARGE_SLOPE_MV_PER_MIN);
+      Serial.println(msg);
+      SerialBLE_println(msg);
     }
     isCharging = true;
   } else if (flat) {
@@ -8830,11 +8842,6 @@ bool measureBatteryUnderLoad(float* vIdle, float* vLoad, int testDuty, uint16_t 
     logPowerTestEvent(tag, msg, true);
     return false;
   }
-  if (sag > maxBatterySagV) {
-    snprintf(msg, sizeof(msg), "FAIL sag=%.2f > max=%.2f", sag, maxBatterySagV);
-    logPowerTestEvent(tag, msg, true);
-    return false;
-  }
 
   logPowerTestEvent(tag, "PASS", false, false);
   return true;
@@ -8939,7 +8946,6 @@ bool assessBatteryUsable(const char* tag, bool forceRefresh, bool* outFlushAllow
   float vLoadWorst = vIdle;
   float sagWorst = 0.0f;
   float highestDutyVLoad = vIdle;
-  float highestDutySag = 0.0f;
   int highestDuty = dutySteps[dutyCount - 1];
   float stepIdle = vIdle;
 
@@ -8965,7 +8971,6 @@ bool assessBatteryUsable(const char* tag, bool forceRefresh, bool* outFlushAllow
     }
     if (duty == highestDuty) {
       highestDutyVLoad = vLoad;
-      highestDutySag = sag;
     }
     if (batteryAssessment.stepCount < 3) {
       BatteryAssessStep& step = batteryAssessment.steps[batteryAssessment.stepCount++];
@@ -8980,7 +8985,7 @@ bool assessBatteryUsable(const char* tag, bool forceRefresh, bool* outFlushAllow
     wdtSafeDelay(20);
   }
 
-  bool assessPassed = (highestDutyVLoad >= minLoadedBatteryV) && (highestDutySag <= maxBatterySagV);
+  bool assessPassed = (highestDutyVLoad >= minLoadedBatteryV);
   storeBatteryAssessment(vIdle, vLoadWorst, sagWorst, capDuty, assessPassed);
   batteryAssessment.inProgress = false;
   clearLowBatteryErrorIfRecovered(assessPassed);

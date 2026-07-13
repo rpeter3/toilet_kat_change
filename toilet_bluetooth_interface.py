@@ -159,7 +159,7 @@ class ToiletSystemInterface:
             "COOL_OPEN_TEMP_C": {"description": "Open sealer when thermistor cools below this temperature", "units": "°C", "default": 80.0},
             "MAX_COOL_WAIT_S": {"description": "Safety timeout for cooling stage before forcing open", "units": "sec", "default": 180.0},
             "minLoadedBatteryV": {"description": "Minimum loaded battery voltage during flush preflight heater test", "units": "V", "default": 10.0},
-            "maxBatterySagV": {"description": "Maximum allowed battery sag during flush preflight heater test", "units": "V", "default": 0.85},
+            "maxBatterySagV": {"description": "Battery sag logged during assess (diagnostic only; not a pass/fail gate)", "units": "V", "default": 0.85},
             "minIdleBatteryVFloor": {"description": "Minimum idle battery voltage floor before flush preflight", "units": "V", "default": 10.0},
             "usableVFull": {"description": "Loaded battery voltage mapped to 100 percent usable", "units": "V", "default": 11.4},
             "batteryAssessSettleMs": {"description": "Heater pulse settle time during battery assessment", "units": "ms", "default": 50.0},

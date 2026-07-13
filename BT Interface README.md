@@ -72,7 +72,7 @@ The system supports 30 configurable parameters over BLE. Default values are set 
 | COOL_OPEN_TEMP_C | Open sealer when thermistor cools below this temperature | °C | 80.0 |
 | MAX_COOL_WAIT_S | Safety timeout for cooling stage before forcing open | seconds | 180 |
 | minLoadedBatteryV | Minimum loaded battery voltage during flush preflight heater test | V | 10.0 |
-| maxBatterySagV | Maximum allowed battery sag during flush preflight heater test | V | 0.85 |
+| maxBatterySagV | Battery sag logged during assess (diagnostic only; not a gate) | V | 0.85 |
 | minIdleBatteryVFloor | Minimum idle battery voltage floor before flush preflight | V | 10.0 |
 | usableVFull | Loaded battery voltage mapped to 100% usable | V | 11.4 |
 | batteryAssessSettleMs | Heater pulse settle time during battery assessment | ms | 50 |
