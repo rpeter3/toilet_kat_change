@@ -34,3 +34,4 @@ MAX_TEMP_FAILSAFE_C,Absolute thermistor temperature ceiling before fail-safe err
 battMvCalA,Battery VMON_CAL quadratic coefficient A (V = A*mV^2 + B*mV + C),0.000009091,0.000009091
 battMvCalB,Battery VMON_CAL quadratic coefficient B,-0.019148,-0.019148
 battMvCalC,Battery VMON_CAL quadratic coefficient C V,17.397361,17.397361
+vFullMvSeed,Initial learned full VMON_CAL mV when learn state empty,1550,1550

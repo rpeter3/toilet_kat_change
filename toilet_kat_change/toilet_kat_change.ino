@@ -21,6 +21,7 @@
 #include <esp_core_dump.h>
 #include <esp_partition.h>
 #include <stdlib.h>
+#include <math.h>
 #include "ota_diag_types.h"
 #define LED_PHASE_COUNT 5
 
@@ -70,6 +71,15 @@ const int ADC_AVG_TRIM = 2;
 constexpr float kBattMvCalA = 0.000009091f;
 constexpr float kBattMvCalB = -0.019148f;
 constexpr float kBattMvCalC = 17.397361f;
+// Full-anchor ratchet (learned vFullMv in VMON_CAL mV); seed is BLE/material param
+constexpr float kVFullMvSeed = 1550.0f;
+constexpr float VFULL_MV_MIN = 1500.0f;
+constexpr float VFULL_MV_HARD_MAX = 2200.0f;  // seed write sanity only; learned value has no soft max
+constexpr float FULL_SLOW_STEP_MV = 3.0f;  // sole upward step rate (charge-gated)
+constexpr unsigned long FULL_POST_LOAD_SETTLE_MS = 60000UL;
+constexpr int BATT_FULL_LEARN_WINDOW = 6;
+constexpr float LEARN_STDEV_MAX_MV = 1.0f;  // reject jagged windows; candidate is mean
+constexpr float LEARN_MIN_DELTA_MV = 0.1f;  // ignore sub-0.1 mV float noise raises
 
 // Custom I2C instance
 TwoWire myI2C = TwoWire(0);
@@ -130,11 +140,11 @@ void trustDoubleBeep();
 #define EEPROM_SIZE 512
 #define PARAM_START_ADDR 0
 #define PARAM_MAGIC_NUMBER 0x1234
-#define PARAM_COUNT 35
+#define PARAM_COUNT 36
 #define PARAM_EEPROM_SCHEMA_ADDR 196
 #define PARAM_EEPROM_SCHEMA_V1 0
 #define PARAM_EEPROM_SCHEMA_V2 2
-#define PARAM_EEPROM_SCHEMA_V3 3
+#define PARAM_EEPROM_SCHEMA_V3 3  // current: battMvCal* + vFullMvSeed (no soft max)
 #define PARAM_EEPROM_FLOAT_EPSILON 1e-4f
 
 struct ParamEepromSnapshot {
@@ -176,6 +186,7 @@ struct ParamEepromSnapshot {
   float battMvCalA;
   float battMvCalB;
   float battMvCalC;
+  float vFullMvSeed;
 };
 
 #define HW_VERSION_ADDR 200
@@ -183,6 +194,11 @@ struct ParamEepromSnapshot {
 #define FLUSH_COUNT_MAGIC_ADDR 300
 #define FLUSH_COUNT_ADDR (FLUSH_COUNT_MAGIC_ADDR + sizeof(uint16_t))
 #define FLUSH_COUNT_MAGIC 0xF1C5
+#define BATT_FULL_LEARN_MAGIC 0xBF01
+#define BATT_FULL_LEARN_SCHEMA 1
+#define BATT_FULL_LEARN_MAGIC_ADDR (FLUSH_COUNT_ADDR + sizeof(uint32_t))
+#define BATT_FULL_LEARN_SCHEMA_ADDR (BATT_FULL_LEARN_MAGIC_ADDR + sizeof(uint16_t))
+#define BATT_FULL_LEARN_VFULL_ADDR (BATT_FULL_LEARN_SCHEMA_ADDR + sizeof(uint16_t))
 
 // Hardware matrix persistence (NVS)
 #define HW_MATRIX_MAGIC 0x484D4154UL  // "HMAT"
@@ -313,6 +329,9 @@ void runDeferredParamEepromSchemaStampIfNeeded();
 bool reclaimNvsSpaceForParamEeprom();
 void loadFlushCountFromEEPROM();
 bool saveFlushCountToEEPROM();
+void loadBattFullLearnFromEEPROM();
+bool saveBattFullLearnToEEPROM();
+bool resetBattFullLearnToSeed();
 void incrementFlushCount();
 void initializeHardwareVersion();
 VersionInfo readHardwareVersion();
@@ -354,6 +373,7 @@ void setFlushStep(int newStep, bool logTransition = true);
 String readLogChunk(size_t offset);
 float readBatteryVoltage();
 float readBatteryVoltageQuiet();
+float sampleBatteryVoltage(float* outAdc, float* outMvCal);
 float readHeaterCurrentQuiet();
 float readBatteryTemperatureQuiet();
 bool measureBatteryUnderLoad(float* vIdle, float* vLoad, int testDuty, uint16_t settleMs, const char* testTag = nullptr);
@@ -372,6 +392,10 @@ void applyHeaterFailsafeParamsFromCsv(const float* parameters_list, int count);
 void applyBattMvCalDefaults();
 bool validateBattMvCalParams();
 void applyBattMvCalParamsFromCsv(const float* parameters_list, int count);
+void applyVFullMvParamDefaults();
+bool validateVFullMvParams();
+void applyVFullMvParamsFromCsv(const float* parameters_list, int count);
+void onIdleBattMvSample(float mvCal, unsigned long now);
 void clearChargeHistory();
 void updateChargingDetection();
 void updateChargingLedFlash();
@@ -638,6 +662,8 @@ float MAX_TEMP_FAILSAFE_C = kDefaultMaxTempFailsafeC; //parameters_list[31]
 float battMvCalA = kBattMvCalA; //parameters_list[32]
 float battMvCalB = kBattMvCalB; //parameters_list[33]
 float battMvCalC = kBattMvCalC; //parameters_list[34]
+float vFullMvSeed = kVFullMvSeed; //parameters_list[35]
+float vFullMv = kVFullMvSeed;  // learned full VMON_CAL mV (EEPROM)
 float heaterTargetTemp = 140.0;    // Active heater target (K or CUT_MODE_TEMP)
 
 const int FLUSH_STEP_CANCEL_COOL = 14;
@@ -712,15 +738,17 @@ const unsigned long BLE_WAKE_GUARD_INTERVAL_MS = 5000;
 const unsigned long BLE_TIMEOUT = 10 * 60 * 1000; // 10 minutes in milliseconds
 const unsigned long INACTIVITY_SLEEP_MS = 5 * 60 * 1000;  // 5 minutes - then deep sleep
 
-// Idle charging detection from VMON_CAL mV drift (lookback up to inactivity sleep window)
+// Idle charging detection from VMON_CAL mV drift (lookback up to inactivity sleep window).
+// Charger connect steps VMON and ripples through n=60 history; assert thresholds are
+// deliberately high (5 mV rise / 1 mV/min slope) so that alone does not latch isCharging.
 const unsigned long CHARGE_SAMPLE_INTERVAL_MS = 5000UL;
 const int CHARGE_HISTORY_LEN = (int)(INACTIVITY_SLEEP_MS / CHARGE_SAMPLE_INTERVAL_MS);  // 60
 const unsigned long CHARGE_MIN_SPAN_MS = 45000UL;
 const int CHARGE_SMOOTH_SAMPLES = 4;
-const float CHARGE_RISE_MV = 0.5f;
-const float CHARGE_CLEAR_RISE_MV = 0.3f;
-const float CHARGE_SLOPE_MV_PER_MIN = 0.1f;
-const float CHARGE_CLEAR_SLOPE_MV_PER_MIN = 0.05f;
+const float CHARGE_RISE_MV = 5.0f;
+const float CHARGE_CLEAR_RISE_MV = 0.0f;      // clear when rise <= 0 (flat / falling)
+const float CHARGE_SLOPE_MV_PER_MIN = 1.0f;
+const float CHARGE_CLEAR_SLOPE_MV_PER_MIN = 0.0f;  // and slope <= 0
 const float CHARGE_DROP_RESET_MV = 5.0f;
 const unsigned long CHARGE_LED_FLASH_MS = 700UL;
 
@@ -741,8 +769,20 @@ static float lastSlopeMvPerMin = 0.0f;
 static unsigned long chargeLedFlashLastMs = 0;
 static bool chargeLedFlashOn = true;
 static int batteryChargeFlashLedIndex = -1;  // tip of battery bar while displaying
+static int chargeCalChaseStep = 0;  // UI index among first 3 LEDs (0..2) during strong-rise chase
+static bool chargeLedStrongRiseActive = false;
 const unsigned long BATTERY_DISPLAY_MS = 3000UL;
 const unsigned long BATTERY_DISPLAY_CHARGING_MS = 5000UL;
+constexpr float kBattIdleSocCapV = 12.6f;
+constexpr int kBattIdleOverfullLedsOff = 3;  // leave this many dark when vIdle > 12.6 V
+constexpr float kChargeStrongRiseMv = 25.0f;  // chase first 3 LEDs when smoothed rise exceeds this
+
+// Full-anchor learn window (idle trimmed analogReadMilliVolts means)
+static float battFullLearnWindow[BATT_FULL_LEARN_WINDOW];
+static int battFullLearnCount = 0;
+static int battFullLearnHead = 0;
+static bool battFullWasBusy = false;
+static unsigned long battFullPostBusyMs = 0;
 
 // Runtime DEV mode (persisted in NVS): when enabled, BLE stays on and inactivity sleep is disabled.
 const char* DEV_MODE_NAMESPACE = "system";
@@ -1240,6 +1280,9 @@ class server_callbacks: public BLEServerCallbacks {
       if (!validateBattMvCalParams()) {
         applyBattMvCalDefaults();
       }
+      if (!validateVFullMvParams()) {
+        applyVFullMvParamDefaults();
+      }
       if (!(isFlushing && cutBag && case6CutMotorRun)) {
         heaterTargetTemp = K;
       }
@@ -1408,6 +1451,39 @@ class command_characteristic_callbacks: public BLECharacteristicCallbacks {
       writeResponseToChannel(batteryMessage);
       Serial.printf("Processed GET_BATTERY, returned %s\n", batteryMessage.c_str());
       sendSerialToBLE("Processed GET_BATTERY");
+      return;
+    }
+    if (cmd == "GET_BATTERY_DEBUG") {
+      // Support / diagnostics: ADC, VMON_CAL, corrected volts, learned full anchor.
+      float adc = 0.0f;
+      float mvCal = 0.0f;
+      float batteryVoltage = sampleBatteryVoltage(&adc, &mvCal);
+      char debugLine[192];
+      snprintf(debugLine, sizeof(debugLine),
+               "BATTERY_DEBUG:ADC=%.1f,VMON_CAL=%.1fmV,Battery=%.2fV,charging=%d,vFullMv=%.1f,seed=%.1f",
+               adc, mvCal, batteryVoltage, isCharging ? 1 : 0,
+               vFullMv, vFullMvSeed);
+      writeResponseToChannel(String(debugLine));
+      Serial.printf("Processed GET_BATTERY_DEBUG, returned %s\n", debugLine);
+      sendSerialToBLE("Processed GET_BATTERY_DEBUG");
+      return;
+    }
+    if (cmd == "RESET_BATTERY_CAL") {
+      // Dev/support: reset learned vFullMv to seed so charge level can re-learn.
+      float oldV = vFullMv;
+      if (!resetBattFullLearnToSeed()) {
+        writeResponseToChannel("RESET_BATTERY_CAL_ERR:PERSIST_FAIL");
+        Serial.println("RESET_BATTERY_CAL failed: persist error");
+        sendSerialToBLE("RESET_BATTERY_CAL failed: persist error");
+        return;
+      }
+      char ackLine[96];
+      snprintf(ackLine, sizeof(ackLine),
+               "RESET_BATTERY_CAL_ACK:vFullMv=%.1f,seed=%.1f",
+               vFullMv, vFullMvSeed);
+      writeResponseToChannel(String(ackLine));
+      Serial.printf("Processed RESET_BATTERY_CAL, vFullMv %.1f->%.1f\n", oldV, vFullMv);
+      sendSerialToBLE("Processed RESET_BATTERY_CAL");
       return;
     }
     if (cmd == "GET_HW_MATRIX") {
@@ -1727,6 +1803,12 @@ class param_write_characteristic_callbacks: public BLECharacteristicCallbacks {
     if (!validateBattMvCalParams()) {
       writeResponseToChannel("PARAM_WRITE_ERR:BAD_FORMAT");
       Serial.println("Param write rejected: invalid battery VMON_CAL coefficients");
+      loadParametersFromEEPROM();
+      return;
+    }
+    if (!validateVFullMvParams()) {
+      writeResponseToChannel("PARAM_WRITE_ERR:BAD_FORMAT");
+      Serial.println("Param write rejected: invalid vFullMvSeed parameter");
       loadParametersFromEEPROM();
       return;
     }
@@ -2059,6 +2141,7 @@ static void captureParamEepromSnapshot(ParamEepromSnapshot& snap) {
   snap.battMvCalA = battMvCalA;
   snap.battMvCalB = battMvCalB;
   snap.battMvCalC = battMvCalC;
+  snap.vFullMvSeed = vFullMvSeed;
 }
 
 static bool eepromFloatNear(float a, float b) {
@@ -2112,6 +2195,7 @@ static int writeParamBlobToEeprom(int addr) {
   EEPROM.put(addr, battMvCalA); addr += sizeof(battMvCalA);
   EEPROM.put(addr, battMvCalB); addr += sizeof(battMvCalB);
   EEPROM.put(addr, battMvCalC); addr += sizeof(battMvCalC);
+  EEPROM.put(addr, vFullMvSeed); addr += sizeof(vFullMvSeed);
   return addr;
 }
 
@@ -2262,6 +2346,13 @@ static bool verifyParametersReadBackFromEEPROM(const ParamEepromSnapshot& expect
     Serial.printf("EEPROM verify mismatch battMvCalC: expected %.9f read %.9f\n",
                   expected.battMvCalC, readFloat);
     SerialBLE_println("EEPROM verify mismatch battMvCalC");
+    return false;
+  }
+  EEPROM.get(addr, readFloat); addr += sizeof(readFloat);
+  if (!eepromFloatNear(readFloat, expected.vFullMvSeed)) {
+    Serial.printf("EEPROM verify mismatch vFullMvSeed: expected %.3f read %.3f\n",
+                  expected.vFullMvSeed, readFloat);
+    SerialBLE_println("EEPROM verify mismatch vFullMvSeed");
     return false;
   }
 
@@ -2800,8 +2891,16 @@ void loadParametersFromEEPROM() {
       if (!validateBattMvCalParams()) {
         applyBattMvCalDefaults();
       }
+
+      float loadedVFullMvSeed = kVFullMvSeed;
+      EEPROM.get(addr, loadedVFullMvSeed); addr += sizeof(loadedVFullMvSeed);
+      vFullMvSeed = loadedVFullMvSeed;
+      if (!validateVFullMvParams()) {
+        applyVFullMvParamDefaults();
+      }
     } else {
       applyBattMvCalDefaults();
+      applyVFullMvParamDefaults();
     }
 
     heaterTargetTemp = K;
@@ -2950,6 +3049,68 @@ bool saveFlushCountToEEPROM() {
     logBootTiming("eeprom_flush_save_verify_fail");
   } else {
     logBootTiming("eeprom_flush_save_verified");
+  }
+  return verified;
+}
+
+void loadBattFullLearnFromEEPROM() {
+  EEPROM.begin(EEPROM_SIZE);
+  uint16_t magic = 0;
+  uint16_t schema = 0;
+  EEPROM.get(BATT_FULL_LEARN_MAGIC_ADDR, magic);
+  EEPROM.get(BATT_FULL_LEARN_SCHEMA_ADDR, schema);
+
+  bool validMagic = (magic == BATT_FULL_LEARN_MAGIC);
+  float loadedVFull = vFullMvSeed;
+
+  if (validMagic) {
+    EEPROM.get(BATT_FULL_LEARN_VFULL_ADDR, loadedVFull);
+  }
+  EEPROM.end();
+
+  bool vFullOk = (loadedVFull == loadedVFull) &&
+                 (loadedVFull >= VFULL_MV_MIN);
+
+  if (!validMagic || !vFullOk) {
+    vFullMv = vFullMvSeed;
+    if (vFullMv < VFULL_MV_MIN) {
+      vFullMv = VFULL_MV_MIN;
+    }
+    saveBattFullLearnToEEPROM();
+    Serial.printf("Batt full learn init: vFullMv=%.1f\n", vFullMv);
+    return;
+  }
+
+  vFullMv = loadedVFull;
+  if (schema != BATT_FULL_LEARN_SCHEMA) {
+    // Schema bump after flash/OTA: keep vFullMv, rewrite current schema
+    saveBattFullLearnToEEPROM();
+    Serial.printf("Batt full learn schema bump: vFullMv=%.1f\n", vFullMv);
+  } else {
+    Serial.printf("Batt full learn loaded: vFullMv=%.1f\n", vFullMv);
+  }
+}
+
+bool saveBattFullLearnToEEPROM() {
+  EEPROM.begin(EEPROM_SIZE);
+  EEPROM.put(BATT_FULL_LEARN_MAGIC_ADDR, (uint16_t)BATT_FULL_LEARN_MAGIC);
+  EEPROM.put(BATT_FULL_LEARN_SCHEMA_ADDR, (uint16_t)BATT_FULL_LEARN_SCHEMA);
+  EEPROM.put(BATT_FULL_LEARN_VFULL_ADDR, vFullMv);
+  bool commitOk = EEPROM.commit();
+
+  uint16_t verifyMagic = 0;
+  uint16_t verifySchema = 0;
+  float verifyVFull = 0.0f;
+  EEPROM.get(BATT_FULL_LEARN_MAGIC_ADDR, verifyMagic);
+  EEPROM.get(BATT_FULL_LEARN_SCHEMA_ADDR, verifySchema);
+  EEPROM.get(BATT_FULL_LEARN_VFULL_ADDR, verifyVFull);
+  EEPROM.end();
+
+  bool verified = commitOk && (verifyMagic == BATT_FULL_LEARN_MAGIC) &&
+                  (verifySchema == BATT_FULL_LEARN_SCHEMA) &&
+                  (verifyVFull == vFullMv);
+  if (!verified) {
+    Serial.println("ERROR: Failed to persist batt full learn state");
   }
   return verified;
 }
@@ -3439,6 +3600,7 @@ bool isKnownParameterKey(const String& key) {
          key == "heaterCapVFull" || key == "heaterPwmReduced" || key == "maxHeaterWallTimeS" ||
          key == "heaterAbsoluteMaxOnS" || key == "MAX_TEMP_FAILSAFE_C" ||
          key == "battMvCalA" || key == "battMvCalB" || key == "battMvCalC" ||
+         key == "vFullMvSeed" ||
          key == "heaterCapV255" || key == "heaterCapV170" || key == "heaterCapV100";
 }
 
@@ -3557,6 +3719,11 @@ bool validateParameterBlob(const String& componentName, const String& paramsBlob
         errorCode = "OUT_OF_RANGE";
         return false;
       }
+      if (key == "vFullMvSeed" &&
+          (numericValue != numericValue || numericValue < VFULL_MV_MIN || numericValue >= VFULL_MV_HARD_MAX)) {
+        errorCode = "OUT_OF_RANGE";
+        return false;
+      }
       if (key == "K") hasK = true;
       if (key == "CUT_MODE_TEMP") hasCutTemp = true;
       if (key == "heaterLowerToleranceC") hasLower = true;
@@ -3634,6 +3801,7 @@ bool applyParameterBlobToRuntime(const String& paramsBlob, String& errorCode) {
       else if (key == "battMvCalA") battMvCalA = numericValue;
       else if (key == "battMvCalB") battMvCalB = numericValue;
       else if (key == "battMvCalC") battMvCalC = numericValue;
+      else if (key == "vFullMvSeed") vFullMvSeed = numericValue;
       else if (key == "heaterCapV100") { /* legacy: ignored */ }
       else {
         errorCode = "UNKNOWN_PARAM";
@@ -3653,6 +3821,10 @@ bool applyParameterBlobToRuntime(const String& paramsBlob, String& errorCode) {
     return false;
   }
   if (!validateBattMvCalParams()) {
+    errorCode = "OUT_OF_RANGE";
+    return false;
+  }
+  if (!validateVFullMvParams()) {
     errorCode = "OUT_OF_RANGE";
     return false;
   }
@@ -6375,6 +6547,7 @@ void setup() {
     logBootTiming("eeprom_load_start");
     loadParametersFromEEPROM();
     loadFlushCountFromEEPROM();
+    loadBattFullLearnFromEEPROM();
     runDeferredParamEepromSchemaStampIfNeeded();
     logBootTiming("eeprom_load_done");
     logBootCheckpoint("eeprom_ok");
@@ -6437,6 +6610,7 @@ void setup() {
   logBootTiming("eeprom_load_start");
   loadParametersFromEEPROM();
   loadFlushCountFromEEPROM();
+  loadBattFullLearnFromEEPROM();
   runDeferredParamEepromSchemaStampIfNeeded();
   logBootTiming("eeprom_load_done");
   logBootCheckpoint("eeprom_ok");
@@ -8338,10 +8512,17 @@ static void readAdcAveraged(int pin, float* outAdc, float* outMvCal) {
 }
 
 static float batteryVoltageFromMvCal(float mvCal) {
-  return (battMvCalA * mvCal * mvCal) + (battMvCalB * mvCal) + battMvCalC;
+  const float vRaw = (battMvCalA * mvCal * mvCal) + (battMvCalB * mvCal) + battMvCalC;
+  const float vAtFull =
+      (battMvCalA * vFullMv * vFullMv) + (battMvCalB * vFullMv) + battMvCalC;
+  // Refuse nonsense anchor (isnan: NaN is the only float with x != x).
+  if (isnan(vAtFull) || vAtFull < 8.0f || vAtFull > 16.0f) {
+    return vRaw;
+  }
+  return vRaw + (12.6f - vAtFull);
 }
 
-static float sampleBatteryVoltage(float* outAdc, float* outMvCal) {
+float sampleBatteryVoltage(float* outAdc, float* outMvCal) {
   float adc = 0.0f;
   float mvCal = 0.0f;
   readAdcAveraged(batteryVoltagePin, &adc, &mvCal);
@@ -8365,6 +8546,8 @@ void clearChargeHistory() {
   chargeLedFlashLastMs = 0;
   chargeLedFlashOn = true;
   batteryChargeFlashLedIndex = -1;
+  chargeCalChaseStep = 0;
+  chargeLedStrongRiseActive = false;
 }
 
 static void pushChargeSample(float mv, unsigned long ms) {
@@ -8455,7 +8638,13 @@ void updateChargingDetection() {
   if (chargingDetectionBusy()) {
     // Keep history/flag, but ignore drop-detect against a pre-load sample after heater/assess.
     hasLastChargeMv = false;
+    battFullWasBusy = true;
     return;
+  }
+
+  if (battFullWasBusy) {
+    battFullWasBusy = false;
+    battFullPostBusyMs = millis();
   }
 
   unsigned long now = millis();
@@ -8470,6 +8659,8 @@ void updateChargingDetection() {
   if (hasLastChargeMv && (lastChargeMv - mvCal) >= CHARGE_DROP_RESET_MV) {
     clearChargeHistory();
     lastChargeSampleMs = now;
+    battFullLearnCount = 0;
+    battFullLearnHead = 0;
   }
 
   pushChargeSample(mvCal, now);
@@ -8477,6 +8668,8 @@ void updateChargingDetection() {
   hasLastChargeMv = true;
   lastSmoothedRiseMv = 0.0f;
   lastSlopeMvPerMin = 0.0f;
+
+  onIdleBattMvSample(mvCal, now);
 
   if (chargeHistoryCount < (CHARGE_SMOOTH_SAMPLES * 2)) {
     return;
@@ -8497,8 +8690,8 @@ void updateChargingDetection() {
       (lastSmoothedRiseMv >= CHARGE_RISE_MV) ||
       (lastSlopeMvPerMin >= CHARGE_SLOPE_MV_PER_MIN);
   const bool flat =
-      (lastSmoothedRiseMv < CHARGE_CLEAR_RISE_MV) &&
-      (lastSlopeMvPerMin < CHARGE_CLEAR_SLOPE_MV_PER_MIN);
+      (lastSmoothedRiseMv <= CHARGE_CLEAR_RISE_MV) &&
+      (lastSlopeMvPerMin <= CHARGE_CLEAR_SLOPE_MV_PER_MIN);
 
   if (rising) {
     if (!isCharging) {
@@ -8523,13 +8716,52 @@ void updateChargingDetection() {
 }
 
 void updateChargingLedFlash() {
-  if (!batteryDisplayMode || !isCharging || batteryChargeFlashLedIndex < 0) {
+  if (!batteryDisplayMode || !isCharging) {
+    chargeLedFlashLastMs = 0;
+    chargeLedFlashOn = true;
+    chargeCalChaseStep = 0;
+    chargeLedStrongRiseActive = false;
+    return;
+  }
+
+  unsigned long now = millis();
+  const bool idleOverFull =
+      batteryAssessment.valid && (batteryAssessment.vIdle > kBattIdleSocCapV);
+  const bool strongRise = (lastSmoothedRiseMv > kChargeStrongRiseMv);
+  const bool chaseFirstThree = strongRise || idleOverFull;
+  if (chaseFirstThree != chargeLedStrongRiseActive) {
+    chargeLedFlashLastMs = 0;
+    chargeLedStrongRiseActive = chaseFirstThree;
+  }
+
+  // Strong rise or idle>12.6V while charging: chase first 3 LEDs (UI 0..2) backwards (2 -> 1 -> 0).
+  if (chaseFirstThree) {
+    if (chargeLedFlashLastMs == 0) {
+      chargeLedFlashLastMs = now;
+      chargeCalChaseStep = 2;
+      for (int i = 0; i < 3; i++) {
+        mcp_digitalWrite(getLedPin(i), LOW);
+      }
+      mcp_digitalWrite(getLedPin(chargeCalChaseStep), HIGH);
+      return;
+    }
+    if ((now - chargeLedFlashLastMs) < CHARGE_LED_FLASH_MS) {
+      return;
+    }
+    chargeLedFlashLastMs = now;
+    mcp_digitalWrite(getLedPin(chargeCalChaseStep), LOW);
+    chargeCalChaseStep = (chargeCalChaseStep == 0) ? 2 : (chargeCalChaseStep - 1);
+    mcp_digitalWrite(getLedPin(chargeCalChaseStep), HIGH);
+    return;
+  }
+
+  // Normal charging: flash one tip LED.
+  if (batteryChargeFlashLedIndex < 0) {
     chargeLedFlashLastMs = 0;
     chargeLedFlashOn = true;
     return;
   }
 
-  unsigned long now = millis();
   if (chargeLedFlashLastMs == 0) {
     chargeLedFlashLastMs = now;
     chargeLedFlashOn = true;
@@ -8655,6 +8887,128 @@ void applyBattMvCalParamsFromCsv(const float* parameters_list, int count) {
     battMvCalB = parameters_list[33];
     battMvCalC = parameters_list[34];
   }
+  applyVFullMvParamsFromCsv(parameters_list, count);
+}
+
+void applyVFullMvParamDefaults() {
+  vFullMvSeed = kVFullMvSeed;
+}
+
+bool validateVFullMvParams() {
+  if (vFullMvSeed != vFullMvSeed || vFullMvSeed < VFULL_MV_MIN || vFullMvSeed >= VFULL_MV_HARD_MAX) {
+    return false;
+  }
+  return true;
+}
+
+void applyVFullMvParamsFromCsv(const float* parameters_list, int count) {
+  if (count >= 36) {
+    vFullMvSeed = parameters_list[35];
+  }
+}
+
+// Persist to GET_LOGS and always mirror to USB Serial + BLE serial stream.
+static void logBattFullLearnUpdate(const char* msg, float mvCal) {
+  if (!msg) {
+    return;
+  }
+  const float battV = batteryVoltageFromMvCal(mvCal);
+  char line[LOG_LINE_MAX_LEN];
+  snprintf(line, sizeof(line),
+           "[batt_full_learn] %s VMON_CAL=%.1fmV Battery=%.2fV",
+           msg, mvCal, battV);
+  SerialBLE_println(line);  // USB Serial + BLE serial when START_SERIAL is active
+  if (errorLogInitialized) {
+    logError("power_test", 0, line, false);
+  }
+}
+
+bool resetBattFullLearnToSeed() {
+  float oldV = vFullMv;
+  float next = vFullMvSeed;
+  if (next < VFULL_MV_MIN) {
+    next = VFULL_MV_MIN;
+  }
+  vFullMv = next;
+  battFullLearnCount = 0;
+  battFullLearnHead = 0;
+  if (!saveBattFullLearnToEEPROM()) {
+    return false;
+  }
+  const float mvCal = hasLastChargeMv ? lastChargeMv : vFullMv;
+  char msg[96];
+  snprintf(msg, sizeof(msg), "vFullMv %.1f->%.1f reset_to_seed", oldV, vFullMv);
+  logBattFullLearnUpdate(msg, mvCal);
+  return true;
+}
+
+static void pushBattFullLearnSample(float mv) {
+  battFullLearnWindow[battFullLearnHead] = mv;
+  battFullLearnHead = (battFullLearnHead + 1) % BATT_FULL_LEARN_WINDOW;
+  if (battFullLearnCount < BATT_FULL_LEARN_WINDOW) {
+    battFullLearnCount++;
+  }
+}
+
+void onIdleBattMvSample(float mvCal, unsigned long now) {
+  if (battFullPostBusyMs != 0 && (now - battFullPostBusyMs) < FULL_POST_LOAD_SETTLE_MS) {
+    return;
+  }
+
+  pushBattFullLearnSample(mvCal);
+
+  // Only raise the full anchor while actively charging (avoids mid-SOC race on new units).
+  if (!isCharging) {
+    return;
+  }
+
+  // Require a full window before raising (dilutes single-sample spikes).
+  if (battFullLearnCount < BATT_FULL_LEARN_WINDOW) {
+    return;
+  }
+
+  float sum = 0.0f;
+  for (int i = 0; i < battFullLearnCount; i++) {
+    sum += battFullLearnWindow[i];
+  }
+  float mean = sum / (float)battFullLearnCount;
+
+  float varSum = 0.0f;
+  for (int i = 0; i < battFullLearnCount; i++) {
+    float d = battFullLearnWindow[i] - mean;
+    varSum += d * d;
+  }
+  float stdev = sqrtf(varSum / (float)battFullLearnCount);
+  // Stability: absolute stdev ceiling (mean is the candidate — not max).
+  if (!(stdev <= LEARN_STDEV_MAX_MV)) {
+    return;
+  }
+
+  const float candidate = mean;
+  float delta = candidate - vFullMv;
+  if (!(delta > LEARN_MIN_DELTA_MV)) {
+    return;
+  }
+
+  float stepCap = FULL_SLOW_STEP_MV;
+  float step = delta < stepCap ? delta : stepCap;
+  float oldV = vFullMv;
+  float next = vFullMv + step;
+  if (next < VFULL_MV_MIN) {
+    next = VFULL_MV_MIN;
+  }
+  if (!(next > vFullMv)) {
+    return;
+  }
+
+  vFullMv = next;
+  saveBattFullLearnToEEPROM();
+
+  char msg[128];
+  snprintf(msg, sizeof(msg),
+           "vFullMv %.1f->%.1f step=%.1f flush=%lu",
+           oldV, vFullMv, step, (unsigned long)lifetimeFlushCount);
+  logBattFullLearnUpdate(msg, mvCal);
 }
 
 static int usablePercentFromVLoad(float vLoad) {
@@ -8687,6 +9041,15 @@ static void storeBatteryAssessment(float vIdle, float vLoadWorst, float sagWorst
   batteryAssessment.sagWorst = sagWorst;
   batteryAssessment.capDuty = capDuty;
   batteryAssessment.usablePercent = usablePercentFromVLoad(vLoadWorst);
+  // Unanchored / optimistic seed offset can push idle above true 12.6 V — don't show full bar.
+  // Cap so all but kBattIdleOverfullLedsOff LEDs illuminate: ceil((N-k)*100/N).
+  if (vIdle > kBattIdleSocCapV) {
+    const int litTarget = totalLeds - kBattIdleOverfullLedsOff;
+    const int capPct = (litTarget * 100 + totalLeds - 1) / totalLeds;
+    if (batteryAssessment.usablePercent > capPct) {
+      batteryAssessment.usablePercent = capPct;
+    }
+  }
   batteryAssessment.assessPassed = assessPassed;
   batteryAssessment.flushAllowed = assessPassed && (batteryAssessment.usablePercent > batteryThreshold);
   batteryAssessment.lastAssessMs = millis();
@@ -9393,8 +9756,9 @@ float readBatteryVoltage() {
                                               : usablePercentFromVLoad(batteryVoltage);
     const char* usableSuffix = batteryAssessment.valid ? " cached" : "";
 
-    Serial.printf("Battery Debug: ADC=%.1f, VMON_CAL=%.1fmV, Battery=%.2fV, Usable=%d%%%s, charging=%d\n",
-                  adc, mvCal, batteryVoltage, chargeLevel, usableSuffix, isCharging ? 1 : 0);
+    Serial.printf("Battery Debug: ADC=%.1f, VMON_CAL=%.1fmV, Battery=%.2fV, Usable=%d%%%s, charging=%d, vFullMv=%.1f, seed=%.1f\n",
+                  adc, mvCal, batteryVoltage, chargeLevel, usableSuffix, isCharging ? 1 : 0,
+                  vFullMv, vFullMvSeed);
     if (serial_streaming_enabled) {
       sendSerialToBLE("BAT_ADC: " + String(adc, 1) + ", USABLE: " + String(chargeLevel) + "%\n");
     }
@@ -9508,10 +9872,11 @@ void displayBatteryChargeLevel() {
   float adc = 0.0f;
   float mvCal = 0.0f;
   float batteryFromAdc = sampleBatteryVoltage(&adc, &mvCal);
-  char adcLine[128];
+  char adcLine[192];
   snprintf(adcLine, sizeof(adcLine),
-           "Battery Debug: ADC=%.1f, VMON_CAL=%.1fmV, Battery=%.2fV, charging=%d",
-           adc, mvCal, batteryFromAdc, isCharging ? 1 : 0);
+           "Battery Debug: ADC=%.1f, VMON_CAL=%.1fmV, Battery=%.2fV, charging=%d, vFullMv=%.1f, seed=%.1f",
+           adc, mvCal, batteryFromAdc, isCharging ? 1 : 0,
+           vFullMv, vFullMvSeed);
   emitBatteryReportLine(adcLine);
 
   int chargeLevel = batteryAssessment.usablePercent;
@@ -10631,7 +10996,7 @@ void writeResponseToChannel(const String& response) {
   }
 }
 
-// Build 35-value CSV for param read/write
+// Build 36-value CSV for param read/write
 String buildParamCSV() {
   return String(batteryThreshold) + "," +
          String(K) + "," +
@@ -10667,7 +11032,8 @@ String buildParamCSV() {
          String(MAX_TEMP_FAILSAFE_C, 1) + "," +
          String(battMvCalA, 9) + "," +
          String(battMvCalB, 9) + "," +
-         String(battMvCalC, 9);
+         String(battMvCalC, 9) + "," +
+         String(vFullMvSeed, 1);
 }
 
 // Low-level: push value+notify to serial GATT. Does not check serial_streaming_enabled.

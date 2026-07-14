@@ -1,8 +1,8 @@
 // Lightweight battery VMON poll - no heater, no BLE, no load assess.
-// Compares naive linear ADC math vs factory eFuse calibration + quadratic fit.
-// Averages multiple samples to reduce ESP32 ADC noise.
-// Detects charging via upward VMON_CAL mV drift over a lookback window.
+// Mirrors firmware charging detection + batt_full_learn sample math for calibration.
+// Every poll prints window stats: min/max/mean/stdev, slope, rise/fall.
 
+#include <math.h>
 #include <stdlib.h>
 
 const int batteryVoltagePin = 10;  // GPIO10 (VMON)
@@ -21,22 +21,41 @@ const int ADC_AVG_SAMPLES = 32;
 const int ADC_AVG_TRIM = 2;  // drop this many min and max before averaging
 
 // Charging detection: lookback up to inactivity sleep window (5 min).
-// High-SOC charge is slow (~1–2.5 mV/min) with ~1 mV sample noise, so use
-// smoothed early/late means + slope instead of noisy single endpoints.
+// Charger connect causes a step-up that ripples through the n=60 history and
+// can look like a lasting slope; require a real rise (>=5 mV) or >=1 mV/min
+// before asserting isCharging (hysteresis clear below that).
 const unsigned long INACTIVITY_SLEEP_MS = 5UL * 60UL * 1000UL;
 const unsigned long CHARGE_SAMPLE_INTERVAL_MS = POLL_INTERVAL_MS;
 const int CHARGE_HISTORY_LEN = (int)(INACTIVITY_SLEEP_MS / CHARGE_SAMPLE_INTERVAL_MS);  // 60
 const unsigned long CHARGE_MIN_SPAN_MS = 45000UL;
 const int CHARGE_SMOOTH_SAMPLES = 4;          // mean of oldest/newest N samples
-const float CHARGE_RISE_MV = 0.5f;            // smoothed rise to assert charging
-const float CHARGE_CLEAR_RISE_MV = 0.3f;      // hysteresis clear
-const float CHARGE_SLOPE_MV_PER_MIN = 0.1f;   // LS slope to assert charging
-const float CHARGE_CLEAR_SLOPE_MV_PER_MIN = 0.05f;
+const float CHARGE_RISE_MV = 5.0f;            // smoothed rise to assert charging
+const float CHARGE_CLEAR_RISE_MV = 0.0f;      // clear when rise <= 0 (flat / falling)
+const float CHARGE_SLOPE_MV_PER_MIN = 1.0f;   // LS slope to assert charging
+const float CHARGE_CLEAR_SLOPE_MV_PER_MIN = 0.0f;  // and slope <= 0
 const float CHARGE_DROP_RESET_MV = 5.0f;
+
+// Full-anchor learn window (matches toilet_kat_change.ino)
+constexpr int BATT_FULL_LEARN_WINDOW = 6;
+constexpr float LEARN_STDEV_MAX_MV = 1.0f;  // reject jagged windows; candidate is mean
+constexpr float LEARN_MIN_DELTA_MV = 0.1f;  // ignore sub-0.1 mV float noise raises
+constexpr float kVFullMvSeed = 1550.0f;
+constexpr float VFULL_MV_MIN = 1500.0f;
+constexpr float kVFullMvMax = 1920.0f;
+constexpr float FULL_SLOW_STEP_MV = 3.0f;  // sole upward step rate (charge-gated)
 
 struct ChargeSample {
   float mv;
   unsigned long ms;
+};
+
+struct WindowStats {
+  int n;
+  float minMv;
+  float maxMv;
+  float meanMv;
+  float stdevMv;
+  float rangeMv;  // max - min
 };
 
 static ChargeSample chargeHistory[CHARGE_HISTORY_LEN];
@@ -47,6 +66,13 @@ static float lastChargeMv = 0.0f;
 bool isCharging = false;
 static float lastSmoothedRiseMv = 0.0f;
 static float lastSlopeMvPerMin = 0.0f;
+static float lastSampleDeltaMv = 0.0f;  // rise(+)/fall(-) vs previous sample
+static bool chargeMetricsReady = false;
+
+static float battFullLearnWindow[BATT_FULL_LEARN_WINDOW];
+static int battFullLearnCount = 0;
+static int battFullLearnHead = 0;
+static float vFullMv = kVFullMvSeed;
 
 int batteryChargeLevelFromVoltage(float batteryVoltage) {
   if (batteryVoltage >= 12.6f) {
@@ -96,6 +122,11 @@ static float batteryVoltageFromMvCal(float mvCal) {
   return (kBattMvCalA * mvCal * mvCal) + (kBattMvCalB * mvCal) + kBattMvCalC;
 }
 
+static void clearBattFullLearnWindow() {
+  battFullLearnCount = 0;
+  battFullLearnHead = 0;
+}
+
 static void clearChargeHistory() {
   chargeHistoryCount = 0;
   chargeHistoryHead = 0;
@@ -103,6 +134,9 @@ static void clearChargeHistory() {
   isCharging = false;
   lastSmoothedRiseMv = 0.0f;
   lastSlopeMvPerMin = 0.0f;
+  lastSampleDeltaMv = 0.0f;
+  chargeMetricsReady = false;
+  clearBattFullLearnWindow();
 }
 
 static void pushChargeSample(float mv, unsigned long ms) {
@@ -125,6 +159,46 @@ static ChargeSample oldestChargeSample() {
 
 static ChargeSample newestChargeSample() {
   return chargeHistory[chargeHistoryIndex(chargeHistoryCount - 1)];
+}
+
+static WindowStats statsFromFloats(const float* values, int n) {
+  WindowStats s = {};
+  s.n = n;
+  if (n <= 0) {
+    return s;
+  }
+
+  float sum = 0.0f;
+  s.minMv = values[0];
+  s.maxMv = values[0];
+  for (int i = 0; i < n; i++) {
+    float v = values[i];
+    sum += v;
+    if (v < s.minMv) {
+      s.minMv = v;
+    }
+    if (v > s.maxMv) {
+      s.maxMv = v;
+    }
+  }
+  s.meanMv = sum / (float)n;
+  s.rangeMv = s.maxMv - s.minMv;
+
+  float varSum = 0.0f;
+  for (int i = 0; i < n; i++) {
+    float d = values[i] - s.meanMv;
+    varSum += d * d;
+  }
+  s.stdevMv = sqrtf(varSum / (float)n);
+  return s;
+}
+
+static WindowStats chargeHistoryStats() {
+  float values[CHARGE_HISTORY_LEN];
+  for (int i = 0; i < chargeHistoryCount; i++) {
+    values[i] = chargeHistory[chargeHistoryIndex(i)].mv;
+  }
+  return statsFromFloats(values, chargeHistoryCount);
 }
 
 // Mean of the oldest or newest N samples (N capped by history size / 2).
@@ -187,11 +261,22 @@ static float chargeSlopeMvPerMin() {
 }
 
 // Update isCharging from gradual VMON_CAL drift (noise-tolerant).
+// Always recomputes rise/slope for logging when history allows; gate still uses firmware rules.
 static void updateChargingDetection(float mvCal) {
   unsigned long now = millis();
+  chargeMetricsReady = false;
+  lastSampleDeltaMv = 0.0f;
 
-  if (hasLastChargeMv && (lastChargeMv - mvCal) >= CHARGE_DROP_RESET_MV) {
-    clearChargeHistory();
+  if (hasLastChargeMv) {
+    lastSampleDeltaMv = mvCal - lastChargeMv;
+    if ((lastChargeMv - mvCal) >= CHARGE_DROP_RESET_MV) {
+      Serial.printf(
+          "[charge_reset] drop=%.2fmV (>=%.1f) clearing charge + learn windows\n",
+          lastChargeMv - mvCal,
+          CHARGE_DROP_RESET_MV);
+      clearChargeHistory();
+      lastSampleDeltaMv = 0.0f;
+    }
   }
 
   pushChargeSample(mvCal, now);
@@ -200,6 +285,13 @@ static void updateChargingDetection(float mvCal) {
   lastSmoothedRiseMv = 0.0f;
   lastSlopeMvPerMin = 0.0f;
 
+  if (chargeHistoryCount < 2) {
+    return;
+  }
+
+  // Always compute slope for observation once we have 2+ samples.
+  lastSlopeMvPerMin = chargeSlopeMvPerMin();
+
   if (chargeHistoryCount < (CHARGE_SMOOTH_SAMPLES * 2)) {
     return;
   }
@@ -207,26 +299,117 @@ static void updateChargingDetection(float mvCal) {
   ChargeSample oldest = oldestChargeSample();
   ChargeSample newest = newestChargeSample();
   unsigned long spanMs = newest.ms - oldest.ms;
+
+  lastSmoothedRiseMv = meanChargeEdge(true, CHARGE_SMOOTH_SAMPLES) -
+                       meanChargeEdge(false, CHARGE_SMOOTH_SAMPLES);
+
   if (spanMs < CHARGE_MIN_SPAN_MS) {
     return;
   }
 
-  lastSmoothedRiseMv = meanChargeEdge(true, CHARGE_SMOOTH_SAMPLES) -
-                       meanChargeEdge(false, CHARGE_SMOOTH_SAMPLES);
-  lastSlopeMvPerMin = chargeSlopeMvPerMin();
+  chargeMetricsReady = true;
 
   const bool rising =
       (lastSmoothedRiseMv >= CHARGE_RISE_MV) ||
       (lastSlopeMvPerMin >= CHARGE_SLOPE_MV_PER_MIN);
   const bool flat =
-      (lastSmoothedRiseMv < CHARGE_CLEAR_RISE_MV) &&
-      (lastSlopeMvPerMin < CHARGE_CLEAR_SLOPE_MV_PER_MIN);
+      (lastSmoothedRiseMv <= CHARGE_CLEAR_RISE_MV) &&
+      (lastSlopeMvPerMin <= CHARGE_CLEAR_SLOPE_MV_PER_MIN);
 
   if (rising) {
+    if (!isCharging) {
+      Serial.printf(
+          "CHARGING_DETECTED: mv=%.1f rise=%.2fmV slope=%.2fmV/min span=%lums "
+          "(th rise=%.2f slope=%.2f)\n",
+          mvCal,
+          lastSmoothedRiseMv,
+          lastSlopeMvPerMin,
+          (unsigned long)spanMs,
+          CHARGE_RISE_MV,
+          CHARGE_SLOPE_MV_PER_MIN);
+    }
     isCharging = true;
   } else if (flat) {
     isCharging = false;
   }
+}
+
+static void pushBattFullLearnSample(float mv) {
+  battFullLearnWindow[battFullLearnHead] = mv;
+  battFullLearnHead = (battFullLearnHead + 1) % BATT_FULL_LEARN_WINDOW;
+  if (battFullLearnCount < BATT_FULL_LEARN_WINDOW) {
+    battFullLearnCount++;
+  }
+}
+
+// Copy learn window in chronological order (oldest -> newest).
+static int copyBattFullLearnOrdered(float* out, int outMax) {
+  int n = battFullLearnCount;
+  if (n > outMax) {
+    n = outMax;
+  }
+  int oldest = (battFullLearnHead - battFullLearnCount + BATT_FULL_LEARN_WINDOW) %
+               BATT_FULL_LEARN_WINDOW;
+  for (int i = 0; i < n; i++) {
+    out[i] = battFullLearnWindow[(oldest + i) % BATT_FULL_LEARN_WINDOW];
+  }
+  return n;
+}
+
+// Mirrors onIdleBattMvSample(); returns whether a ratchet occurred.
+// outWouldRaise reflects charging + delta (even if stdev gate fails) for calibration.
+static bool updateBattFullLearn(float mvCal, WindowStats* outStats, float* outCandidate,
+                                bool* outGateOk, bool* outWouldRaise, float* outStep) {
+  *outCandidate = 0.0f;
+  *outGateOk = false;
+  *outWouldRaise = false;
+  *outStep = 0.0f;
+
+  pushBattFullLearnSample(mvCal);
+
+  float ordered[BATT_FULL_LEARN_WINDOW];
+  int n = copyBattFullLearnOrdered(ordered, BATT_FULL_LEARN_WINDOW);
+  *outStats = statsFromFloats(ordered, n);
+
+  const float mean = outStats->meanMv;
+  const float stdev = outStats->stdevMv;
+  const float delta = mean - vFullMv;
+  *outCandidate = mean;
+  if (n >= BATT_FULL_LEARN_WINDOW) {
+    *outGateOk = (stdev <= LEARN_STDEV_MAX_MV);
+  }
+  *outWouldRaise = isCharging && (*outGateOk) && (delta > LEARN_MIN_DELTA_MV);
+
+  // Only raise while charging (matches firmware).
+  if (!isCharging) {
+    return false;
+  }
+
+  if (!(*outWouldRaise)) {
+    return false;
+  }
+
+  float stepCap = FULL_SLOW_STEP_MV;
+  float step = delta < stepCap ? delta : stepCap;
+  *outStep = step;
+
+  float next = vFullMv + step;
+  if (next < VFULL_MV_MIN) {
+    next = VFULL_MV_MIN;
+  }
+  if (next > kVFullMvMax) {
+    next = kVFullMvMax;
+  }
+  if (!(next > vFullMv)) {
+    return false;
+  }
+
+  float oldV = vFullMv;
+  vFullMv = next;
+  Serial.printf(
+      "[batt_full_learn] vFullMv %.1f->%.1f step=%.1f candidate=%.1f stdev=%.3f\n",
+      oldV, vFullMv, step, mean, stdev);
+  return true;
 }
 
 void setup() {
@@ -236,21 +419,51 @@ void setup() {
   analogReadResolution(12);
   analogSetPinAttenuation(batteryVoltagePin, ADC_11db);
   clearChargeHistory();
+  vFullMv = kVFullMvSeed;
+
+  Serial.println(F("TEST_BATTERY_ADC calibration logger"));
   Serial.printf(
-      "TEST_BATTERY_ADC ready - %d-sample trimmed avg every %lus; "
-      "charge lookback %d / smoothRise>=%.1fmV or slope>=%.1fmV/min\n",
-      ADC_AVG_SAMPLES,
+      "Poll=%lus  ADC avg=%d trim=%d  chargeHist=%d  learnWin=%d  vFullSeed=%.1f\n",
       (unsigned long)(POLL_INTERVAL_MS / 1000UL),
+      ADC_AVG_SAMPLES,
+      ADC_AVG_TRIM,
       CHARGE_HISTORY_LEN,
+      BATT_FULL_LEARN_WINDOW,
+      kVFullMvSeed);
+  Serial.printf(
+      "CHARGE th: rise>=%.2f clear<%.2f | slope>=%.2f clear<%.2f | minSpan=%lus | dropReset=%.1f\n",
       CHARGE_RISE_MV,
-      CHARGE_SLOPE_MV_PER_MIN);
+      CHARGE_CLEAR_RISE_MV,
+      CHARGE_SLOPE_MV_PER_MIN,
+      CHARGE_CLEAR_SLOPE_MV_PER_MIN,
+      (unsigned long)(CHARGE_MIN_SPAN_MS / 1000UL),
+      CHARGE_DROP_RESET_MV);
+  Serial.printf(
+      "LEARN gate: n==%d, stdev<=%.1fmV, candidate=mean, requires charging, "
+      "raise if delta>%.1fmV step<=%.1fmV\n",
+      BATT_FULL_LEARN_WINDOW,
+      LEARN_STDEV_MAX_MV,
+      LEARN_MIN_DELTA_MV,
+      FULL_SLOW_STEP_MV);
+  Serial.println(
+      F("Columns: SAMPLE / CHARGE / LEARN  (deltaMv = rise+/fall- vs previous sample)"));
 }
 
 void loop() {
   float adc = 0.0f;
   float vmonMvCal = 0.0f;
   readAdcAveraged(batteryVoltagePin, &adc, &vmonMvCal);
+
   updateChargingDetection(vmonMvCal);
+
+  WindowStats learnStats = {};
+  float candidate = 0.0f;
+  bool gateOk = false;
+  bool wouldRaise = false;
+  float step = 0.0f;
+  updateBattFullLearn(vmonMvCal, &learnStats, &candidate, &gateOk, &wouldRaise, &step);
+
+  WindowStats chargeStats = chargeHistoryStats();
 
   float vmonLinear = adc * (ADC_REF_V / ADC_MAX);
   float vmonCal = vmonMvCal / 1000.0f;
@@ -264,31 +477,67 @@ void loop() {
     spanMs = newestChargeSample().ms - oldestChargeSample().ms;
   }
 
-  Serial.print(F("ADC="));
-  Serial.print(adc, 1);
-  Serial.print(F(" | VMON linear="));
-  Serial.print(vmonLinear, 3);
-  Serial.print(F("V (Bat "));
-  Serial.print(batteryLinear, 2);
-  Serial.print(F("V) | VMON cal="));
-  Serial.print(vmonCal, 3);
-  Serial.print(F("V/"));
-  Serial.print(vmonMvCal, 1);
-  Serial.print(F("mV (scale "));
-  Serial.print(batteryCalScale, 2);
-  Serial.print(F("V quad "));
-  Serial.print(batteryQuad, 2);
-  Serial.print(F("V) Level="));
-  Serial.print(level);
-  Serial.print(F("% | CHARGING="));
-  Serial.print(isCharging ? 1 : 0);
-  Serial.print(F(" rise="));
-  Serial.print(lastSmoothedRiseMv, 1);
-  Serial.print(F("mV slope="));
-  Serial.print(lastSlopeMvPerMin, 2);
-  Serial.print(F("mV/min span="));
-  Serial.print(spanMs / 1000UL);
-  Serial.println(F("s"));
+  const char* dLabel = "flat";
+  if (lastSampleDeltaMv > 0.0f) {
+    dLabel = "rise";
+  } else if (lastSampleDeltaMv < 0.0f) {
+    dLabel = "fall";
+  }
 
+  // Per-sample raw observation
+  Serial.printf(
+      "[SAMPLE] mv=%.2f V=%.3f quad=%.2fV lvl=%d%% deltaMv=%+.2f (%s) "
+      "ADC=%.1f linearBat=%.2fV scaleBat=%.2fV\n",
+      vmonMvCal,
+      vmonCal,
+      batteryQuad,
+      level,
+      lastSampleDeltaMv,
+      dLabel,
+      adc,
+      batteryLinear,
+      batteryCalScale);
+
+  // Charging-detection window (full lookback history)
+  Serial.printf(
+      "[CHARGE] n=%d span=%lus ready=%d charging=%d | "
+      "min=%.2f max=%.2f mean=%.2f stdev=%.3f range=%.2f | "
+      "rise=%.3f (th=%.2f/%.2f) slope=%.3f mV/min (th=%.2f/%.2f) | deltaMv=%+.2f\n",
+      chargeStats.n,
+      spanMs / 1000UL,
+      chargeMetricsReady ? 1 : 0,
+      isCharging ? 1 : 0,
+      chargeStats.minMv,
+      chargeStats.maxMv,
+      chargeStats.meanMv,
+      chargeStats.stdevMv,
+      chargeStats.rangeMv,
+      lastSmoothedRiseMv,
+      CHARGE_RISE_MV,
+      CHARGE_CLEAR_RISE_MV,
+      lastSlopeMvPerMin,
+      CHARGE_SLOPE_MV_PER_MIN,
+      CHARGE_CLEAR_SLOPE_MV_PER_MIN,
+      lastSampleDeltaMv);
+
+  // batt_full_learn short window + gate math (candidate = mean, charge-gated)
+  Serial.printf(
+      "[LEARN] n=%d charging=%d | min=%.2f max=%.2f mean=%.2f stdev=%.3f (max=%.1f) range=%.2f | "
+      "candidate=%.2f gate=%d wouldRaise=%d step=%.1f vFullMv=%.1f\n",
+      learnStats.n,
+      isCharging ? 1 : 0,
+      learnStats.minMv,
+      learnStats.maxMv,
+      learnStats.meanMv,
+      learnStats.stdevMv,
+      LEARN_STDEV_MAX_MV,
+      learnStats.rangeMv,
+      candidate,
+      gateOk ? 1 : 0,
+      wouldRaise ? 1 : 0,
+      step,
+      vFullMv);
+
+  Serial.println();
   delay(POLL_INTERVAL_MS);
 }

@@ -42,7 +42,7 @@ FRAME_HEADER_SIZE = 3
 MAX_FRAME_PAYLOAD = 0xFFFF
 # Stale fea4 payloads left by prior command-channel traffic (e.g. TRUST_STATUS after handshake).
 _STALE_PARAM_WRITE_RESPONSE_RE = re.compile(
-    r"^(FLUSH_COUNT|BATTERY|TRUST_|DEV_MODE|LOGS:|HW_|HWCFG_|SET_DEV_MODE_|TASK_WDT:|DISABLE_TASK_WDT|ENABLE_TASK_WDT|UNKNOWN_COMMAND:|READY)"
+    r"^(FLUSH_COUNT|BATTERY|TRUST_|DEV_MODE|LOGS:|HW_|HWCFG_|SET_DEV_MODE_|RESET_BATTERY_CAL|TASK_WDT:|DISABLE_TASK_WDT|ENABLE_TASK_WDT|UNKNOWN_COMMAND:|READY)"
 )
 
 
@@ -171,6 +171,7 @@ class ToiletSystemInterface:
             "battMvCalA": {"description": "Battery VMON_CAL quadratic coefficient A (V = A*mV^2 + B*mV + C)", "units": "", "default": 0.000009091},
             "battMvCalB": {"description": "Battery VMON_CAL quadratic coefficient B", "units": "", "default": -0.019148},
             "battMvCalC": {"description": "Battery VMON_CAL quadratic coefficient C", "units": "V", "default": 17.397361},
+            "vFullMvSeed": {"description": "Initial learned full VMON_CAL mV when learn state empty", "units": "mV", "default": 1550.0},
         }
         
         # Predefined parameter sets for different materials (match material_parameters.csv)
@@ -211,6 +212,7 @@ class ToiletSystemInterface:
                 "battMvCalA": 0.000009091,
                 "battMvCalB": -0.019148,
                 "battMvCalC": 17.397361,
+                "vFullMvSeed": 1550.0,
             },
             "Compostable 1.5mil": {
                 "batteryThreshold": 1.0,
@@ -248,10 +250,11 @@ class ToiletSystemInterface:
                 "battMvCalA": 0.000009091,
                 "battMvCalB": -0.019148,
                 "battMvCalC": 17.397361,
+                "vFullMvSeed": 1550.0,
             }
         }
         
-        # Parameter order (35 values, as expected by ESP32 BLE)
+        # Parameter order (36 values, as expected by ESP32 BLE)
         self.param_order = [
             "batteryThreshold", "K", "F", "T", "backupTime",
             "fanDuration", "H", "continueFeeder", "maxOpeningTime", "typicalOpeningTime",
@@ -262,6 +265,7 @@ class ToiletSystemInterface:
             "batteryAssessSettleMs", "heaterCapVFull", "heaterPwmReduced", "maxHeaterWallTimeS",
             "heaterAbsoluteMaxOnS", "MAX_TEMP_FAILSAFE_C",
             "battMvCalA", "battMvCalB", "battMvCalC",
+            "vFullMvSeed",
         ]
         self.min_heater_tolerance_gap_c = 2.0
         self.hardware_components: List[str] = [
@@ -1037,7 +1041,7 @@ class ToiletSystemInterface:
         if not response:
             print("No response from firmware for GET_BATTERY")
             return None
-        m = re.match(r"^BATTERY[:_]?\s*(\d+)\s*%?$", response, re.IGNORECASE)
+        m = re.match(r"^BATTERY[:_]?\s*(\d+)\s*%?", response, re.IGNORECASE)
         if not m:
             print(f"Unexpected GET_BATTERY response: {response}")
             return None
@@ -1049,6 +1053,34 @@ class ToiletSystemInterface:
             print(f"Invalid battery level out of range 0-100: {response}")
             return None
         return level
+
+    async def get_battery_debug(self) -> Optional[str]:
+        """Read BATTERY_DEBUG calibration/sample line for support diagnostics."""
+        response = await self._send_command_and_read_response("GET_BATTERY_DEBUG")
+        if not response:
+            print("No response from firmware for GET_BATTERY_DEBUG")
+            return None
+        if not response.startswith("BATTERY_DEBUG:"):
+            print(f"Unexpected GET_BATTERY_DEBUG response: {response}")
+            return None
+        return response
+
+    async def reset_battery_cal(self) -> Optional[str]:
+        """Reset learned vFullMv to seed so battery charge level can re-calibrate.
+
+        Returns the ACK payload string on success, or None on failure.
+        """
+        response = await self._send_command_and_read_response("RESET_BATTERY_CAL")
+        if not response:
+            print("No response from firmware for RESET_BATTERY_CAL")
+            return None
+        if response.startswith("RESET_BATTERY_CAL_ACK:"):
+            return response
+        if response.startswith("RESET_BATTERY_CAL_ERR:"):
+            print(f"Firmware rejected RESET_BATTERY_CAL: {response}")
+            return None
+        print(f"Unexpected RESET_BATTERY_CAL response: {response}")
+        return None
 
     async def set_dev_mode(self, new_mode: int) -> bool:
         """Set firmware DEV mode to 0 or 1."""
@@ -1649,8 +1681,11 @@ async def main():
             print("26. Read task watchdog status (GET_TASK_WDT)")
             print("27. Disable task watchdog (DISABLE_TASK_WDT, requires trust)")
             print("28. Enable task watchdog (ENABLE_TASK_WDT, re-init at next flush)")
+            print("29. Read battery level (GET_BATTERY)")
+            print("30. Read battery calibration debug (GET_BATTERY_DEBUG)")
+            print("31. Reset battery calibration to seed (RESET_BATTERY_CAL)")
             
-            choice = input("\nEnter your choice (1-28): ").strip()
+            choice = input("\nEnter your choice (1-31): ").strip()
             
             if choice == "1":
                 print("\nReading current parameters...")
@@ -2084,8 +2119,40 @@ async def main():
                 else:
                     print("Failed to arm task watchdog re-init")
 
+            elif choice == "29":
+                print("\nReading battery level...")
+                level = await interface.get_battery()
+                if level is None:
+                    print("Failed to read battery level")
+                else:
+                    print(f"Battery level: {level}%")
+
+            elif choice == "30":
+                print("\nReading battery calibration debug...")
+                debug = await interface.get_battery_debug()
+                if debug is None:
+                    print("Failed to read battery calibration debug")
+                else:
+                    print(debug)
+
+            elif choice == "31":
+                print("\nReset battery calibration (vFullMv -> seed)")
+                print("This clears the learned full-anchor so charge level can re-calibrate.")
+                confirm = input("Reset battery calibration? (y/N): ").strip().lower()
+                if confirm != "y":
+                    print("Battery calibration reset cancelled.")
+                    continue
+                ack = await interface.reset_battery_cal()
+                if ack is None:
+                    print("Failed to reset battery calibration")
+                else:
+                    print(f"Battery calibration reset: {ack}")
+                    debug = await interface.get_battery_debug()
+                    if debug:
+                        print(f"Current calibration: {debug}")
+
             else:
-                print("Invalid choice. Please enter 1-28.")
+                print("Invalid choice. Please enter 1-31.")
     
     except KeyboardInterrupt:
         print("\nProgram interrupted by user")
