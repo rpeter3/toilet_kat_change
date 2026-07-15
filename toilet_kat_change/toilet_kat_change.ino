@@ -67,6 +67,18 @@ const int batteryTempPin = 5;      // GPIO5 (B_TEMP) - Battery temperature monit
 // ESP32-S3 ADC: trimmed mean of oneshots; drop outliers then average
 const int ADC_AVG_SAMPLES = 32;
 const int ADC_AVG_TRIM = 2;
+// analogReadMilliVolts() returns 0 on calibrated oneshot failure; >TRIM fails the batch
+constexpr int BATT_ADC_READ_ATTEMPTS = 3;
+constexpr unsigned long BATT_ADC_RETRY_DELAY_MS = 5UL;
+constexpr unsigned long BATT_ADC_FAIL_LOG_INTERVAL_MS = 1000UL;
+
+struct BatteryVoltageSample {
+  float voltage;
+  float adc;
+  float mvCal;
+  int failedMvReads;
+  bool valid;
+};
 // Quadratic fit: V_batt from eFuse-calibrated VMON mV (analogReadMilliVolts)
 constexpr float kBattMvCalA = 0.000009091f;
 constexpr float kBattMvCalB = -0.019148f;
@@ -373,6 +385,7 @@ void setFlushStep(int newStep, bool logTransition = true);
 String readLogChunk(size_t offset);
 float readBatteryVoltage();
 float readBatteryVoltageQuiet();
+bool sampleBatteryVoltage(BatteryVoltageSample* out);
 float sampleBatteryVoltage(float* outAdc, float* outMvCal);
 float readHeaterCurrentQuiet();
 float readBatteryTemperatureQuiet();
@@ -402,6 +415,7 @@ void updateChargingLedFlash();
 void renderBatteryLevelLeds(int chargeLevel);
 void showBatteryLevelFeedback(int chargeLevel, bool enterDisplayMode);
 void logPowerTestEvent(const char* phase, const char* msg, bool includeContext = false, bool persist = true);
+void logFlushAbortedBatteryAdc(const char* tag);
 void latchLowBatteryStop(const char* reason);
 bool isM1MotorActive();
 bool shouldSkipBootHeaterTest(const char** skipReason);
@@ -728,14 +742,11 @@ bool feedLedPatternActive = false;
 unsigned long feedLedLastUpdateMillis = 0;
 int feedLedHeadIndex = 0;
 
-// BLE auto-shutdown variables
-unsigned long bleStartupTime = 0;
-unsigned long bleIdleStartTime = 0;
+// BLE stay-on-while-awake: only torn down on deep sleep entry / explicit restart paths.
 unsigned long bleWakeGuardUntil = 0;
 unsigned long bleWakeGuardLastKick = 0;
 const unsigned long BLE_WAKE_GUARD_MS = 30 * 1000;
 const unsigned long BLE_WAKE_GUARD_INTERVAL_MS = 5000;
-const unsigned long BLE_TIMEOUT = 10 * 60 * 1000; // 10 minutes in milliseconds
 const unsigned long INACTIVITY_SLEEP_MS = 5 * 60 * 1000;  // 5 minutes - then deep sleep
 
 // Idle charging detection from VMON_CAL mV drift (lookback up to inactivity sleep window).
@@ -784,7 +795,7 @@ static int battFullLearnHead = 0;
 static bool battFullWasBusy = false;
 static unsigned long battFullPostBusyMs = 0;
 
-// Runtime DEV mode (persisted in NVS): when enabled, BLE stays on and inactivity sleep is disabled.
+// Runtime DEV mode (persisted in NVS): when enabled, inactivity deep sleep is disabled.
 const char* DEV_MODE_NAMESPACE = "system";
 const char* DEV_MODE_KEY = "dev_mode";
 const char* HOMING_DEFERRED_NVS_KEY = "homing_deferred";
@@ -823,7 +834,6 @@ bool bleEnabled = true;
 
 void noteBleDiagnosticActivity() {
   lastActivityMillis = millis();
-  bleIdleStartTime = millis();
 }
 
 // OTA timing variables
@@ -1099,6 +1109,9 @@ static BatteryAssessment batteryAssessment = {0.0f, 0.0f, 0.0f, 0, 0, false, fal
 static bool bootBatteryCheckDone = false;
 static uint8_t runtimeSagStrikes = 0;
 static unsigned long runtimeSagLastStrikeMs = 0;
+static bool batteryAdcReadFailed = false;
+static char batteryAdcFailStage[32] = "";
+static unsigned long lastBatteryAdcFailLogMs = 0;
 
 // Motor shield instance - M1&M2 speed control only. Enable/fault pins are
 // handled separately because this hardware has one MAX14870 per motor.
@@ -1446,7 +1459,15 @@ class command_characteristic_callbacks: public BLECharacteristicCallbacks {
       bool flushAllowed = false;
       assessBatteryUsable("get_battery", false, &flushAllowed);
       int level = batteryAssessment.valid ? batteryAssessment.usablePercent : 0;
-      float batteryVoltage = batteryAssessment.valid ? batteryAssessment.vIdle : readBatteryVoltageQuiet();
+      float batteryVoltage = 0.0f;
+      if (batteryAssessment.valid) {
+        batteryVoltage = batteryAssessment.vIdle;
+      } else {
+        BatteryVoltageSample sample;
+        if (sampleBatteryVoltage(&sample) && sample.valid) {
+          batteryVoltage = sample.voltage;
+        }
+      }
       String batteryMessage = String("BATTERY:") + String(level) + "," + String(batteryVoltage, 2) + "V";
       writeResponseToChannel(batteryMessage);
       Serial.printf("Processed GET_BATTERY, returned %s\n", batteryMessage.c_str());
@@ -1455,13 +1476,16 @@ class command_characteristic_callbacks: public BLECharacteristicCallbacks {
     }
     if (cmd == "GET_BATTERY_DEBUG") {
       // Support / diagnostics: ADC, VMON_CAL, corrected volts, learned full anchor.
-      float adc = 0.0f;
-      float mvCal = 0.0f;
-      float batteryVoltage = sampleBatteryVoltage(&adc, &mvCal);
-      char debugLine[192];
+      BatteryVoltageSample sample;
+      sampleBatteryVoltage(&sample);
+      char debugLine[224];
       snprintf(debugLine, sizeof(debugLine),
-               "BATTERY_DEBUG:ADC=%.1f,VMON_CAL=%.1fmV,Battery=%.2fV,charging=%d,vFullMv=%.1f,seed=%.1f",
-               adc, mvCal, batteryVoltage, isCharging ? 1 : 0,
+               "BATTERY_DEBUG:ADC=%.1f,VMON_CAL=%.1fmV,Battery=%.2fV,valid=%d,failedMv=%d,charging=%d,vFullMv=%.1f,seed=%.1f",
+               sample.adc, sample.mvCal,
+               sample.valid ? sample.voltage : 0.0f,
+               sample.valid ? 1 : 0,
+               sample.failedMvReads,
+               isCharging ? 1 : 0,
                vFullMv, vFullMvSeed);
       writeResponseToChannel(String(debugLine));
       Serial.printf("Processed GET_BATTERY_DEBUG, returned %s\n", debugLine);
@@ -4717,9 +4741,7 @@ bool setDevModeEnabled(bool enabled) {
     return false;
   }
   devModeEnabled = enabled;
-  // Restart power-saving timers so mode transitions are predictable.
-  bleStartupTime = millis();
-  bleIdleStartTime = millis();
+  // Restart inactivity timer so mode transitions are predictable.
   lastActivityMillis = millis();
   Serial.printf("DEV mode updated: %d\n", devModeEnabled ? 1 : 0);
   return true;
@@ -6567,8 +6589,6 @@ void setup() {
     old_device_connect = false;
     serial_streaming_enabled = false;
     bleEnabled = true;
-    bleStartupTime = millis();
-    bleIdleStartTime = millis();
     Serial.println("=== MEMORY BEFORE BLE SERVER SETUP (WAKE) ===");
     Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
     Serial.printf("Largest free block: %d bytes\n", ESP.getMaxAllocHeap());
@@ -6632,8 +6652,8 @@ void setup() {
   circleLeds();
   Serial.println("LED startup test complete");
 
-  bleStartupTime = millis();
-  bleIdleStartTime = millis();
+  bleEnabled = true;
+  // BLE stays on while awake; radio is only torn down for deep sleep / explicit restart.
   Serial.println("=== MEMORY BEFORE BLE SERVER SETUP ===");
   Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
   Serial.printf("Largest free block: %d bytes\n", ESP.getMaxAllocHeap());
@@ -6655,9 +6675,9 @@ void setup() {
   sendSerialToBLE("Min free heap: " + String(ESP.getMinFreeHeap()) + " bytes");
 
   if (devModeEnabled) {
-    Serial.println("DEV mode is ON: BLE stays enabled and inactivity sleep is disabled.");
+    Serial.println("DEV mode is ON: inactivity deep sleep is disabled.");
   } else {
-    Serial.println("DEV mode is OFF: BLE timeout and inactivity sleep are active.");
+    Serial.println("DEV mode is OFF: inactivity deep sleep is active.");
   }
 
   enableM12Drivers();
@@ -6729,12 +6749,6 @@ void loop() {
   if (g_trustState == TRUST_STATE_WAITING) {
     slowCircleLeds();
   }
-  
-  // Keep BLE alive while serial streaming or flush is active. When idle (not streaming),
-  // allow timeout after BLE_TIMEOUT even if a client remains connected.
-  if (serial_streaming_enabled || isFlushing) {
-    bleIdleStartTime = millis();
-  }
 
   // Post-wake advertising guard: re-kick advertising if it stalled after deep-sleep wake
   if (bleEnabled && bleWakeGuardUntil > 0 && millis() < bleWakeGuardUntil && !is_device_connected) {
@@ -6751,35 +6765,10 @@ void loop() {
     bleWakeGuardUntil = 0;
   }
 
-  // Check for BLE timeout during idle (no serial streaming) - never shut down during OTA transfer.
-  if (!devModeEnabled && bleEnabled && !otaTransferInProgress() && !serial_streaming_enabled && !isFlushing &&
-      (millis() - bleIdleStartTime > BLE_TIMEOUT)) {
-    Serial.println("BLE shutting down after 10 minutes to save power");
-    SerialBLE_println("BLE shutting down after 10 minutes to save power");
-
-    shutdownBleForPowerDown("ble_idle_timeout");
-    dualButtonHoldActive = false; // Reset hold timer when BLE shuts down
-    Serial.println("BLE disabled - manually restart device to re-enable");
-    // Continue with control panel operations even when BLE is disabled
-  }
+  // BLE stays on while awake; only deep sleep tears down the radio (see inactivity_deep_sleep).
   
   // BLE-specific operations - only run if BLE is enabled and OTA is not active
   if (bleEnabled && !otaEnabled) {
-    if (!is_device_connected) {
-    //Serial.println("hi");
-  } else {
-    // Send periodic status when connected
-    static unsigned long lastStatusPrint = 0;
-    if (millis() - lastStatusPrint > 5000) { // Every 5 seconds
-      lastStatusPrint = millis();
-      Serial.println("BLE Connected - System Running");
-      SerialBLE_print("System Status: Running - " + String(millis() / 1000) + "s");
-      yield();  // Space between rapid BLE notifies to avoid LoadProhibited
-      String motorFaultStatus = "Motor Fault Status: " + buildMotorFaultStatusSnapshot();
-      Serial.println(motorFaultStatus);
-      SerialBLE_print(motorFaultStatus);
-    }
-  }
   if (!is_device_connected && old_device_connect) {
     delay(500);
     blue_server->startAdvertising();
@@ -7018,6 +7007,14 @@ void loop() {
           }
         } else {
           if (!isFlushAllowedByBattery(true)) {
+            if (batteryAdcReadFailed) {
+              logFlushAbortedBatteryAdc("flush_button");
+              showBatteryLevelFeedback(batteryAssessment.usablePercent, false);
+              button1DisconnectAlertedForCurrentPress = true;
+              button1Held = false;
+              button1DelayActive = false;
+              return;
+            }
             char blockMsg[96];
             snprintf(blockMsg, sizeof(blockMsg),
                      "Flush blocked: usable=%d%% threshold=%d%% vIdle=%.2f vLoad=%.2f",
@@ -7342,6 +7339,11 @@ void flushSequence() {
 
       bool flushAllowed = false;
       if (!assessBatteryUsable("flush_preflight", true, &flushAllowed)) {
+        if (batteryAdcReadFailed) {
+          logFlushAbortedBatteryAdc("flush_preflight");
+          abortFlushPreflight(false);
+          return;
+        }
         char reason[96];
         snprintf(reason, sizeof(reason),
                  "gate1_fail usable=%d%% threshold=%d%% vIdle=%.2f vLoad=%.2f",
@@ -7353,6 +7355,11 @@ void flushSequence() {
         return;
       }
       if (!flushAllowed) {
+        if (batteryAdcReadFailed) {
+          logFlushAbortedBatteryAdc("flush_preflight");
+          abortFlushPreflight(false);
+          return;
+        }
         char reason[96];
         snprintf(reason, sizeof(reason),
                  "gate1_fail flush_blocked usable=%d%% threshold=%d%%",
@@ -8110,7 +8117,6 @@ void abortOtaSessionAndDisconnect(const char* reasonCode) {
     BLEDevice::startAdvertising();
   }
   bleEnabled = true;
-  bleIdleStartTime = millis();
   lastActivityMillis = millis();
 
   Serial.println("OTA aborted — BLE advertising restarted for normal connection");
@@ -8404,8 +8410,6 @@ void restartBLEServer() {
   BLEDevice::startAdvertising();
   
   bleEnabled = true;
-  bleStartupTime = millis();
-  bleIdleStartTime = millis();
   is_device_connected = false;
   serial_streaming_enabled = false;
   
@@ -8484,13 +8488,34 @@ static int cmpUint32(const void* a, const void* b) {
   return (va > vb) - (va < vb);
 }
 
-static void readAdcAveraged(int pin, float* outAdc, float* outMvCal) {
+static bool readBatteryAdcAveraged(int pin, float* outAdc, float* outMvCal, int* outFailedMv) {
   uint32_t adcSamples[ADC_AVG_SAMPLES];
   uint32_t mvSamples[ADC_AVG_SAMPLES];
+  int failedMv = 0;
 
   for (int i = 0; i < ADC_AVG_SAMPLES; i++) {
     adcSamples[i] = (uint32_t)analogRead(pin);
-    mvSamples[i] = analogReadMilliVolts(pin);
+    // Arduino-ESP32 returns 0 when calibrated oneshot fails.
+    uint32_t mv = (uint32_t)analogReadMilliVolts(pin);
+    mvSamples[i] = mv;
+    if (mv == 0) {
+      failedMv++;
+    }
+  }
+
+  if (outFailedMv) {
+    *outFailedMv = failedMv;
+  }
+
+  // Too many exact ADC mV failures: do not produce a trusted average.
+  if (failedMv > ADC_AVG_TRIM) {
+    if (outAdc) {
+      *outAdc = 0.0f;
+    }
+    if (outMvCal) {
+      *outMvCal = 0.0f;
+    }
+    return false;
   }
 
   qsort(adcSamples, ADC_AVG_SAMPLES, sizeof(uint32_t), cmpUint32);
@@ -8507,8 +8532,24 @@ static void readAdcAveraged(int pin, float* outAdc, float* outMvCal) {
     mvSum += mvSamples[i];
   }
 
-  *outAdc = (float)adcSum / (float)count;
-  *outMvCal = (float)mvSum / (float)count;
+  if (outAdc) {
+    *outAdc = (float)adcSum / (float)count;
+  }
+  if (outMvCal) {
+    *outMvCal = (float)mvSum / (float)count;
+  }
+  return true;
+}
+
+static void logBatteryAdcFailRateLimited(int failedMvReads) {
+  unsigned long now = millis();
+  if (lastBatteryAdcFailLogMs != 0 &&
+      (now - lastBatteryAdcFailLogMs) < BATT_ADC_FAIL_LOG_INTERVAL_MS) {
+    return;
+  }
+  lastBatteryAdcFailLogMs = now;
+  Serial.printf("BATTERY_ADC_FAIL pin=%d failed=%d/%d\n",
+                batteryVoltagePin, failedMvReads, ADC_AVG_SAMPLES);
 }
 
 static float batteryVoltageFromMvCal(float mvCal) {
@@ -8522,17 +8563,101 @@ static float batteryVoltageFromMvCal(float mvCal) {
   return vRaw + (12.6f - vAtFull);
 }
 
-float sampleBatteryVoltage(float* outAdc, float* outMvCal) {
+bool sampleBatteryVoltage(BatteryVoltageSample* out) {
+  if (!out) {
+    return false;
+  }
+  out->voltage = NAN;
+  out->adc = 0.0f;
+  out->mvCal = 0.0f;
+  out->failedMvReads = 0;
+  out->valid = false;
+
   float adc = 0.0f;
   float mvCal = 0.0f;
-  readAdcAveraged(batteryVoltagePin, &adc, &mvCal);
+  int failedMv = 0;
+  if (!readBatteryAdcAveraged(batteryVoltagePin, &adc, &mvCal, &failedMv)) {
+    out->failedMvReads = failedMv;
+    logBatteryAdcFailRateLimited(failedMv);
+    return false;
+  }
+
+  out->adc = adc;
+  out->mvCal = mvCal;
+  out->failedMvReads = failedMv;
+  out->voltage = batteryVoltageFromMvCal(mvCal);
+  out->valid = true;
+  return true;
+}
+
+float sampleBatteryVoltage(float* outAdc, float* outMvCal) {
+  BatteryVoltageSample sample;
+  sampleBatteryVoltage(&sample);
   if (outAdc) {
-    *outAdc = adc;
+    *outAdc = sample.adc;
   }
   if (outMvCal) {
-    *outMvCal = mvCal;
+    *outMvCal = sample.mvCal;
   }
-  return batteryVoltageFromMvCal(mvCal);
+  return sample.valid ? sample.voltage : NAN;
+}
+
+// Retry an invalid 32-sample batch up to BATT_ADC_READ_ATTEMPTS times.
+// Keeps heater duty as-is during loaded retries (caller owns PWM).
+static bool readBatteryVoltageWithRetry(float* outVoltage, const char* stage) {
+  batteryAdcReadFailed = false;
+  batteryAdcFailStage[0] = '\0';
+
+  for (int attempt = 1; attempt <= BATT_ADC_READ_ATTEMPTS; attempt++) {
+    BatteryVoltageSample sample;
+    if (sampleBatteryVoltage(&sample) && sample.valid) {
+      if (outVoltage) {
+        *outVoltage = sample.voltage;
+      }
+      return true;
+    }
+
+    Serial.printf("BATTERY_ADC_RETRY stage=%s attempt=%d/%d failed=%d/%d\n",
+                  stage ? stage : "unknown",
+                  attempt,
+                  BATT_ADC_READ_ATTEMPTS,
+                  sample.failedMvReads,
+                  ADC_AVG_SAMPLES);
+    feedTaskWatchdog();
+    if (attempt < BATT_ADC_READ_ATTEMPTS) {
+      wdtSafeDelay(BATT_ADC_RETRY_DELAY_MS);
+    }
+  }
+
+  batteryAdcReadFailed = true;
+  if (stage && stage[0]) {
+    snprintf(batteryAdcFailStage, sizeof(batteryAdcFailStage), "%s", stage);
+  } else {
+    snprintf(batteryAdcFailStage, sizeof(batteryAdcFailStage), "unknown");
+  }
+  if (outVoltage) {
+    *outVoltage = NAN;
+  }
+  return false;
+}
+
+static void markBatteryAssessAdcUnavailable() {
+  applyHeaterPwmDuty(0);
+  batteryAssessment.inProgress = false;
+  batteryAssessment.stepCount = 0;
+  batteryAssessment.assessPassed = false;
+  batteryAssessment.flushAllowed = false;
+  batteryAssessment.lastAssessMs = millis();
+}
+
+void logFlushAbortedBatteryAdc(const char* tag) {
+  char msg[128];
+  snprintf(msg, sizeof(msg),
+           "flush_aborted:battery_adc_read_failed stage=%s attempts=%d",
+           batteryAdcFailStage[0] ? batteryAdcFailStage : "unknown",
+           BATT_ADC_READ_ATTEMPTS);
+  // Persist + Serial + BLE serial via existing power-test logger.
+  logPowerTestEvent(tag && tag[0] ? tag : "flush", msg, true, true);
 }
 
 void clearChargeHistory() {
@@ -8653,8 +8778,12 @@ void updateChargingDetection() {
   }
   lastChargeSampleMs = now;
 
-  float mvCal = 0.0f;
-  sampleBatteryVoltage(nullptr, &mvCal);
+  BatteryVoltageSample sample;
+  if (!sampleBatteryVoltage(&sample) || !sample.valid) {
+    // Skip charge history / full-anchor learning on invalid ADC batches.
+    return;
+  }
+  float mvCal = sample.mvCal;
 
   if (hasLastChargeMv && (lastChargeMv - mvCal) >= CHARGE_DROP_RESET_MV) {
     clearChargeHistory();
@@ -9073,6 +9202,10 @@ static void resetRuntimeSagStrikes() {
 }
 
 static bool checkRuntimeSagDebounced(float v, const char* reason) {
+  // Invalid ADC (NaN) is not a voltage sag — skip until a trusted sample returns.
+  if (v != v) {
+    return false;
+  }
   if (v >= minLoadedBatteryV) {
     resetRuntimeSagStrikes();
     return false;
@@ -9177,7 +9310,15 @@ bool measureBatteryUnderLoad(float* vIdle, float* vLoad, int testDuty, uint16_t 
   snprintf(msg, sizeof(msg), "start duty=%d settle=%ums", testDuty, (unsigned)settleMs);
   logPowerTestEvent(tag, msg, false);
 
-  float idle = readBatteryVoltageQuiet();
+  float idle = 0.0f;
+  if (!readBatteryVoltageWithRetry(&idle, "idle")) {
+    applyHeaterPwmDuty(0);
+    snprintf(msg, sizeof(msg),
+             "battery_adc_read_failed stage=idle attempts=%d",
+             BATT_ADC_READ_ATTEMPTS);
+    logPowerTestEvent(tag, msg, true);
+    return false;
+  }
   if (vIdle) {
     *vIdle = idle;
   }
@@ -9190,7 +9331,15 @@ bool measureBatteryUnderLoad(float* vIdle, float* vLoad, int testDuty, uint16_t 
     feedTaskWatchdog();
     wdtSafeDelay(5);
   }
-  float loaded = readBatteryVoltageQuiet();
+  float loaded = 0.0f;
+  if (!readBatteryVoltageWithRetry(&loaded, "loaded")) {
+    applyHeaterPwmDuty(0);
+    snprintf(msg, sizeof(msg),
+             "battery_adc_read_failed stage=loaded attempts=%d",
+             BATT_ADC_READ_ATTEMPTS);
+    logPowerTestEvent(tag, msg, true);
+    return false;
+  }
   applyHeaterPwmDuty(0);
   if (vLoad) {
     *vLoad = loaded;
@@ -9211,6 +9360,10 @@ bool measureBatteryUnderLoad(float* vIdle, float* vLoad, int testDuty, uint16_t 
 }
 
 int getHeaterPwmCapForVoltage(float batteryV) {
+  // Untrusted / failed ADC sample: prefer reduced duty over allowing full PWM.
+  if (batteryV != batteryV) {
+    return heaterPwmReduced;
+  }
   int pwm = HEATER_PWM_MAX;
   if (batteryV < heaterCapVFull) {
     return heaterPwmReduced;
@@ -9247,14 +9400,27 @@ bool assessBatteryUsable(const char* tag, bool forceRefresh, bool* outFlushAllow
   };
 
   if (!shouldRefreshBatteryCache(forceRefresh)) {
+    batteryAdcReadFailed = false;
     if (outFlushAllowed) {
       *outFlushAllowed = batteryAssessment.flushAllowed;
     }
     return batteryAssessment.assessPassed;
   }
 
+  batteryAdcReadFailed = false;
   char msg[128];
-  float vIdle = readBatteryVoltageQuiet();
+  float vIdle = 0.0f;
+  if (!readBatteryVoltageWithRetry(&vIdle, "idle")) {
+    snprintf(msg, sizeof(msg),
+             "battery_adc_read_failed stage=idle attempts=%d",
+             BATT_ADC_READ_ATTEMPTS);
+    logPowerTestEvent(assessTag, msg, true);
+    markBatteryAssessAdcUnavailable();
+    if (outFlushAllowed) {
+      *outFlushAllowed = false;
+    }
+    return false;
+  }
   float minIdle = minIdleBatteryV();
   if (vIdle < minIdle) {
     snprintf(msg, sizeof(msg), "idle_fail v=%.2f min_idle=%.2f", vIdle, minIdle);
@@ -9321,7 +9487,18 @@ bool assessBatteryUsable(const char* tag, bool forceRefresh, bool* outFlushAllow
       feedTaskWatchdog();
       wdtSafeDelay(5);
     }
-    float vLoad = readBatteryVoltageQuiet();
+    float vLoad = 0.0f;
+    if (!readBatteryVoltageWithRetry(&vLoad, "loaded")) {
+      snprintf(msg, sizeof(msg),
+               "battery_adc_read_failed stage=loaded attempts=%d",
+               BATT_ADC_READ_ATTEMPTS);
+      logPowerTestEvent(assessTag, msg, true);
+      markBatteryAssessAdcUnavailable();
+      if (outFlushAllowed) {
+        *outFlushAllowed = false;
+      }
+      return false;
+    }
     int heaterAdc = readHeaterCurrentAdc();
     float heaterA = heaterCurrentFromAdc(heaterAdc);
     applyHeaterPwmDuty(0);
@@ -9344,7 +9521,17 @@ bool assessBatteryUsable(const char* tag, bool forceRefresh, bool* outFlushAllow
       step.heaterA = heaterA;
     }
 
-    stepIdle = readBatteryVoltageQuiet();
+    if (!readBatteryVoltageWithRetry(&stepIdle, "step_idle")) {
+      snprintf(msg, sizeof(msg),
+               "battery_adc_read_failed stage=step_idle attempts=%d",
+               BATT_ADC_READ_ATTEMPTS);
+      logPowerTestEvent(assessTag, msg, true);
+      markBatteryAssessAdcUnavailable();
+      if (outFlushAllowed) {
+        *outFlushAllowed = false;
+      }
+      return false;
+    }
     wdtSafeDelay(20);
   }
 
@@ -9747,23 +9934,26 @@ void tryStartDeferredHomingIfReady() {
 }
 
 float readBatteryVoltage() {
-  float adc = 0.0f;
-  float mvCal = 0.0f;
-  float batteryVoltage = sampleBatteryVoltage(&adc, &mvCal);
+  BatteryVoltageSample sample;
+  sampleBatteryVoltage(&sample);
 
   if (!batteryAssessment.inProgress) {
     int chargeLevel = batteryAssessment.valid ? batteryAssessment.usablePercent
-                                              : usablePercentFromVLoad(batteryVoltage);
+                                              : (sample.valid ? usablePercentFromVLoad(sample.voltage) : 0);
     const char* usableSuffix = batteryAssessment.valid ? " cached" : "";
 
-    Serial.printf("Battery Debug: ADC=%.1f, VMON_CAL=%.1fmV, Battery=%.2fV, Usable=%d%%%s, charging=%d, vFullMv=%.1f, seed=%.1f\n",
-                  adc, mvCal, batteryVoltage, chargeLevel, usableSuffix, isCharging ? 1 : 0,
+    Serial.printf("Battery Debug: ADC=%.1f, VMON_CAL=%.1fmV, Battery=%.2fV, valid=%d, failedMv=%d, Usable=%d%%%s, charging=%d, vFullMv=%.1f, seed=%.1f\n",
+                  sample.adc, sample.mvCal,
+                  sample.valid ? sample.voltage : 0.0f,
+                  sample.valid ? 1 : 0,
+                  sample.failedMvReads,
+                  chargeLevel, usableSuffix, isCharging ? 1 : 0,
                   vFullMv, vFullMvSeed);
     if (serial_streaming_enabled) {
-      sendSerialToBLE("BAT_ADC: " + String(adc, 1) + ", USABLE: " + String(chargeLevel) + "%\n");
+      sendSerialToBLE("BAT_ADC: " + String(sample.adc, 1) + ", USABLE: " + String(chargeLevel) + "%\n");
     }
   }
-  return batteryVoltage;
+  return sample.valid ? sample.voltage : NAN;
 }
 
 float readBatteryTemperatureQuiet() {
@@ -9869,13 +10059,16 @@ void displayBatteryChargeLevel() {
   streamBatteryAssessReport("display");
 
   // Averaged ADC/VMON_CAL sample after assess (for divider troubleshooting over Serial + BLE serial)
-  float adc = 0.0f;
-  float mvCal = 0.0f;
-  float batteryFromAdc = sampleBatteryVoltage(&adc, &mvCal);
-  char adcLine[192];
+  BatteryVoltageSample sample;
+  sampleBatteryVoltage(&sample);
+  char adcLine[224];
   snprintf(adcLine, sizeof(adcLine),
-           "Battery Debug: ADC=%.1f, VMON_CAL=%.1fmV, Battery=%.2fV, charging=%d, vFullMv=%.1f, seed=%.1f",
-           adc, mvCal, batteryFromAdc, isCharging ? 1 : 0,
+           "Battery Debug: ADC=%.1f, VMON_CAL=%.1fmV, Battery=%.2fV, valid=%d, failedMv=%d, charging=%d, vFullMv=%.1f, seed=%.1f",
+           sample.adc, sample.mvCal,
+           sample.valid ? sample.voltage : 0.0f,
+           sample.valid ? 1 : 0,
+           sample.failedMvReads,
+           isCharging ? 1 : 0,
            vFullMv, vFullMvSeed);
   emitBatteryReportLine(adcLine);
 
@@ -10630,6 +10823,10 @@ void updateHeaterPID() {
   }
 
   float v = readBatteryVoltageQuiet();
+  // Prefer last known-good assessment idle voltage if ADC batch is invalid this cycle.
+  if (v != v && batteryAssessment.valid) {
+    v = batteryAssessment.vIdle;
+  }
   int cap = getHeaterPwmCapForVoltage(v);
   if (cap < 1) {
     applyHeaterPwmDuty(0);

@@ -182,22 +182,21 @@ Rationale:
 
 See also **Brownout and low-battery voltage guard** above for loaded VMON preflight, brownout streak, and M1/heater mutual exclusion.
 
-## BLE timeout behavior when clients stay connected
+## BLE stay-on-while-awake (deep sleep tears down radio)
 
-BLE auto-shutdown now uses an idle timer that respects serial streaming state:
+BLE remains initialized and advertising whenever the device is awake:
 
-- If serial streaming is active, BLE remains enabled and the idle timer is continuously refreshed.
-- If serial streaming is not active, BLE can auto-shutdown after 10 minutes even if a client remains connected (to close accidental idle connections).
-- After wake from sleep, BLE is initialized and advertised again with a fresh idle timer, so maintenance tools can reconnect without requiring a power cycle.
-- When streaming stops or the client disconnects, BLE timeout behavior resumes from the idle timer and is re-evaluated continuously in the main loop.
+- While awake, there is no separate BLE idle timeout; clients can connect/reconnect at any time.
+- On disconnect, advertising restarts so the device stays discoverable.
+- On inactivity deep sleep entry, BLE is torn down via `shutdownBleForPowerDown("inactivity_deep_sleep")` before `esp_deep_sleep_start()`.
+- After wake from deep sleep (GPIO2), BLE is re-initialized and advertised again (including a short post-wake advertising guard).
+- DEV mode disables inactivity deep sleep; BLE behavior while awake is the same as normal mode.
 
 Rationale:
 
-- Preserve active diagnostics sessions: live serial monitoring should not be interrupted by a background BLE timeout.
-- Avoid accidental battery drain: a forgotten/stale BLE connection without streaming should not keep radio power on indefinitely.
-- Keep wake behavior serviceable: every wake should reopen the normal diagnostics/configuration window while retaining the 10-minute idle shutdown.
-- Match operator intent: starting serial stream is treated as explicit "keep BLE alive" activity.
-- Keep behavior predictable after session end: once streaming/disconnect transitions the link to idle, the same 10-minute idle shutdown policy applies.
+- Keep the app discoverable while the unit is awake (including cases that block deep sleep, such as charging).
+- Put radio power savings on the existing inactivity deep-sleep path instead of a separate BLE-only kill that left the MCU awake without advertising.
+- Keep wake behavior serviceable: every wake reopens the normal diagnostics/configuration window.
 - Improve shutdown safety: BLE send paths are guarded by `bleEnabled`, and streaming/connection state is cleared before BLE deinit to avoid stale-notify behavior during shutdown.
 
 ## Open microswitch latch during flush (cases 8–10)
@@ -434,7 +433,7 @@ When **DEV mode is on**, the same dual-button hold gesture does **not** turn DEV
 **Rationale**:
 
 - OTA entry via a hidden button sequence is redundant now that the app handles firmware updates.
-- A hardware DEV mode toggle remains useful for field debugging (BLE stays on, inactivity sleep disabled) without requiring the app.
+- A hardware DEV mode toggle remains useful for field debugging (inactivity deep sleep disabled) without requiring the app.
 - Factory rollback via hardware is deliberately hard to trigger (DEV on + 20 s hold while idle) to avoid accidental customer rollbacks.
 - Battery display is only meaningful when idle; during active operations dual press should cancel or stop, not show battery level.
 - Dual-button flush cancel predates single-button cancel and must work on first simultaneous press without the `flushCancelArmed` release-then-press debounce.

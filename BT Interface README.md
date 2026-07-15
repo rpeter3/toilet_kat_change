@@ -171,7 +171,7 @@ Parameters are saved in JSON format with all 30 parameters:
 - **Communication**: Comma-separated values over BLE characteristic
 - **Data Format**: UTF-8 encoded strings
 - **Parameter Persistence**: Parameters are automatically saved to EEPROM when updated
-- **BLE Timeout**: BLE automatically shuts down after 10 minutes to save power (can be re-enabled by restarting device)
+- **BLE Power**: BLE stays on and advertising while awake; radio is torn down only when entering inactivity deep sleep (re-enabled on wake)
 - **OTA Support**: Over-the-air firmware updates available via BLE (requires special activation sequence)
 
 ## BLE Framing (Android-safe streaming)
