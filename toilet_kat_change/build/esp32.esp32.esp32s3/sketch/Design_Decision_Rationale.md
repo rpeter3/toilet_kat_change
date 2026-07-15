@@ -122,8 +122,8 @@ Note: `docs/heater_failsafe_flow.png` may be updated later to show the absolute 
 
 Behavior:
 
-- **Usable battery assessment** (`assessBatteryUsable`): user-facing battery % (LED bar, `GET_BATTERY`, flush block) is derived from a scaled heater load pulse, not idle open-circuit VMON. Assessment steps through duties up to `getHeaterPwmCapForVoltage(vIdle)`, records worst loaded voltage/sag, and maps usable % from `MIN_LOADED_BATTERY_V` (0%) to `USABLE_V_FULL` (100%).
-- **Unified flush block**: `batteryThreshold` (default 15% high barrier, 10% compostable) is the minimum usable % before flush. Flush is blocked at the button handler and re-checked in flush case 0; both use the same cached assessment. `assessPassed` must also prove the pack can sustain `capDuty` (255 or `heaterPwmReduced`).
+- **Usable battery assessment** (`assessBatteryUsable`): user-facing battery % (LED bar, `GET_BATTERY`, flush block) is derived from a scaled heater load pulse, not idle open-circuit VMON. Assessment steps through duties up to `getHeaterPwmCapForVoltage(vIdle)`, records worst loaded voltage (and sag for diagnostics only), and maps usable % from `minLoadedBatteryV` (0%, default 10.0 V) to `usableVFull` (100%, default 11.4 V). Pass/fail is based on loaded voltage ≥ `minLoadedBatteryV` only — delta sag (`maxBatterySagV`) is logged but does not gate. Packs above 11.4 V under load report 100% (full plateau / ageing buffer). Soft margin for brownout is the 10.0 V floor vs ~9.5 V hardware brownout, not a large % threshold.
+- **Unified flush block**: `batteryThreshold` (default 1% for both materials) is the minimum usable % before flush. Flush is blocked at the button handler and re-checked in flush case 0; both use the same cached assessment. `assessPassed` must also prove the pack can sustain `capDuty` (255 or `heaterPwmReduced`).
 - **Two-tier heater PWM** (`getHeaterPwmCapForVoltage`): VMON at/above `heaterCapVFull` → PWM 255; below → `heaterPwmReduced` (255 high barrier, 170 compostable). No 255/170/100 voltage ladder or runtime preflight derate cascade.
 - **Max heater wall time** (`maxHeaterWallTimeS`, default 200 s): fixed BLE/EEPROM parameter sets flush step 6 timeout before error 6 (`heater_max_wall`); replaces per-flush `(ramp + hold) * 1.2` calculation. Error 6 is an **advisory**: flush continues with progress LEDs, each occurrence is logged to SPIFFS, preflight does not block on code 6, first occurrence silently latches code 6, recurring consecutive occurrence shows LED/buzzer after completion flash, cleared when a latched advisory flush completes without re-triggering.
 - **Loaded VMON preflight** (`measureBatteryUnderLoad`, legacy helper): still available for single-step tests; boot/flush/homing paths now use `assessBatteryUsable` instead of idle % plus light-duty-only load test.
@@ -131,7 +131,7 @@ Behavior:
 - **Ramped boot heater test** (`testHeaterCurrent`): PWM ramps up to assessed `capDuty` instead of always targeting full duty at boot.
 - **Flush case 0 gates**: preflight (usable battery assess, motor faults, heater current test) before entering the flush sequence; failures latch `ERROR_CODE 2` via `latchLowBatteryStop`.
 - **Runtime heater cap** (`updateHeaterPID`): PID output limited by `getHeaterPwmCapForVoltage()` on live VMON each tick.
-- **Runtime sag debounce**: `checkRuntimeSagDebounced` requires `RUNTIME_SAG_STRIKES` consecutive low VMON samples before latching low battery mid-heat.
+- **Runtime low-voltage debounce** (`checkRuntimeSagDebounced`): requires `RUNTIME_SAG_STRIKES` consecutive VMON samples below `minLoadedBatteryV` before latching low battery mid-heat (absolute floor, not delta sag).
 - **M1/heater mutual exclusion**: heater is not armed until case 5 close completes (end of case 5 before case 6); `isM1MotorActive()` blocks heater PID while M1 runs; heat timers pause during M1 motion.
 - **Diagnostics**: `logPowerTestEvent()` writes `power_test` lines to Serial, BLE (when streaming), and SPIFFS for assessment steps, boot skip, flush preflight, and heater ramp outcomes.
 
@@ -160,22 +160,24 @@ Rationale:
 Behavior:
 
 - Cold boot runs battery/brownout preflight (same gates as boot heater test) before `startMotorHoming()`.
-- Homing is **skipped** when battery preflight fails, brownout streak caused heater-test skip, or NVS `homing_deferred` is already set from a prior session; M1 is not run on a weak pack.
+- Homing is **skipped** when battery preflight fails or brownout streak caused heater-test skip; M1 is not run on a weak pack.
+- If NVS `homing_deferred` is already set from a prior session **and** battery/brownout preflight now passes, cold boot **resumes homing immediately** (`[homing_defer] boot_resume battery_ok`) without latching `ERROR_CODE 2`.
+- If NVS `homing_deferred` is set and battery/brownout still blocks, boot keeps the defer and latches `ERROR_CODE 2` via `applyLoadedMotorHomingDeferred()` (`boot_skip persisted`).
 - Deferred state is persisted in NVS (`homing_deferred`, optional `homing_defer_reason` string) so position-unknown survives reboot and charge cycles.
-- `ERROR_CODE = 2` and the error LED are latched while deferred (mechanism not at known position / charge required).
+- `ERROR_CODE = 2` and the error LED are latched only while deferred **and** battery/brownout still insufficient (true charge-required signal). A full pack must not flash a false low-battery indication.
 - `loop()` polls every ~5 s via `tryStartDeferredHomingIfReady()`; when battery preflight passes, homing auto-retries; deferred state and `ERROR_CODE 2` clear only on homing success in `updateMotorHoming()`.
 - **Consecutive failure cap:** up to 3 deferred homing failures per power session (`HOMING_DEFER_MAX_CONSECUTIVE_FAILURES`). Each timeout logs `Homing FAILED (timeout): phase=...` on Serial/BLE and `[homing_defer] attempt_fail attempt=N/3 phase=...` to SPIFFS. After 3 failures, `motorHomingRetrySuppressed` stops further M1 commands until power cycle; `[homing_defer] retry_exhausted failures=3/3 ...` and `logError("runtime", 1, "homing_retry_exhausted")` are recorded. Throttled `[homing_defer] retry_suppressed ...` while waiting. `motorHomingDeferred` stays true (flush blocked). Counter resets on power cycle or successful homing (`retry_state_reset reason=homing_success`).
 - Flush start is blocked while `motorHomingDeferred`; flush case 0 battery gates remain as redundant safety.
-- Deep-sleep wake does not run homing (unchanged); deferred retry logic in `loop()` still applies. NVS reload on wake re-applies `ERROR_CODE 2` via `applyLoadedMotorHomingDeferred()`.
-- `logPowerTestEvent("homing_defer", ...)` records boot skip, retry checks, retry start (`attempt=N/3`), attempt_fail, retry_exhausted, retry_suppressed, retry_state_reset, and completion.
+- Deep-sleep wake does not run homing (unchanged); deferred retry logic in `loop()` still applies. NVS reload on wake calls `applyLoadedMotorHomingDeferred()`: latches `ERROR_CODE 2` only if battery still blocks; otherwise logs `boot_resume pending` and leaves retry to `loop()`.
+- `logPowerTestEvent("homing_defer", ...)` records boot skip, boot resume, retry checks, retry start (`attempt=N/3`), attempt_fail, retry_exhausted, retry_suppressed, retry_state_reset, and completion.
 
 Rationale:
 
 - M1 homing draws stall-level current; on a very low battery it can brownout the ESP like the heater test or flush clamp.
 - Skipping homing without persistence leaves the unit unaware after recharge: mechanism position unknown, flush unsafe, no operator signal.
-- NVS flag (not RAM-only `ERROR_CODE`) survives power cycle; re-applying `ERROR_CODE 2` on boot when the flag is loaded gives visible LED indication.
+- NVS flag (not RAM-only `ERROR_CODE`) survives power cycle. Re-applying `ERROR_CODE 2` on boot is only appropriate while the pack is still too weak; after recharge, resume (or pending-retry) without a misleading low-battery LED flash.
 - Auto-retry on battery recovery avoids requiring a power cycle after charging; the operator does not need to know internal state.
-- `ERROR_CODE 2` is cleared only after successful homing, not when voltage merely recovers — position is the gating concern, not voltage alone.
+- `ERROR_CODE 2` is cleared only after successful homing, not when voltage merely recovers — position is the gating concern, not voltage alone. Voltage recovery may suppress the LED latch and kick/resume homing, but the NVS defer flag remains until homing succeeds.
 - Flush blocked while deferred prevents entering case 0 motor/heater sequence with unknown mechanism state.
 - Aligns with the non-blocking homing design in the heater fail-safe section: homing stays async in `loop()`, TWDT feeding continues.
 
@@ -451,3 +453,80 @@ The Python BLE client (`toilet_bluetooth_interface.py`) splits large writes into
 - BLE_APP_MIGRATION_SPEC does not require framed payloads; the protocol is plain UTF-8. Chunking is a transport-layer necessity, not a protocol requirement.
 - Chunk size is derived from `client.mtu_size` (or 23 if unknown) minus 3.
 - Optional `BLE_CHUNK_PACING_S` allows inserting delays between chunks to avoid overwhelming slower stacks (e.g. some Android BLE implementations).
+
+## Idle charging detection (`isCharging`)
+
+Firmware infers charging from idle VMON_CAL mV drift (same 5 s trimmed ADC samples as full-anchor learn), not from a charger-present GPIO.
+
+**Measurement**:
+
+- Keep up to 60 samples (~5 min). Gate only after ≥8 samples (enough for 4+4 edge means) and span ≥45 s.
+- `rise` = mean(newest 4) − mean(oldest 4).
+- `slope` = least-squares fit of all history samples in mV/min.
+- A ≥5 mV single-step drop vs the previous sample clears history (unplug / sag).
+
+**Assert / clear (hysteresis)**:
+
+- Assert `isCharging` if `rise >= 5.0 mV` **or** `slope >= 1.0 mV/min`.
+- Clear only if `rise <= 0 mV` **and** `slope <= 0 mV/min` (flat or falling on both metrics).
+
+**Rationale**:
+
+- Early thresholds (0.5 mV rise / 0.1 mV/min slope) were too sensitive: plugging in a charger causes an immediate open-circuit → charging voltage step that then ripples through the long n=60 window and looks like a lasting positive slope even when the pack is not still climbing meaningfully.
+- Raising assert to **5 mV rise** and **1 mV/min slope** requires a real sustained climb (or a large edge-to-edge lift) before LED/charge UI treats the unit as charging.
+- Clear at **≤0 rise and ≤0 slope** (not a mid-band hysteresis) so after a charge session ends, residual positive noise in the long window does not keep `isCharging` latched forever; once the history is truly flat/falling, the flag drops. Assert stays high enough that reconnect noise alone is unlikely to re-arm.
+- Still OR-based on assert: either a clear smoothed step or a sustained LS slope is enough. Both clear checks must pass to drop the flag.
+- `isCharging` drives charging LED UX **and** gates upward full-anchor learn (see below).
+
+## Battery full-anchor ratchet (`vFullMv`)
+
+Board-to-board VMON readings at the same pack voltage vary, largely because of Zener leakage into the battery voltage divider. A single factory quadratic (`battMvCalA/B/C` on eFuse-calibrated `analogReadMilliVolts`) therefore cannot place “12.6 V full” correctly on every unit.
+
+**Approach**: treat 100% / terminal charge as a **learned** full-scale VMON_CAL mV (`vFullMv`). Start deliberately **low**, then **ratchet upward only** while charging when idle samples look like a stable higher mean.
+
+**Measurement domain**:
+
+- Learn uses trimmed-mean `analogReadMilliVolts(batteryVoltagePin)` (`mvCal` / `VMON_CAL`), same domain as idle charging detection — not raw `analogRead` counts and not the quadratic volts used for assess.
+- Sampling is shared with `updateChargingDetection()` (one ADC pass per 5 s idle interval). Busy paths (flush, heater, motor, assess, OTA) and a 60 s post-load settle skip learn updates. A ≥5 mV drop clears the learn window (unplug / sag).
+
+**Stability gate**:
+
+- Keep a 6-sample window of idle means.
+- `candidate = mean(window)`; require a full window (`n == 6`) and `stdev <= LEARN_STDEV_MAX_MV` (1.0 mV).
+- **Require `isCharging`**: raise only while charging is latched. When float clears charging (rise/slope ≤ 0), learn stops; `vFullMv` should already have tracked up during the charge window.
+
+**Ratchet**:
+
+- Raise only when `isCharging` and `candidate − vFullMv > LEARN_MIN_DELTA_MV` (0.1 mV) so float/display-noise micro-raises do not persist or spam logs.
+- Step = `min(delta, FULL_SLOW_STEP_MV)` (3 mV) at all times — no fast early-life step.
+- Floor at `VFULL_MV_MIN` (1500) only — **no soft upper clamp**; persist learned state; emit `[batt_full_learn] ...` on USB Serial + BLE serial (`SerialBLE_println`) and append the same line to `GET_LOGS`.
+- Never auto-lower for normal noise. If learned `vFullMv` overshoots in the field, reset via BLE `RESET_BATTERY_CAL` (dev mode).
+
+**Parameters and persistence**:
+
+- BLE / material params (`PARAM_COUNT` 36): `vFullMvSeed` (default 1550) — initial seed when learn state is empty; writable with other material params. Seed write sanity uses `VFULL_MV_HARD_MAX` (2200); learned value is not soft-capped.
+- Material param EEPROM schema: production units are **V2**; this firmware bumps to a single **V3** that stores `battMvCalA/B/C` + `vFullMvSeed` (unshipped interim V3/V4 layouts collapsed into this V3).
+- Separate EEPROM block (after flush count): magic + schema + learned `vFullMv` only. Missing/invalid → seed from `vFullMvSeed`. Schema bump keeps a valid learned `vFullMv` and rewrites schema/magic.
+
+**Reported volts (12.6 V ↔ `vFullMv`)**:
+
+- Factory BLE params `battMvCalA/B/C` stay unchanged.
+- `batteryVoltageFromMvCal()` applies a **constant post-quadratic offset**:
+  `V = V_quad(mv) + (12.6 − V_quad(vFullMv))` when `V_quad(vFullMv)` is finite and in ~8–16 V; otherwise return raw quadratic.
+- Guarantees `batteryVoltageFromMvCal(vFullMv) == 12.6`. Offset preserves sag deltas (idle − load). All `sampleBatteryVoltage` / assess / debug paths pick this up automatically.
+- LED / `GET_BATTERY` / display still use existing assess `usablePercent` on these corrected volts (no separate mV endpoint SoC map).
+- Support / Contact Support: BLE `GET_BATTERY_DEBUG` returns ADC, VMON_CAL mV, corrected Battery V, `charging`, learned `vFullMv`, and seed so the app can attach a battery-calibration section to support emails without relying on dual-button UART spam. Overshoot correction is `RESET_BATTERY_CAL`.
+- If corrected **vIdle > 12.6 V** (typical while seed is still low and offset is optimistic), SoC is capped so the bar lights **all but 3 LEDs** (`ceil((totalLeds-3)*100/totalLeds)` → 79% on a 14-LED panel) instead of showing full.
+- Battery display while charging: flash the **single tip LED** by default. Chase the **first 3 LEDs** (UI 0–2) **backwards** (2→1→0) when smoothed VMON rise `> 25 mV` **or** when corrected `vIdle > 12.6 V` (same animation for strong charge / unanchored overshoot).
+
+**Rationale**:
+
+- **Board variability**: Zener/divider spread moves the VMON reading at true 12.6 V by tens to >100 mV across boards; a fixed curve either never hits 100% or saturates early.
+- **Start low, ratchet up only while charging**: seed defaults to 1550 mV; an uncharged new unit must not treat mid-SOC idle volts as "full" within seconds of first samples. Without a charge latch, a low seed plus any upward step would climb the offset into the full plateau immediately.
+- **Slow-only step**: a former 25 mV "fast" window (first N flushes) raced the anchor on boot; always use 3 mV so calibration crawls during a real charge session.
+- **Charge gate**: learn follows the pack up while `isCharging` is true; after clear (flat/falling), no further raises — accepted tradeoff vs learning at pure float without a charger-detect GPIO.
+- **Monotonic learn**: discharge, load sag, and brief ADC glitches must not pull the full point down.
+- **Mean over max**: with ~0.3–0.5 mV sample noise, `max(window)` is always an outlier above the mean, so a `(max − mean) ≤ stdev` gate systematically rejects stable windows. Using `mean` plus an absolute `stdev ≤ 1.0 mV` ceiling accepts tight plateaus and dilutes single-sample spikes (~1/6).
+- **Minimum raise delta**: require `delta > 0.1 mV` before EEPROM write / `[batt_full_learn]` log so sub-LSB float wobble (e.g. 1799.93 vs 1799.9) cannot spam no-op "updates".
+- **Seed/max as BLE params**: service can tune initial optimism and hard ceiling without a rebuild; learned peak stays independent of material CSV so bag changes do not wipe board calibration.
+- **mV learn + volt offset**: learn the divider error in VMON mV; correct displayed/assess volts with an additive offset so learned full ↔ 12.6 V without rewriting material `battMvCalC` or stretching sag.

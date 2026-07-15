@@ -299,14 +299,14 @@ struct HWCFGConfigStore {
 #  if __has_include("software_version_build.h")
 #    include "software_version_build.h"
 #  else
-const char* SOFTWARE_VERSION_NUMBER = "4.2.5";
+const char* SOFTWARE_VERSION_NUMBER = "4.2.6";
 const char* FACTORY_SOFTWARE_DATE = "2026-06-18";
-const char* SOFTWARE_BUILD_DATE = "2026-06-24";  // YYYY-MM-DD — update with each build
+const char* SOFTWARE_BUILD_DATE = "2026-07-14";  // YYYY-MM-DD — update with each build
 #  endif
 #else
-const char* SOFTWARE_VERSION_NUMBER = "4.2.5";
+const char* SOFTWARE_VERSION_NUMBER = "4.2.6";
 const char* FACTORY_SOFTWARE_DATE = "2026-06-18";
-const char* SOFTWARE_BUILD_DATE = "2026-06-24";  // YYYY-MM-DD — update with each build
+const char* SOFTWARE_BUILD_DATE = "2026-07-14";  // YYYY-MM-DD — update with each build
 #endif
 
 // Forward declarations
@@ -1063,7 +1063,7 @@ const int FAN_PWM_FREQ = 25000;
 const int FAN_PWM_RESOLUTION = 8;
 
 // Heater PWM (restored PID output path)
-const int HEATER_PWM_FREQ = 1000;
+const int HEATER_PWM_FREQ = 200;
 const int HEATER_PWM_RESOLUTION = 8;
 const int HEATER_PWM_MAX = 255;
 const int HEATER_TEST_START_DUTY = 64;

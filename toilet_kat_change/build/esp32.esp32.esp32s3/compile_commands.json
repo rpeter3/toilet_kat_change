@@ -1,6 +1,6 @@
 [
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -54,61 +54,7 @@
   "file": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\sketch\\toilet_kat_change.ino.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
-  "arguments": [
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
-   "-MMD",
-   "-c",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/cpp_flags",
-   "-w",
-   "-Os",
-   "-Werror=return-type",
-   "-DF_CPU=240000000L",
-   "-DARDUINO=10607",
-   "-DARDUINO_ESP32S3_DEV",
-   "-DARDUINO_ARCH_ESP32",
-   "-DARDUINO_BOARD=\"ESP32S3_DEV\"",
-   "-DARDUINO_VARIANT=\"esp32s3\"",
-   "-DARDUINO_PARTITION_default",
-   "-DARDUINO_HOST_OS=\"windows\"",
-   "-DARDUINO_FQBN=\"esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,DebugLevel=info,DFUOnBoot=default,FlashMode=dio,FlashSize=16M,LoopCore=1,EventsCore=1,JTAGAdapter=default,PSRAM=opi,USBMode=hwcdc,ZigbeeMode=default\"",
-   "-DESP32=ESP32",
-   "-DCORE_DEBUG_LEVEL=3",
-   "-DARDUINO_RUNNING_CORE=1",
-   "-DARDUINO_EVENT_RUNNING_CORE=1",
-   "-DBOARD_HAS_PSRAM",
-   "-DARDUINO_USB_MODE=1",
-   "-DARDUINO_USB_CDC_ON_BOOT=1",
-   "-DARDUINO_USB_MSC_ON_BOOT=0",
-   "-DARDUINO_USB_DFU_ON_BOOT=0",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/defines",
-   "-IC:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
-   "-iprefix",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/include/",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/includes",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/dio_opi/include",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\variants\\esp32s3",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\Wire\\src",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_MCP23017_Arduino_Library\\src",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPI\\src",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\DualMAX14870MotorShield",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\PID_v1_bc",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\EEPROM\\src",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPIFFS\\src",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src",
-   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
-   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLE2901.cpp",
-   "-o",
-   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\BLE\\BLE2901.cpp.o"
-  ],
-  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLE2901.cpp"
- },
- {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -162,7 +108,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLECharacteristic.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -209,176 +155,14 @@
    "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src",
    "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
    "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEAddress.cpp",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLE2901.cpp",
    "-o",
-   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\BLE\\BLEAddress.cpp.o"
+   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\BLE\\BLE2901.cpp.o"
   ],
-  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEAddress.cpp"
+  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLE2901.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
-  "arguments": [
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
-   "-MMD",
-   "-c",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/cpp_flags",
-   "-w",
-   "-Os",
-   "-Werror=return-type",
-   "-DF_CPU=240000000L",
-   "-DARDUINO=10607",
-   "-DARDUINO_ESP32S3_DEV",
-   "-DARDUINO_ARCH_ESP32",
-   "-DARDUINO_BOARD=\"ESP32S3_DEV\"",
-   "-DARDUINO_VARIANT=\"esp32s3\"",
-   "-DARDUINO_PARTITION_default",
-   "-DARDUINO_HOST_OS=\"windows\"",
-   "-DARDUINO_FQBN=\"esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,DebugLevel=info,DFUOnBoot=default,FlashMode=dio,FlashSize=16M,LoopCore=1,EventsCore=1,JTAGAdapter=default,PSRAM=opi,USBMode=hwcdc,ZigbeeMode=default\"",
-   "-DESP32=ESP32",
-   "-DCORE_DEBUG_LEVEL=3",
-   "-DARDUINO_RUNNING_CORE=1",
-   "-DARDUINO_EVENT_RUNNING_CORE=1",
-   "-DBOARD_HAS_PSRAM",
-   "-DARDUINO_USB_MODE=1",
-   "-DARDUINO_USB_CDC_ON_BOOT=1",
-   "-DARDUINO_USB_MSC_ON_BOOT=0",
-   "-DARDUINO_USB_DFU_ON_BOOT=0",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/defines",
-   "-IC:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
-   "-iprefix",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/include/",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/includes",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/dio_opi/include",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\variants\\esp32s3",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\Wire\\src",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_MCP23017_Arduino_Library\\src",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPI\\src",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\DualMAX14870MotorShield",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\PID_v1_bc",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\EEPROM\\src",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPIFFS\\src",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src",
-   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
-   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEAdvertising.cpp",
-   "-o",
-   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\BLE\\BLEAdvertising.cpp.o"
-  ],
-  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEAdvertising.cpp"
- },
- {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
-  "arguments": [
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
-   "-MMD",
-   "-c",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/cpp_flags",
-   "-w",
-   "-Os",
-   "-Werror=return-type",
-   "-DF_CPU=240000000L",
-   "-DARDUINO=10607",
-   "-DARDUINO_ESP32S3_DEV",
-   "-DARDUINO_ARCH_ESP32",
-   "-DARDUINO_BOARD=\"ESP32S3_DEV\"",
-   "-DARDUINO_VARIANT=\"esp32s3\"",
-   "-DARDUINO_PARTITION_default",
-   "-DARDUINO_HOST_OS=\"windows\"",
-   "-DARDUINO_FQBN=\"esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,DebugLevel=info,DFUOnBoot=default,FlashMode=dio,FlashSize=16M,LoopCore=1,EventsCore=1,JTAGAdapter=default,PSRAM=opi,USBMode=hwcdc,ZigbeeMode=default\"",
-   "-DESP32=ESP32",
-   "-DCORE_DEBUG_LEVEL=3",
-   "-DARDUINO_RUNNING_CORE=1",
-   "-DARDUINO_EVENT_RUNNING_CORE=1",
-   "-DBOARD_HAS_PSRAM",
-   "-DARDUINO_USB_MODE=1",
-   "-DARDUINO_USB_CDC_ON_BOOT=1",
-   "-DARDUINO_USB_MSC_ON_BOOT=0",
-   "-DARDUINO_USB_DFU_ON_BOOT=0",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/defines",
-   "-IC:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
-   "-iprefix",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/include/",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/includes",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/dio_opi/include",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\variants\\esp32s3",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\Wire\\src",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_MCP23017_Arduino_Library\\src",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPI\\src",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\DualMAX14870MotorShield",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\PID_v1_bc",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\EEPROM\\src",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPIFFS\\src",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src",
-   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
-   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLE2902.cpp",
-   "-o",
-   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\BLE\\BLE2902.cpp.o"
-  ],
-  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLE2902.cpp"
- },
- {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
-  "arguments": [
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
-   "-MMD",
-   "-c",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/cpp_flags",
-   "-w",
-   "-Os",
-   "-Werror=return-type",
-   "-DF_CPU=240000000L",
-   "-DARDUINO=10607",
-   "-DARDUINO_ESP32S3_DEV",
-   "-DARDUINO_ARCH_ESP32",
-   "-DARDUINO_BOARD=\"ESP32S3_DEV\"",
-   "-DARDUINO_VARIANT=\"esp32s3\"",
-   "-DARDUINO_PARTITION_default",
-   "-DARDUINO_HOST_OS=\"windows\"",
-   "-DARDUINO_FQBN=\"esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,DebugLevel=info,DFUOnBoot=default,FlashMode=dio,FlashSize=16M,LoopCore=1,EventsCore=1,JTAGAdapter=default,PSRAM=opi,USBMode=hwcdc,ZigbeeMode=default\"",
-   "-DESP32=ESP32",
-   "-DCORE_DEBUG_LEVEL=3",
-   "-DARDUINO_RUNNING_CORE=1",
-   "-DARDUINO_EVENT_RUNNING_CORE=1",
-   "-DBOARD_HAS_PSRAM",
-   "-DARDUINO_USB_MODE=1",
-   "-DARDUINO_USB_CDC_ON_BOOT=1",
-   "-DARDUINO_USB_MSC_ON_BOOT=0",
-   "-DARDUINO_USB_DFU_ON_BOOT=0",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/defines",
-   "-IC:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
-   "-iprefix",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/include/",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/includes",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/dio_opi/include",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\variants\\esp32s3",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\Wire\\src",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_MCP23017_Arduino_Library\\src",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPI\\src",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\DualMAX14870MotorShield",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\PID_v1_bc",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\EEPROM\\src",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPIFFS\\src",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src",
-   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
-   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEBeacon.cpp",
-   "-o",
-   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\BLE\\BLEBeacon.cpp.o"
-  ],
-  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEBeacon.cpp"
- },
- {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -432,7 +216,115 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLE2904.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
+  "arguments": [
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
+   "-MMD",
+   "-c",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/cpp_flags",
+   "-w",
+   "-Os",
+   "-Werror=return-type",
+   "-DF_CPU=240000000L",
+   "-DARDUINO=10607",
+   "-DARDUINO_ESP32S3_DEV",
+   "-DARDUINO_ARCH_ESP32",
+   "-DARDUINO_BOARD=\"ESP32S3_DEV\"",
+   "-DARDUINO_VARIANT=\"esp32s3\"",
+   "-DARDUINO_PARTITION_default",
+   "-DARDUINO_HOST_OS=\"windows\"",
+   "-DARDUINO_FQBN=\"esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,DebugLevel=info,DFUOnBoot=default,FlashMode=dio,FlashSize=16M,LoopCore=1,EventsCore=1,JTAGAdapter=default,PSRAM=opi,USBMode=hwcdc,ZigbeeMode=default\"",
+   "-DESP32=ESP32",
+   "-DCORE_DEBUG_LEVEL=3",
+   "-DARDUINO_RUNNING_CORE=1",
+   "-DARDUINO_EVENT_RUNNING_CORE=1",
+   "-DBOARD_HAS_PSRAM",
+   "-DARDUINO_USB_MODE=1",
+   "-DARDUINO_USB_CDC_ON_BOOT=1",
+   "-DARDUINO_USB_MSC_ON_BOOT=0",
+   "-DARDUINO_USB_DFU_ON_BOOT=0",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/defines",
+   "-IC:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+   "-iprefix",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/include/",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/includes",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/dio_opi/include",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\variants\\esp32s3",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\Wire\\src",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_MCP23017_Arduino_Library\\src",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPI\\src",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\DualMAX14870MotorShield",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\PID_v1_bc",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\EEPROM\\src",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPIFFS\\src",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src",
+   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
+   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEAddress.cpp",
+   "-o",
+   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\BLE\\BLEAddress.cpp.o"
+  ],
+  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEAddress.cpp"
+ },
+ {
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
+  "arguments": [
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
+   "-MMD",
+   "-c",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/cpp_flags",
+   "-w",
+   "-Os",
+   "-Werror=return-type",
+   "-DF_CPU=240000000L",
+   "-DARDUINO=10607",
+   "-DARDUINO_ESP32S3_DEV",
+   "-DARDUINO_ARCH_ESP32",
+   "-DARDUINO_BOARD=\"ESP32S3_DEV\"",
+   "-DARDUINO_VARIANT=\"esp32s3\"",
+   "-DARDUINO_PARTITION_default",
+   "-DARDUINO_HOST_OS=\"windows\"",
+   "-DARDUINO_FQBN=\"esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,DebugLevel=info,DFUOnBoot=default,FlashMode=dio,FlashSize=16M,LoopCore=1,EventsCore=1,JTAGAdapter=default,PSRAM=opi,USBMode=hwcdc,ZigbeeMode=default\"",
+   "-DESP32=ESP32",
+   "-DCORE_DEBUG_LEVEL=3",
+   "-DARDUINO_RUNNING_CORE=1",
+   "-DARDUINO_EVENT_RUNNING_CORE=1",
+   "-DBOARD_HAS_PSRAM",
+   "-DARDUINO_USB_MODE=1",
+   "-DARDUINO_USB_CDC_ON_BOOT=1",
+   "-DARDUINO_USB_MSC_ON_BOOT=0",
+   "-DARDUINO_USB_DFU_ON_BOOT=0",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/defines",
+   "-IC:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+   "-iprefix",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/include/",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/includes",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/dio_opi/include",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\variants\\esp32s3",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\Wire\\src",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_MCP23017_Arduino_Library\\src",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPI\\src",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\DualMAX14870MotorShield",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\PID_v1_bc",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\EEPROM\\src",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPIFFS\\src",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src",
+   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
+   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLE2902.cpp",
+   "-o",
+   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\BLE\\BLE2902.cpp.o"
+  ],
+  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLE2902.cpp"
+ },
+ {
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -486,7 +378,115 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEAdvertisedDevice.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
+  "arguments": [
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
+   "-MMD",
+   "-c",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/cpp_flags",
+   "-w",
+   "-Os",
+   "-Werror=return-type",
+   "-DF_CPU=240000000L",
+   "-DARDUINO=10607",
+   "-DARDUINO_ESP32S3_DEV",
+   "-DARDUINO_ARCH_ESP32",
+   "-DARDUINO_BOARD=\"ESP32S3_DEV\"",
+   "-DARDUINO_VARIANT=\"esp32s3\"",
+   "-DARDUINO_PARTITION_default",
+   "-DARDUINO_HOST_OS=\"windows\"",
+   "-DARDUINO_FQBN=\"esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,DebugLevel=info,DFUOnBoot=default,FlashMode=dio,FlashSize=16M,LoopCore=1,EventsCore=1,JTAGAdapter=default,PSRAM=opi,USBMode=hwcdc,ZigbeeMode=default\"",
+   "-DESP32=ESP32",
+   "-DCORE_DEBUG_LEVEL=3",
+   "-DARDUINO_RUNNING_CORE=1",
+   "-DARDUINO_EVENT_RUNNING_CORE=1",
+   "-DBOARD_HAS_PSRAM",
+   "-DARDUINO_USB_MODE=1",
+   "-DARDUINO_USB_CDC_ON_BOOT=1",
+   "-DARDUINO_USB_MSC_ON_BOOT=0",
+   "-DARDUINO_USB_DFU_ON_BOOT=0",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/defines",
+   "-IC:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+   "-iprefix",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/include/",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/includes",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/dio_opi/include",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\variants\\esp32s3",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\Wire\\src",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_MCP23017_Arduino_Library\\src",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPI\\src",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\DualMAX14870MotorShield",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\PID_v1_bc",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\EEPROM\\src",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPIFFS\\src",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src",
+   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
+   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEBeacon.cpp",
+   "-o",
+   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\BLE\\BLEBeacon.cpp.o"
+  ],
+  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEBeacon.cpp"
+ },
+ {
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
+  "arguments": [
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
+   "-MMD",
+   "-c",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/cpp_flags",
+   "-w",
+   "-Os",
+   "-Werror=return-type",
+   "-DF_CPU=240000000L",
+   "-DARDUINO=10607",
+   "-DARDUINO_ESP32S3_DEV",
+   "-DARDUINO_ARCH_ESP32",
+   "-DARDUINO_BOARD=\"ESP32S3_DEV\"",
+   "-DARDUINO_VARIANT=\"esp32s3\"",
+   "-DARDUINO_PARTITION_default",
+   "-DARDUINO_HOST_OS=\"windows\"",
+   "-DARDUINO_FQBN=\"esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,DebugLevel=info,DFUOnBoot=default,FlashMode=dio,FlashSize=16M,LoopCore=1,EventsCore=1,JTAGAdapter=default,PSRAM=opi,USBMode=hwcdc,ZigbeeMode=default\"",
+   "-DESP32=ESP32",
+   "-DCORE_DEBUG_LEVEL=3",
+   "-DARDUINO_RUNNING_CORE=1",
+   "-DARDUINO_EVENT_RUNNING_CORE=1",
+   "-DBOARD_HAS_PSRAM",
+   "-DARDUINO_USB_MODE=1",
+   "-DARDUINO_USB_CDC_ON_BOOT=1",
+   "-DARDUINO_USB_MSC_ON_BOOT=0",
+   "-DARDUINO_USB_DFU_ON_BOOT=0",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/defines",
+   "-IC:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+   "-iprefix",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/include/",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/includes",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/dio_opi/include",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\variants\\esp32s3",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\Wire\\src",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_MCP23017_Arduino_Library\\src",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPI\\src",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\DualMAX14870MotorShield",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\PID_v1_bc",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\EEPROM\\src",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPIFFS\\src",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src",
+   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
+   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEAdvertising.cpp",
+   "-o",
+   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\BLE\\BLEAdvertising.cpp.o"
+  ],
+  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEAdvertising.cpp"
+ },
+ {
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -540,7 +540,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLECharacteristicMap.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -594,7 +594,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEClient.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -648,7 +648,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEDescriptor.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -702,7 +702,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEDescriptorMap.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -756,7 +756,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEDevice.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -810,7 +810,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEEddystoneTLM.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -864,7 +864,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEEddystoneURL.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -918,7 +918,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEExceptions.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -972,7 +972,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEHIDDevice.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -1026,7 +1026,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLERemoteCharacteristic.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -1080,7 +1080,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLERemoteDescriptor.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -1134,7 +1134,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLERemoteService.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -1188,7 +1188,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEScan.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -1242,7 +1242,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLESecurity.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -1296,7 +1296,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEServer.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -1350,7 +1350,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEService.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -1404,7 +1404,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEServiceMap.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -1458,7 +1458,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEUUID.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -1512,7 +1512,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEUtils.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -1566,7 +1566,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\BLEValue.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -1620,7 +1620,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\FreeRTOS.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -1674,7 +1674,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src\\GeneralUtils.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -1728,7 +1728,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\Wire\\src\\Wire.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -1782,7 +1782,7 @@
   "file": "C:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_MCP23017_Arduino_Library\\src\\Adafruit_MCP23X08.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -1836,7 +1836,7 @@
   "file": "C:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_MCP23017_Arduino_Library\\src\\Adafruit_MCP23XXX.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -1890,7 +1890,7 @@
   "file": "C:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_MCP23017_Arduino_Library\\src\\Adafruit_MCP23X17.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -1944,61 +1944,7 @@
   "file": "C:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO\\Adafruit_BusIO_Register.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
-  "arguments": [
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
-   "-MMD",
-   "-c",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/cpp_flags",
-   "-w",
-   "-Os",
-   "-Werror=return-type",
-   "-DF_CPU=240000000L",
-   "-DARDUINO=10607",
-   "-DARDUINO_ESP32S3_DEV",
-   "-DARDUINO_ARCH_ESP32",
-   "-DARDUINO_BOARD=\"ESP32S3_DEV\"",
-   "-DARDUINO_VARIANT=\"esp32s3\"",
-   "-DARDUINO_PARTITION_default",
-   "-DARDUINO_HOST_OS=\"windows\"",
-   "-DARDUINO_FQBN=\"esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,DebugLevel=info,DFUOnBoot=default,FlashMode=dio,FlashSize=16M,LoopCore=1,EventsCore=1,JTAGAdapter=default,PSRAM=opi,USBMode=hwcdc,ZigbeeMode=default\"",
-   "-DESP32=ESP32",
-   "-DCORE_DEBUG_LEVEL=3",
-   "-DARDUINO_RUNNING_CORE=1",
-   "-DARDUINO_EVENT_RUNNING_CORE=1",
-   "-DBOARD_HAS_PSRAM",
-   "-DARDUINO_USB_MODE=1",
-   "-DARDUINO_USB_CDC_ON_BOOT=1",
-   "-DARDUINO_USB_MSC_ON_BOOT=0",
-   "-DARDUINO_USB_DFU_ON_BOOT=0",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/defines",
-   "-IC:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
-   "-iprefix",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/include/",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/includes",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/dio_opi/include",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\variants\\esp32s3",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\Wire\\src",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_MCP23017_Arduino_Library\\src",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPI\\src",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\DualMAX14870MotorShield",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\PID_v1_bc",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\EEPROM\\src",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPIFFS\\src",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src",
-   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
-   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
-   "C:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO\\Adafruit_GenericDevice.cpp",
-   "-o",
-   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\Adafruit_BusIO\\Adafruit_GenericDevice.cpp.o"
-  ],
-  "file": "C:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO\\Adafruit_GenericDevice.cpp"
- },
- {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -2052,7 +1998,61 @@
   "file": "C:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO\\Adafruit_I2CDevice.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
+  "arguments": [
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
+   "-MMD",
+   "-c",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/cpp_flags",
+   "-w",
+   "-Os",
+   "-Werror=return-type",
+   "-DF_CPU=240000000L",
+   "-DARDUINO=10607",
+   "-DARDUINO_ESP32S3_DEV",
+   "-DARDUINO_ARCH_ESP32",
+   "-DARDUINO_BOARD=\"ESP32S3_DEV\"",
+   "-DARDUINO_VARIANT=\"esp32s3\"",
+   "-DARDUINO_PARTITION_default",
+   "-DARDUINO_HOST_OS=\"windows\"",
+   "-DARDUINO_FQBN=\"esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,DebugLevel=info,DFUOnBoot=default,FlashMode=dio,FlashSize=16M,LoopCore=1,EventsCore=1,JTAGAdapter=default,PSRAM=opi,USBMode=hwcdc,ZigbeeMode=default\"",
+   "-DESP32=ESP32",
+   "-DCORE_DEBUG_LEVEL=3",
+   "-DARDUINO_RUNNING_CORE=1",
+   "-DARDUINO_EVENT_RUNNING_CORE=1",
+   "-DBOARD_HAS_PSRAM",
+   "-DARDUINO_USB_MODE=1",
+   "-DARDUINO_USB_CDC_ON_BOOT=1",
+   "-DARDUINO_USB_MSC_ON_BOOT=0",
+   "-DARDUINO_USB_DFU_ON_BOOT=0",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/defines",
+   "-IC:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+   "-iprefix",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/include/",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/includes",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/dio_opi/include",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\variants\\esp32s3",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\Wire\\src",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_MCP23017_Arduino_Library\\src",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPI\\src",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\DualMAX14870MotorShield",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\PID_v1_bc",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\EEPROM\\src",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPIFFS\\src",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src",
+   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
+   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
+   "C:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO\\Adafruit_GenericDevice.cpp",
+   "-o",
+   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\Adafruit_BusIO\\Adafruit_GenericDevice.cpp.o"
+  ],
+  "file": "C:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO\\Adafruit_GenericDevice.cpp"
+ },
+ {
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -2106,7 +2106,7 @@
   "file": "C:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO\\Adafruit_SPIDevice.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -2160,7 +2160,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPI\\src\\SPI.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -2214,7 +2214,7 @@
   "file": "C:\\Users\\richa\\Documents\\Arduino\\libraries\\DualMAX14870MotorShield\\DualMAX14870MotorShield.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -2268,7 +2268,7 @@
   "file": "C:\\Users\\richa\\Documents\\Arduino\\libraries\\PID_v1_bc\\PID_v1_bc.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -2322,7 +2322,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\EEPROM\\src\\EEPROM.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -2376,61 +2376,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPIFFS\\src\\SPIFFS.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
-  "arguments": [
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
-   "-MMD",
-   "-c",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/cpp_flags",
-   "-w",
-   "-Os",
-   "-Werror=return-type",
-   "-DF_CPU=240000000L",
-   "-DARDUINO=10607",
-   "-DARDUINO_ESP32S3_DEV",
-   "-DARDUINO_ARCH_ESP32",
-   "-DARDUINO_BOARD=\"ESP32S3_DEV\"",
-   "-DARDUINO_VARIANT=\"esp32s3\"",
-   "-DARDUINO_PARTITION_default",
-   "-DARDUINO_HOST_OS=\"windows\"",
-   "-DARDUINO_FQBN=\"esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,DebugLevel=info,DFUOnBoot=default,FlashMode=dio,FlashSize=16M,LoopCore=1,EventsCore=1,JTAGAdapter=default,PSRAM=opi,USBMode=hwcdc,ZigbeeMode=default\"",
-   "-DESP32=ESP32",
-   "-DCORE_DEBUG_LEVEL=3",
-   "-DARDUINO_RUNNING_CORE=1",
-   "-DARDUINO_EVENT_RUNNING_CORE=1",
-   "-DBOARD_HAS_PSRAM",
-   "-DARDUINO_USB_MODE=1",
-   "-DARDUINO_USB_CDC_ON_BOOT=1",
-   "-DARDUINO_USB_MSC_ON_BOOT=0",
-   "-DARDUINO_USB_DFU_ON_BOOT=0",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/defines",
-   "-IC:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
-   "-iprefix",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/include/",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/includes",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/dio_opi/include",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\variants\\esp32s3",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\Wire\\src",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_MCP23017_Arduino_Library\\src",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPI\\src",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\DualMAX14870MotorShield",
-   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\PID_v1_bc",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\EEPROM\\src",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPIFFS\\src",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src",
-   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
-   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src\\FS.cpp",
-   "-o",
-   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\FS\\FS.cpp.o"
-  ],
-  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src\\FS.cpp"
- },
- {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -2484,7 +2430,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src\\vfs_api.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -2519,60 +2465,26 @@
    "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/dio_opi/include",
    "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32",
    "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\variants\\esp32s3",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\BLE\\src",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\Wire\\src",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_MCP23017_Arduino_Library\\src",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\Adafruit_BusIO",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPI\\src",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\DualMAX14870MotorShield",
+   "-IC:\\Users\\richa\\Documents\\Arduino\\libraries\\PID_v1_bc",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\EEPROM\\src",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\SPIFFS\\src",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src",
    "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
    "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\FunctionalInterrupt.cpp",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src\\FS.cpp",
    "-o",
-   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\core\\FunctionalInterrupt.cpp.o"
+   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\libraries\\FS\\FS.cpp.o"
   ],
-  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\FunctionalInterrupt.cpp"
+  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\libraries\\FS\\src\\FS.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
-  "arguments": [
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
-   "-MMD",
-   "-c",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/cpp_flags",
-   "-w",
-   "-Os",
-   "-Werror=return-type",
-   "-DF_CPU=240000000L",
-   "-DARDUINO=10607",
-   "-DARDUINO_ESP32S3_DEV",
-   "-DARDUINO_ARCH_ESP32",
-   "-DARDUINO_BOARD=\"ESP32S3_DEV\"",
-   "-DARDUINO_VARIANT=\"esp32s3\"",
-   "-DARDUINO_PARTITION_default",
-   "-DARDUINO_HOST_OS=\"windows\"",
-   "-DARDUINO_FQBN=\"esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,DebugLevel=info,DFUOnBoot=default,FlashMode=dio,FlashSize=16M,LoopCore=1,EventsCore=1,JTAGAdapter=default,PSRAM=opi,USBMode=hwcdc,ZigbeeMode=default\"",
-   "-DESP32=ESP32",
-   "-DCORE_DEBUG_LEVEL=3",
-   "-DARDUINO_RUNNING_CORE=1",
-   "-DARDUINO_EVENT_RUNNING_CORE=1",
-   "-DBOARD_HAS_PSRAM",
-   "-DARDUINO_USB_MODE=1",
-   "-DARDUINO_USB_CDC_ON_BOOT=1",
-   "-DARDUINO_USB_MSC_ON_BOOT=0",
-   "-DARDUINO_USB_DFU_ON_BOOT=0",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/defines",
-   "-IC:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
-   "-iprefix",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/include/",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/includes",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/dio_opi/include",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\variants\\esp32s3",
-   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
-   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\HWCDC.cpp",
-   "-o",
-   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\core\\HWCDC.cpp.o"
-  ],
-  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\HWCDC.cpp"
- },
- {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -2616,7 +2528,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\HashBuilder.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -2653,14 +2565,14 @@
    "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\variants\\esp32s3",
    "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
    "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\HEXBuilder.cpp",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\FunctionalInterrupt.cpp",
    "-o",
-   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\core\\HEXBuilder.cpp.o"
+   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\core\\FunctionalInterrupt.cpp.o"
   ],
-  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\HEXBuilder.cpp"
+  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\FunctionalInterrupt.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -2704,51 +2616,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\ColorFormat.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
-  "arguments": [
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
-   "-MMD",
-   "-c",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/cpp_flags",
-   "-w",
-   "-Os",
-   "-Werror=return-type",
-   "-DF_CPU=240000000L",
-   "-DARDUINO=10607",
-   "-DARDUINO_ESP32S3_DEV",
-   "-DARDUINO_ARCH_ESP32",
-   "-DARDUINO_BOARD=\"ESP32S3_DEV\"",
-   "-DARDUINO_VARIANT=\"esp32s3\"",
-   "-DARDUINO_PARTITION_default",
-   "-DARDUINO_HOST_OS=\"windows\"",
-   "-DARDUINO_FQBN=\"esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,DebugLevel=info,DFUOnBoot=default,FlashMode=dio,FlashSize=16M,LoopCore=1,EventsCore=1,JTAGAdapter=default,PSRAM=opi,USBMode=hwcdc,ZigbeeMode=default\"",
-   "-DESP32=ESP32",
-   "-DCORE_DEBUG_LEVEL=3",
-   "-DARDUINO_RUNNING_CORE=1",
-   "-DARDUINO_EVENT_RUNNING_CORE=1",
-   "-DBOARD_HAS_PSRAM",
-   "-DARDUINO_USB_MODE=1",
-   "-DARDUINO_USB_CDC_ON_BOOT=1",
-   "-DARDUINO_USB_MSC_ON_BOOT=0",
-   "-DARDUINO_USB_DFU_ON_BOOT=0",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/defines",
-   "-IC:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
-   "-iprefix",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/include/",
-   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/includes",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/dio_opi/include",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32",
-   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\variants\\esp32s3",
-   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
-   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
-   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\HardwareSerial.cpp",
-   "-o",
-   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\core\\HardwareSerial.cpp.o"
-  ],
-  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\HardwareSerial.cpp"
- },
- {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -2792,7 +2660,139 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\Esp.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
+  "arguments": [
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
+   "-MMD",
+   "-c",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/cpp_flags",
+   "-w",
+   "-Os",
+   "-Werror=return-type",
+   "-DF_CPU=240000000L",
+   "-DARDUINO=10607",
+   "-DARDUINO_ESP32S3_DEV",
+   "-DARDUINO_ARCH_ESP32",
+   "-DARDUINO_BOARD=\"ESP32S3_DEV\"",
+   "-DARDUINO_VARIANT=\"esp32s3\"",
+   "-DARDUINO_PARTITION_default",
+   "-DARDUINO_HOST_OS=\"windows\"",
+   "-DARDUINO_FQBN=\"esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,DebugLevel=info,DFUOnBoot=default,FlashMode=dio,FlashSize=16M,LoopCore=1,EventsCore=1,JTAGAdapter=default,PSRAM=opi,USBMode=hwcdc,ZigbeeMode=default\"",
+   "-DESP32=ESP32",
+   "-DCORE_DEBUG_LEVEL=3",
+   "-DARDUINO_RUNNING_CORE=1",
+   "-DARDUINO_EVENT_RUNNING_CORE=1",
+   "-DBOARD_HAS_PSRAM",
+   "-DARDUINO_USB_MODE=1",
+   "-DARDUINO_USB_CDC_ON_BOOT=1",
+   "-DARDUINO_USB_MSC_ON_BOOT=0",
+   "-DARDUINO_USB_DFU_ON_BOOT=0",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/defines",
+   "-IC:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+   "-iprefix",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/include/",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/includes",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/dio_opi/include",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\variants\\esp32s3",
+   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
+   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\HWCDC.cpp",
+   "-o",
+   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\core\\HWCDC.cpp.o"
+  ],
+  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\HWCDC.cpp"
+ },
+ {
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
+  "arguments": [
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
+   "-MMD",
+   "-c",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/cpp_flags",
+   "-w",
+   "-Os",
+   "-Werror=return-type",
+   "-DF_CPU=240000000L",
+   "-DARDUINO=10607",
+   "-DARDUINO_ESP32S3_DEV",
+   "-DARDUINO_ARCH_ESP32",
+   "-DARDUINO_BOARD=\"ESP32S3_DEV\"",
+   "-DARDUINO_VARIANT=\"esp32s3\"",
+   "-DARDUINO_PARTITION_default",
+   "-DARDUINO_HOST_OS=\"windows\"",
+   "-DARDUINO_FQBN=\"esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,DebugLevel=info,DFUOnBoot=default,FlashMode=dio,FlashSize=16M,LoopCore=1,EventsCore=1,JTAGAdapter=default,PSRAM=opi,USBMode=hwcdc,ZigbeeMode=default\"",
+   "-DESP32=ESP32",
+   "-DCORE_DEBUG_LEVEL=3",
+   "-DARDUINO_RUNNING_CORE=1",
+   "-DARDUINO_EVENT_RUNNING_CORE=1",
+   "-DBOARD_HAS_PSRAM",
+   "-DARDUINO_USB_MODE=1",
+   "-DARDUINO_USB_CDC_ON_BOOT=1",
+   "-DARDUINO_USB_MSC_ON_BOOT=0",
+   "-DARDUINO_USB_DFU_ON_BOOT=0",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/defines",
+   "-IC:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+   "-iprefix",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/include/",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/includes",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/dio_opi/include",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\variants\\esp32s3",
+   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
+   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\HardwareSerial.cpp",
+   "-o",
+   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\core\\HardwareSerial.cpp.o"
+  ],
+  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\HardwareSerial.cpp"
+ },
+ {
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
+  "arguments": [
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
+   "-MMD",
+   "-c",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/cpp_flags",
+   "-w",
+   "-Os",
+   "-Werror=return-type",
+   "-DF_CPU=240000000L",
+   "-DARDUINO=10607",
+   "-DARDUINO_ESP32S3_DEV",
+   "-DARDUINO_ARCH_ESP32",
+   "-DARDUINO_BOARD=\"ESP32S3_DEV\"",
+   "-DARDUINO_VARIANT=\"esp32s3\"",
+   "-DARDUINO_PARTITION_default",
+   "-DARDUINO_HOST_OS=\"windows\"",
+   "-DARDUINO_FQBN=\"esp32:esp32:esp32s3:CDCOnBoot=cdc,CPUFreq=240,DebugLevel=info,DFUOnBoot=default,FlashMode=dio,FlashSize=16M,LoopCore=1,EventsCore=1,JTAGAdapter=default,PSRAM=opi,USBMode=hwcdc,ZigbeeMode=default\"",
+   "-DESP32=ESP32",
+   "-DCORE_DEBUG_LEVEL=3",
+   "-DARDUINO_RUNNING_CORE=1",
+   "-DARDUINO_EVENT_RUNNING_CORE=1",
+   "-DBOARD_HAS_PSRAM",
+   "-DARDUINO_USB_MODE=1",
+   "-DARDUINO_USB_CDC_ON_BOOT=1",
+   "-DARDUINO_USB_MSC_ON_BOOT=0",
+   "-DARDUINO_USB_DFU_ON_BOOT=0",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/defines",
+   "-IC:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+   "-iprefix",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/include/",
+   "@C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/flags/includes",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp32-arduino-libs\\idf-release_v5.5-f1a1df9b-v3\\esp32s3/dio_opi/include",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32",
+   "-IC:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\variants\\esp32s3",
+   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/build_opt.h",
+   "@C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3/file_opts",
+   "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\HEXBuilder.cpp",
+   "-o",
+   "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change\\build\\esp32.esp32.esp32s3\\core\\HEXBuilder.cpp.o"
+  ],
+  "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\HEXBuilder.cpp"
+ },
+ {
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -2836,7 +2836,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\FirmwareMSC.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -2880,7 +2880,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\IPAddress.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -2924,7 +2924,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\MD5Builder.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -2968,7 +2968,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\MacAddress.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -3012,7 +3012,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\Print.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -3056,7 +3056,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\Stream.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -3100,7 +3100,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\StreamString.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -3144,7 +3144,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\Tone.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -3188,7 +3188,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\USB.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -3232,7 +3232,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\USBCDC.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -3276,7 +3276,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\USBMSC.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -3320,7 +3320,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\WMath.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -3364,7 +3364,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\WString.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -3408,7 +3408,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\base64.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -3452,7 +3452,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\cbuf.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -3496,7 +3496,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\chip-debug-report.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -3540,7 +3540,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\esp32-hal-adc.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -3584,7 +3584,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\esp32-hal-bt.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -3628,7 +3628,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\esp32-hal-cpu.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -3672,7 +3672,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\esp32-hal-dac.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -3716,7 +3716,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\esp32-hal-gpio.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -3760,7 +3760,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\esp32-hal-hosted.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -3804,7 +3804,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\esp32-hal-i2c-ng.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -3848,7 +3848,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\esp32-hal-i2c-slave.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -3892,7 +3892,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\esp32-hal-i2c.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -3936,7 +3936,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\esp32-hal-ledc.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -3980,7 +3980,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\esp32-hal-matrix.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -4024,7 +4024,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\esp32-hal-misc.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -4068,7 +4068,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\esp32-hal-periman.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -4112,7 +4112,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\esp32-hal-psram.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -4156,7 +4156,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\esp32-hal-rgb-led.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -4200,7 +4200,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\esp32-hal-rmt.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -4244,7 +4244,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\esp32-hal-sigmadelta.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -4288,7 +4288,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\esp32-hal-spi.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -4332,7 +4332,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\esp32-hal-time.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -4376,7 +4376,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\esp32-hal-timer.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -4420,7 +4420,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\esp32-hal-tinyusb.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -4464,7 +4464,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\esp32-hal-touch-ng.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -4508,7 +4508,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\esp32-hal-touch.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -4552,7 +4552,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\esp32-hal-uart.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -4596,7 +4596,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\firmware_msc_fat.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -4640,7 +4640,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\freertos_stats.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -4684,7 +4684,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\libb64\\cdecode.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -4728,7 +4728,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\libb64\\cencode.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-g++",
    "-MMD",
@@ -4772,7 +4772,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\main.cpp"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -4816,7 +4816,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\stdlib_noniso.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
@@ -4860,7 +4860,7 @@
   "file": "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.3\\cores\\esp32\\wiring_pulse.c"
  },
  {
-  "directory": "C:\\Users\\richa\\Documents\\GitHub\\toilet_kat_change\\toilet_kat_change",
+  "directory": "C:\\Users\\richa\\Documents\\GitHub\\CompoCloset-S1-app",
   "arguments": [
    "C:\\Users\\richa\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\esp-x32\\2507/bin/xtensa-esp32s3-elf-gcc",
    "-MMD",
