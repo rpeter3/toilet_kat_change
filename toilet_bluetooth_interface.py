@@ -31,6 +31,7 @@ UPDATE_CHARACTERISTIC_UUID = "c327b077-560f-46a1-8f35-b4ab0332fea3"
 OTA_ENABLE_WAIT_S = 4.0
 OTA_ROLLBACK_RESPONSE_TIMEOUT_S = 5.0
 OTA_ROLLBACK_POLL_INTERVAL_S = 0.15
+SET_HW_COMPONENT_RESPONSE_TIMEOUT_S = 10.0
 MAX_PARAM_WRITE_ATTEMPTS = 5
 PARAM_WRITE_RETRY_DELAY_S = 0.5
 PARAM_WRITE_PERSIST_FAILED = "PARAM_WRITE_ERR:PERSIST_FAILED"
@@ -1640,12 +1641,21 @@ class ToiletSystemInterface:
                 return False
 
         command = f"SET_HW_COMPONENT:{component}:{version}:{install_date}:{description}"
-        response = await self._send_command_and_read_response(command)
+        ack = f"SET_HW_COMPONENT_ACK:{component}"
+        response = await self._send_command_and_poll_response(
+            command,
+            success_responses=(ack,),
+            error_prefixes=("SET_HW_COMPONENT_ERR:",),
+            timeout_s=SET_HW_COMPONENT_RESPONSE_TIMEOUT_S,
+        )
         if not response:
-            print("No response from firmware for SET_HW_COMPONENT")
+            print(
+                "No SET_HW_COMPONENT_ACK from firmware "
+                "(timed out waiting on fea4; persist can take several seconds)"
+            )
             return False
-        if response.startswith("SET_HW_COMPONENT_ACK:"):
-            return response.split(":", 1)[1].strip().upper() == component
+        if response == ack:
+            return True
         if response == "AUTH_REQUIRED":
             print("Firmware rejected: trust handshake required. Run trust handshake and retry.")
             return False
@@ -1653,15 +1663,8 @@ class ToiletSystemInterface:
             print(f"Firmware rejected SET_HW_COMPONENT: {response}")
             return False
 
-        # Fallback: verify by reading back.
-        readback = await self.get_hw_component(component)
-        if readback is None:
-            return False
-        return (
-            readback["current_version"] == version
-            and readback["install_date"] == install_date
-            and readback["current_description"] == description
-        )
+        print(f"Unexpected SET_HW_COMPONENT response: {response}")
+        return False
 
     def display_hw_matrix_table(self, matrix: Dict[str, Dict[str, str]]) -> None:
         print("\nHardware Matrix")

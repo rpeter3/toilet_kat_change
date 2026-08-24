@@ -212,9 +212,11 @@ struct ParamEepromSnapshot {
 #define BATT_FULL_LEARN_SCHEMA_ADDR (BATT_FULL_LEARN_MAGIC_ADDR + sizeof(uint16_t))
 #define BATT_FULL_LEARN_VFULL_ADDR (BATT_FULL_LEARN_SCHEMA_ADDR + sizeof(uint16_t))
 
-// Hardware matrix persistence (NVS)
+// Hardware matrix persistence (SPIFFS; NVS kept only for one-time migrate)
 #define HW_MATRIX_MAGIC 0x484D4154UL  // "HMAT"
 #define HW_MATRIX_SCHEMA_VERSION 1
+#define HW_MATRIX_ACTIVE_FILE "/hw_matrix_active.bin"
+#define HW_MATRIX_LAST_GOOD_FILE "/hw_matrix_lkg.bin"
 #define HW_COMPONENT_VERSION_LEN 24
 #define HW_COMPONENT_DESC_LEN 96
 #define HW_COMPONENT_DATE_LEN 11  // YYYY-MM-DD + '\0'
@@ -314,12 +316,12 @@ struct HWCFGConfigStore {
 #  if __has_include("software_version_build.h")
 #    include "software_version_build.h"
 #  else
-const char* SOFTWARE_VERSION_NUMBER = "4.2.7";
+const char* SOFTWARE_VERSION_NUMBER = "4.2.8";
 const char* FACTORY_SOFTWARE_DATE = "2026-06-18";
 const char* SOFTWARE_BUILD_DATE = "2026-08-24";  // YYYY-MM-DD — update with each build
 #  endif
 #else
-const char* SOFTWARE_VERSION_NUMBER = "4.2.7";
+const char* SOFTWARE_VERSION_NUMBER = "4.2.8";
 const char* FACTORY_SOFTWARE_DATE = "2026-06-18";
 const char* SOFTWARE_BUILD_DATE = "2026-08-24";  // YYYY-MM-DD — update with each build
 #endif
@@ -352,6 +354,9 @@ void initializeHardwareVersion();
 VersionInfo readHardwareVersion();
 void writeHardwareVersion(uint16_t version, const char* description);
 bool initializeHardwareMatrix();
+bool loadHardwareMatrixBlobFromNvs(const char* key, HardwareMatrix& outMatrix);
+bool loadHardwareMatrixBlobFromSpiffs(const char* path, HardwareMatrix& outMatrix);
+bool saveHardwareMatrixBlob(const HardwareMatrix& matrix, bool updateLastKnownGood);
 String getVersionString();
 String getHardwareComponentsListString();
 String getHardwareComponentString(HardwareComponentId componentId);
@@ -1049,6 +1054,7 @@ bool hwcfgActiveOnSpiffs = false;
 static bool g_pendingParamEepromSchemaStamp = false;
 HardwareMatrix hardwareMatrixScratchActive = {};
 HardwareMatrix hardwareMatrixScratchLastGood = {};
+HardwareMatrix hardwareMatrixVerifyScratch = {};
 // HWCFG scratch/snapshot buffers kept at file scope to avoid large loopTask stack frames.
 HWCFGConfigStore hwcfgScratchActive = {};
 HWCFGConfigStore hwcfgScratchLastGood = {};
@@ -3340,7 +3346,18 @@ bool syncHardwareMatrixRepairs(HardwareMatrix& matrix) {
 }
 
 bool tryLoadHardwareMatrixFromNvs(const char* key, HardwareMatrix& outMatrix, String& validationError, bool* outRepaired) {
-  if (!loadHardwareMatrixBlob(key, outMatrix)) {
+  if (!loadHardwareMatrixBlobFromNvs(key, outMatrix)) {
+    return false;
+  }
+  bool repaired = syncHardwareMatrixRepairs(outMatrix);
+  if (outRepaired != NULL) {
+    *outRepaired = repaired;
+  }
+  return validateHardwareMatrix(outMatrix, &validationError);
+}
+
+bool tryLoadHardwareMatrixFromSpiffs(const char* path, HardwareMatrix& outMatrix, String& validationError, bool* outRepaired) {
+  if (!loadHardwareMatrixBlobFromSpiffs(path, outMatrix)) {
     return false;
   }
   bool repaired = syncHardwareMatrixRepairs(outMatrix);
@@ -3410,7 +3427,7 @@ bool validateHardwareMatrix(const HardwareMatrix& matrix, String* errorCode) {
   return true;
 }
 
-bool loadHardwareMatrixBlob(const char* key, HardwareMatrix& outMatrix) {
+bool loadHardwareMatrixBlobFromNvs(const char* key, HardwareMatrix& outMatrix) {
   nvs_handle_t nvsHandle;
   esp_err_t err = nvs_open(HW_MATRIX_NAMESPACE, NVS_READONLY, &nvsHandle);
   if (err != ESP_OK) {
@@ -3429,27 +3446,98 @@ bool loadHardwareMatrixBlob(const char* key, HardwareMatrix& outMatrix) {
   return err == ESP_OK;
 }
 
-bool saveHardwareMatrixBlob(const HardwareMatrix& matrix, bool updateLastKnownGood) {
+bool loadHardwareMatrixBlobFromSpiffs(const char* path, HardwareMatrix& outMatrix) {
+  if (path == NULL) {
+    return false;
+  }
+  File f = SPIFFS.open(path, "r");
+  if (!f) {
+    return false;
+  }
+  if (f.size() != sizeof(HardwareMatrix)) {
+    f.close();
+    return false;
+  }
+  size_t bytesRead = f.read(reinterpret_cast<uint8_t*>(&outMatrix), sizeof(HardwareMatrix));
+  f.close();
+  return bytesRead == sizeof(HardwareMatrix);
+}
+
+static bool eraseHwMatrixNvsKey(const char* key) {
   nvs_handle_t nvsHandle;
   esp_err_t err = nvs_open(HW_MATRIX_NAMESPACE, NVS_READWRITE, &nvsHandle);
   if (err != ESP_OK) {
-    Serial.printf("Failed to open hardware matrix NVS namespace: %s\n", esp_err_to_name(err));
     return false;
   }
-
-  err = nvs_set_blob(nvsHandle, HW_MATRIX_ACTIVE_KEY, &matrix, sizeof(HardwareMatrix));
-  if (err == ESP_OK && updateLastKnownGood) {
-    err = nvs_set_blob(nvsHandle, HW_MATRIX_LAST_GOOD_KEY, &matrix, sizeof(HardwareMatrix));
-  }
+  err = nvs_erase_key(nvsHandle, key);
   if (err == ESP_OK) {
     err = nvs_commit(nvsHandle);
+  } else if (err == ESP_ERR_NVS_NOT_FOUND) {
+    err = ESP_OK;
   }
   nvs_close(nvsHandle);
+  return err == ESP_OK;
+}
 
-  if (err != ESP_OK) {
-    Serial.printf("Failed to persist hardware matrix: %s\n", esp_err_to_name(err));
+bool eraseHardwareMatrixNvsCopies() {
+  bool erased = false;
+  if (eraseHwMatrixNvsKey(HW_MATRIX_ACTIVE_KEY)) {
+    erased = true;
+  }
+  if (eraseHwMatrixNvsKey(HW_MATRIX_LAST_GOOD_KEY)) {
+    erased = true;
+  }
+  return erased;
+}
+
+bool saveHardwareMatrixBlobFile(const char* path, const HardwareMatrix& matrix) {
+  if (path == NULL) {
     return false;
   }
+  String tempPath = String(path) + ".tmp";
+  SPIFFS.remove(tempPath.c_str());
+
+  File f = SPIFFS.open(tempPath.c_str(), "w");
+  if (!f) {
+    Serial.printf("Hardware matrix SPIFFS open failed: %s\n", tempPath.c_str());
+    return false;
+  }
+  size_t bytesWritten = f.write(reinterpret_cast<const uint8_t*>(&matrix), sizeof(HardwareMatrix));
+  f.flush();
+  f.close();
+  if (bytesWritten != sizeof(HardwareMatrix)) {
+    SPIFFS.remove(tempPath.c_str());
+    Serial.printf("Hardware matrix SPIFFS short write: %u/%u bytes\n",
+                  (unsigned)bytesWritten, (unsigned)sizeof(HardwareMatrix));
+    return false;
+  }
+
+  SPIFFS.remove(path);
+  if (!SPIFFS.rename(tempPath.c_str(), path)) {
+    SPIFFS.remove(tempPath.c_str());
+    Serial.printf("Hardware matrix SPIFFS rename failed: %s -> %s\n", tempPath.c_str(), path);
+    return false;
+  }
+
+  memset(&hardwareMatrixVerifyScratch, 0, sizeof(hardwareMatrixVerifyScratch));
+  if (!loadHardwareMatrixBlobFromSpiffs(path, hardwareMatrixVerifyScratch) ||
+      computeHardwareMatrixCRC(hardwareMatrixVerifyScratch) != hardwareMatrixVerifyScratch.crc32) {
+    Serial.printf("Hardware matrix SPIFFS verify failed: %s\n", path);
+    return false;
+  }
+  return true;
+}
+
+bool saveHardwareMatrixBlob(const HardwareMatrix& matrix, bool updateLastKnownGood) {
+  bool saved = saveHardwareMatrixBlobFile(HW_MATRIX_ACTIVE_FILE, matrix);
+  if (saved && updateLastKnownGood) {
+    saved = saveHardwareMatrixBlobFile(HW_MATRIX_LAST_GOOD_FILE, matrix);
+  }
+  if (!saved) {
+    Serial.println("Failed to persist hardware matrix: SPIFFS_WRITE_FAIL");
+    return false;
+  }
+  eraseHardwareMatrixNvsCopies();
   return true;
 }
 
@@ -3500,15 +3588,55 @@ bool initializeHardwareMatrix() {
   String validationError = "";
   bool repaired = false;
   memset(&hardwareMatrixScratchActive, 0, sizeof(hardwareMatrixScratchActive));
-  if (tryLoadHardwareMatrixFromNvs(HW_MATRIX_ACTIVE_KEY, hardwareMatrixScratchActive, validationError, &repaired)) {
+  if (tryLoadHardwareMatrixFromSpiffs(HW_MATRIX_ACTIVE_FILE, hardwareMatrixScratchActive, validationError, &repaired)) {
     hardwareMatrix = hardwareMatrixScratchActive;
     hardwareMatrixInitialized = true;
     if (repaired) {
       saveHardwareMatrixBlob(hardwareMatrix, false);
       Serial.println("Hardware matrix repaired (software version / control panel migration)");
     }
+    eraseHardwareMatrixNvsCopies();
+    Serial.println("Hardware matrix loaded from SPIFFS active record");
+    logBootTiming("hw_matrix_path,spiffs_active");
+    return true;
+  }
+
+  if (validationError.length() > 0) {
+    Serial.printf("Active hardware matrix invalid (%s), trying last-known-good\n", validationError.c_str());
+  }
+
+  validationError = "";
+  repaired = false;
+  memset(&hardwareMatrixScratchLastGood, 0, sizeof(hardwareMatrixScratchLastGood));
+  if (tryLoadHardwareMatrixFromSpiffs(HW_MATRIX_LAST_GOOD_FILE, hardwareMatrixScratchLastGood, validationError, &repaired)) {
+    hardwareMatrix = hardwareMatrixScratchLastGood;
+    hardwareMatrixInitialized = true;
+    saveHardwareMatrixBlob(hardwareMatrix, false);
+    if (repaired) {
+      Serial.println("Hardware matrix repaired (software version / control panel migration)");
+    }
+    eraseHardwareMatrixNvsCopies();
+    Serial.println("Recovered hardware matrix from SPIFFS last-known-good record");
+    logBootTiming("hw_matrix_path,spiffs_last_good");
+    return true;
+  }
+
+  validationError = "";
+  repaired = false;
+  memset(&hardwareMatrixScratchActive, 0, sizeof(hardwareMatrixScratchActive));
+  if (tryLoadHardwareMatrixFromNvs(HW_MATRIX_ACTIVE_KEY, hardwareMatrixScratchActive, validationError, &repaired)) {
+    hardwareMatrix = hardwareMatrixScratchActive;
+    hardwareMatrixInitialized = true;
+    if (repaired) {
+      Serial.println("Hardware matrix repaired (software version / control panel migration)");
+    }
+    if (saveHardwareMatrixBlob(hardwareMatrix, true)) {
+      Serial.println("Migrated hardware matrix from NVS to SPIFFS");
+    } else {
+      Serial.println("WARNING: hardware matrix loaded from NVS but SPIFFS migrate failed");
+    }
     Serial.println("Hardware matrix loaded from active NVS record");
-    logBootTiming("hw_matrix_path,active_nvs");
+    logBootTiming("hw_matrix_path,nvs_active_migrated");
     return true;
   }
 
@@ -3522,12 +3650,14 @@ bool initializeHardwareMatrix() {
   if (tryLoadHardwareMatrixFromNvs(HW_MATRIX_LAST_GOOD_KEY, hardwareMatrixScratchLastGood, validationError, &repaired)) {
     hardwareMatrix = hardwareMatrixScratchLastGood;
     hardwareMatrixInitialized = true;
-    saveHardwareMatrixBlob(hardwareMatrix, false);
     if (repaired) {
       Serial.println("Hardware matrix repaired (software version / control panel migration)");
     }
+    if (saveHardwareMatrixBlob(hardwareMatrix, true)) {
+      Serial.println("Migrated hardware matrix last-known-good from NVS to SPIFFS");
+    }
     Serial.println("Recovered hardware matrix from last-known-good record");
-    logBootTiming("hw_matrix_path,last_good");
+    logBootTiming("hw_matrix_path,nvs_last_good_migrated");
     return true;
   }
 
@@ -4073,6 +4203,16 @@ bool reclaimNvsSpaceForParamEeprom() {
   } else if (SPIFFS.exists(HWCFG_LAST_GOOD_FILE)) {
     if (eraseHwcfgNvsKey(HWCFG_LAST_GOOD_KEY)) {
       Serial.println("Reclaimed NVS: erased hwcfg/lkg (SPIFFS copy retained)");
+      reclaimed = true;
+    }
+  }
+  if (SPIFFS.exists(HW_MATRIX_ACTIVE_FILE) || SPIFFS.exists(HW_MATRIX_LAST_GOOD_FILE)) {
+    if (eraseHwMatrixNvsKey(HW_MATRIX_ACTIVE_KEY)) {
+      Serial.println("Reclaimed NVS: erased hwmeta/matrix (SPIFFS copy retained)");
+      reclaimed = true;
+    }
+    if (eraseHwMatrixNvsKey(HW_MATRIX_LAST_GOOD_KEY)) {
+      Serial.println("Reclaimed NVS: erased hwmeta/matrix_lkg (SPIFFS copy retained)");
       reclaimed = true;
     }
   }

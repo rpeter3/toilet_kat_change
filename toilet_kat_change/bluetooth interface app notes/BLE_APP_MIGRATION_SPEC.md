@@ -220,7 +220,7 @@ Read trust responses on response channel:
 
 Physical confirmation: firmware reads ESP32 GPIO2 (SW1 wake line), not MCP pins. On silk 2.0 only flush pulls GPIO2; on silk 2.2 either control-panel button may confirm via diode-OR.
 
-`SET_HW_COMPONENT:CONTROL_PANEL` accepts versions `2.0` and `2.2` (firmware ≥ 4.2.7). Legacy stored `"5"` is migrated to `"2.0"` on device; version `"6"` remains dormant lab-only.
+`SET_HW_COMPONENT:CONTROL_PANEL` accepts versions `2.0` and `2.2` (firmware ≥ 4.2.7). Legacy stored `"5"` is migrated to `"2.0"` on device; version `"6"` remains dormant lab-only. Firmware ≥ 4.2.8 persists the hardware matrix on SPIFFS (not NVS) so `SET_HW_COMPONENT` cannot fail with `ESP_ERR_NVS_NOT_ENOUGH_SPACE`.
 
 Recommended timeout remains 60s.
 

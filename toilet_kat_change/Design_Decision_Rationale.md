@@ -352,7 +352,7 @@ Update logic (single component update over BLE):
    - `current_version = new_version`
    - `current_description = new_description`
    - `install_date = new_install_date` (ISO 8601)
-5. Persist and verify write success before ACK.
+5. Persist to SPIFFS (`/hw_matrix_active.bin` + `/hw_matrix_lkg.bin`) and verify the write before ACK.
 
 Rationale:
 
@@ -360,6 +360,7 @@ Rationale:
 - Supports practical rollback decisions by preserving immediate historical context on-device.
 - Keeps storage bounded and deterministic by retaining one previous snapshot per component (instead of unbounded history).
 - Provides consistent parsing/sorting across firmware and Python tools by standardizing date format to ISO 8601.
+- **SPIFFS, not NVS:** the NVS partition is 16 KB. Each matrix blob is ~2.6 KB; storing active + last-good and then rewriting both requires a second copy before the old pages can be erased. After EEPROM, OTA diag, and (legacy) HWCFG occupancy, `nvs_set_blob` returns `ESP_ERR_NVS_NOT_ENOUGH_SPACE` and `SET_HW_COMPONENT` fails with `PERSIST_FAIL` (seen when switching CONTROL_PANEL 2.2 → 2.0). HWCFG already moved to SPIFFS for the same reason. Firmware ≥ 4.2.8 writes the matrix to SPIFFS, migrates any NVS copy on boot, then erases the NVS keys.
 
 ## Control panel pinout versioning (CONTROL_PANEL silk 2.0 / 2.2)
 

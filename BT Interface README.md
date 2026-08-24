@@ -204,7 +204,7 @@ Sender behavior:
 
 ### Hardware matrix / control panel silk (firmware >= 4.2.7)
 
-- **Menu 12** — primary pinout switch: set `CONTROL_PANEL` to silk **2.0** or **2.2** via `SET_HW_COMPONENT` (version printed on the back of the board). Refuses legacy **5** locally; firmware rejects **5** as `BAD_VERSION`.
+- **Menu 12** — primary pinout switch: set `CONTROL_PANEL` to silk **2.0** or **2.2** via `SET_HW_COMPONENT` (version printed on the back of the board). Refuses legacy **5** locally; firmware rejects **5** as `BAD_VERSION`. Polls `fea4` for `SET_HW_COMPONENT_ACK` (up to 10 s) and ignores leftover `HW_COMPONENT:` from the pre-update GET.
 - **Menu 17** — `HWCFG_APPLY_CHANGE` for `CONTROL_PANEL` **2.0** / **2.2**: auto-runs an empty `HWCFG_PROFILE_PUT` (`cp_v2_0_pinout` or `cp_v2_2_pinout`) when the profile is missing on older HWCFG stores, then validate + apply as usual.
 - **Menu 16** — empty params allowed for `CONTROL_PANEL` pinout-only profiles.
 
