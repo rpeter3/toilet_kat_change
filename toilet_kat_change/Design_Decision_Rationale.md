@@ -222,7 +222,17 @@ During the post-cooling open phase, firmware uses `openSwitchLatched` to record 
 
 - The close microswitch near the heater **must be closed and held closed** for safe sealing and heating. Case 5 requires the switch to read LOW and additionally confirms M1 load current (`> 0.5 A`) before stopping the close motor and advancing.
 - If the close switch opens again, the mechanism is no longer in a verified sealed state; firmware should not treat a momentary close as completion. A latch on the close side would incorrectly allow progression after the mechanism had opened.
-- Close-phase timeout is enforced in case 5 via `motorStartMillis` and `maxOpeningTime` (default 16.5 s).
+- Close-phase timeout is enforced in case 5 via `motorStartMillis` and `maxOpeningTime` (default 16.5 s). If that timeout expires with stall current (`> 0.5 A`) and the close switch still HIGH, M1 reverses open for 2 s (or until the open switch) before ERROR_CODE 1 abort, so a trapped object can be removed. Timeout without stall current still stops in place.
+
+## M1 jam reverse on stall
+
+A trap mid-travel used to leave M1 stopped at the jam (close timeout or open timeout). Firmware now backs M1 up for 2 s opposite the last move, then aborts with ERROR_CODE 1. Successful close clamp and successful open endstop are unchanged.
+
+**Close (flush case 5, homing partial-close):** stall at the sealed endstop is expected (`close switch LOW` + current `> 0.5 A`). Firmware does **not** reverse early on current. At `maxOpeningTime`, if the close switch is still HIGH **and** current is above `0.5 A`, treat as a jam: reverse open (`setM1Speed(-400)`) for `M1_JAM_REVERSE_MS` (2 s), then abort. Timeout with no stall current keeps the previous stop-in-place ERROR 1. Case 6 cut/strain pulses are excluded (intentional stall already closed).
+
+**Open (flush cases 8/10 while M1 is still running, homing open-full):** opening should not stall. If current stays above `0.5 A` while the open switch is still HIGH, reverse close (`setM1Speed(400)`) for 2 s **immediately**, then abort. Ignore the first `300 ms` after open starts (inrush) and require `150 ms` of high current before firing. If current never spikes, the existing `maxOpeningTime` timeout still stops in place.
+
+**Reverse completion:** stop M1, `ERROR_CODE = 1`, `stopEverything()`, LED error. No auto-retry. If the opposite endstop hits during reverse, stop M1 early instead of driving into the stop. Cancel / `stopEverything()` clears jam-reverse state so M1 does not keep running.
 
 ## Flush cancel recovery
 
@@ -351,52 +361,46 @@ Rationale:
 - Keeps storage bounded and deterministic by retaining one previous snapshot per component (instead of unbounded history).
 - Provides consistent parsing/sorting across firmware and Python tools by standardizing date format to ISO 8601.
 
-## Control panel pinout versioning (CONTROL_PANEL v5 vs v6)
+## Control panel pinout versioning (CONTROL_PANEL silk 2.0 / 2.2)
 
 The control panel uses an MCP23017 I/O expander (I2C `0x20`) for LEDs and button inputs.
 
 **Background**:
 
-- Original control panel **v5** had a pin-assignment bug on the MCP: button 2 was wired to MCP pin 15 (GPB7, output-only on this design), and button 1 was routed directly to ESP32 **GPIO2** for wake and flush.
-- Revised control panel **v6** moves both buttons to valid MCP input pins (button 1 → MCP pin 6 / GPA6, button 2 → MCP pin 14 / GPB6) and adds a **diode-OR** so either button pulls **SW1** (GPIO2) low to wake the main board from sleep.
+- Silk **2.0** (matrix version `"2.0"`, migrated from legacy stored `"5"` on first boot of firmware ≥ 4.2.7): flush on ESP32 **GPIO2**, feed on MCP pin 15, original 14-LED map.
+- Silk **2.2** (matrix version `"2.2"`, schematic “Control Panel V6.2”): same LED map as 2.0; flush on MCP pin 7, feed on MCP pin 15; both buttons diode-OR onto GPIO2 for wake/trust only.
+- An earlier firmware experiment (`CONTROL_PANEL` version `"6"`, `ledPinsV6`, MCP6/MCP14) remains **dormant** in code — it is not used for silk 2.2 and must not be offered in the app.
 
 **Pinout table** (firmware read paths):
 
-| Function | CONTROL_PANEL v5 (legacy) | CONTROL_PANEL v6 (new) |
-|----------|---------------------------|------------------------|
-| Button 1 (flush) | ESP32 GPIO2 | MCP23017 pin 6 |
-| Button 2 (feed) | MCP23017 pin 15 | MCP23017 pin 14 |
-| Wake / light sleep | GPIO2 (button 1 only) | GPIO2 via diode-OR (both buttons) |
-| LED MCP pins (UI indices 3 and 5) | MCP 14, MCP 6 | MCP 15, MCP 7 |
+| Function | Silk 2.0 (`"2.0"`) | Silk 2.2 (`"2.2"`) | Dormant v6 (`"6"`) |
+|----------|--------------------|--------------------|--------------------|
+| Button 1 (flush) | ESP32 GPIO2 | MCP23017 pin 7 | MCP23017 pin 6 |
+| Button 2 (feed) | MCP23017 pin 15 | MCP23017 pin 15 | MCP23017 pin 14 |
+| Wake / light sleep | GPIO2 (flush only) | GPIO2 via diode-OR (either button) | GPIO2 via diode-OR |
+| LED map | `ledPinsV2_0` (original) | `ledPinsV2_0` (same as 2.0) | `ledPinsV6` (remapped UI 3/5) |
 
-Full 14-LED UI-order tables in firmware:
-
-- **v5** (`ledPinsV5`): `{1, 9, 13, 14, 10, 6, 11, 12, 8, 0, 2, 3, 4, 5}`
-- **v6** (`ledPinsV6`): `{1, 9, 13, 15, 10, 7, 11, 12, 8, 0, 2, 3, 4, 5}`
-
-On v6, MCP pins 6 and 14 are reserved for buttons; the two LEDs that were on MCP 14 and 6 in v5 move to MCP 15 (GPB7) and 7 (GPA7).
+Full 14-LED UI-order table for production silk 2.0 / 2.2 (`ledPinsV2_0`): `{1, 9, 13, 14, 10, 6, 11, 12, 8, 0, 2, 3, 4, 5}`
 
 **Firmware behavior**:
 
-- Pinout is selected from the on-device hardware matrix component `CONTROL_PANEL` (`5` = legacy, `6` = new). Unknown versions default to v5 for backward compatibility with deployed units.
-- LED I/O uses `getLedPin(uiIndex)` to resolve the active `ledPinsV5` / `ledPinsV6` table; MCP LED outputs are configured separately from button inputs so v6 never drives pins 6/14 as LEDs.
-- Button state for flush/feed/battery gestures is read through version-aware helpers; GPIO2 is **not** used for flush/feed discrimination on v6 (reading GPIO2 there would falsely report button 1 when button 2 is pressed, because both share the wake line). GPIO2 **is** still used for wake, light/deep sleep, and BLE trust confirmation on all panel versions.
-- Deep sleep and inactivity light sleep continue to wake on GPIO2 LOW for both versions; on v6 this is correct because hardware ORs both switches onto SW1.
-- Optional compile-time `CONTROL_PANEL_PINOUT_OVERRIDE` (5 or 6) forces pinout during development without changing NVS.
+- Pinout is selected from the on-device hardware matrix `CONTROL_PANEL` version (`"2.0"`, `"2.2"`, or dormant `"6"`). Unknown / not-yet-migrated `"5"` falls back to V2.0 pinout; firmware one-time migrates stored `"5"` → `"2.0"` on matrix load.
+- On silk **2.2**, flush/feed/battery dual-press and DEV hold use `readControlPanelButton1()` / `readControlPanelButton2()` (MCP7 + MCP15). GPIO2 is wake/trust/sleep only — never used to discriminate flush vs feed on 2.2.
+- On silk **2.0**, flush uses GPIO2 and feed uses MCP15; dual-button gestures require GPIO2 **and** MCP15.
+- LED I/O uses `getLedPin(uiIndex)` → `ledPinsV2_0` for both 2.0 and 2.2.
+- Optional compile-time `CONTROL_PANEL_PINOUT_OVERRIDE`: `0` = matrix; `20` = 2.0; `22` = 2.2; `6` = dormant v6.
 
 **Configuration paths**:
 
-- **Field / production**: `SET_HW_COMPONENT:CONTROL_PANEL|...` or full HWCFG apply (`HWCFG_APPLY_CHANGE`) after setting `CONTROL_PANEL` version to `6`. Reconfigures MCP button inputs and LED outputs immediately when MCP is available.
-- **Development**: `#define CONTROL_PANEL_PINOUT_OVERRIDE 6` at top of firmware.
+- **Field / production**: App SUPPORT MODE (`SET_HW_COMPONENT:CONTROL_PANEL:<ver>:<YYYY-MM-DD>:CONTROL INTERFACE FOR DEVICE`, where `<ver>` is `2.0` or `2.2`) or HWCFG apply. Requires firmware ≥ 4.2.7 for `"2.2"`.
+- **Development**: `-DCONTROL_PANEL_PINOUT_OVERRIDE=22` (or `20` / `6`) at build.
 
 **Rationale**:
 
-- **Single firmware binary**: one image supports both board revisions; pinout is data (hardware matrix version), not a separate build.
-- **Safe default**: factory default remains v5 so existing installed base is unaffected until a technician explicitly records a v6 panel.
-- **Separation of wake vs logic**: wake stays on GPIO2 (RTC-capable, already integrated with sleep paths); distinct button actions on v6 require MCP reads on the corrected pins.
-- **Hardware matrix integration**: reuses existing offline component versioning, previous-version history, and BLE tooling rather than a new config mechanism.
-- **Pin-only HWCFG**: v6 is a wiring change, not a parameter change; empty parameter profiles are permitted for `CONTROL_PANEL` so apply does not require dummy tuning values.
-- **Field serviceability**: boot log and BLE serial report active pinout so support can confirm configuration matches the physical panel installed.
+- **Single firmware binary**: one image supports both silk revisions; pinout is data in the hardware matrix.
+- **Safe default**: factory default is `"2.0"`; technicians set `"2.2"` when the board silk says 2.2.
+- **Separation of wake vs logic on 2.2**: GPIO2 stays on the RTC wake path; MCP reads distinguish flush from feed.
+- **No v6 remap for 2.2**: silk 2.2 keeps the original LED map; only button MCP pins change.
 
 ## BLE trust confirmation uses GPIO2 (SW1), not version-aware button reads
 
@@ -405,14 +409,14 @@ The BLE trust handshake requires a physical button press near the device before 
 **Behavior**:
 
 - Firmware always reads ESP32 **GPIO2** (`controlPanelWake` / connector **SW1**) to confirm trust during `TRUST_WAITING`, regardless of `CONTROL_PANEL` version.
-- **v5**: GPIO2 is wired to the flush button only; only flush confirms trust.
-- **v6**: GPIO2 is driven by a diode-OR from both panel buttons; either button confirms trust. Flush vs feed for normal operation still uses MCP pins 6 and 14 respectively.
+- **Silk 2.0**: GPIO2 is wired to the flush button only; only flush confirms trust.
+- **Silk 2.2**: GPIO2 is driven by a diode-OR from both panel buttons; either button confirms trust. Flush vs feed for normal operation uses MCP pins 7 and 15 respectively.
 - Trust is a proximity gate, not a flush action; using GPIO2 keeps pairing compatible with all control panel revisions and aligned with wake/sleep paths (no MCP dependency for trust).
 
 **Rationale**:
 
-- One stable confirmation signal across v5 and v6 without duplicating pinout logic in the trust path.
-- Matches hardware wake wiring on v6 (both buttons already pull SW1 low).
+- One stable confirmation signal across silk 2.0 and 2.2 without duplicating pinout logic in the trust path.
+- Matches hardware wake wiring on 2.2 (both buttons already pull SW1 low).
 - Avoids trust failures when MCP expander reads differ from the GPIO2 wake line.
 
 ## Hardware DEV mode toggle via dual-button hold

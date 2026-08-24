@@ -218,7 +218,9 @@ Read trust responses on response channel:
 - `TRUST_TIMEOUT`
 - `TRUST_CANCEL_ACK`
 
-Physical confirmation: firmware reads ESP32 GPIO2 (SW1 wake line), not MCP pins. On v5 only flush pulls GPIO2; on v6 either control-panel button may confirm via diode-OR.
+Physical confirmation: firmware reads ESP32 GPIO2 (SW1 wake line), not MCP pins. On silk 2.0 only flush pulls GPIO2; on silk 2.2 either control-panel button may confirm via diode-OR.
+
+`SET_HW_COMPONENT:CONTROL_PANEL` accepts versions `2.0` and `2.2` (firmware ≥ 4.2.7). Legacy stored `"5"` is migrated to `"2.0"` on device; version `"6"` remains dormant lab-only.
 
 Recommended timeout remains 60s.
 

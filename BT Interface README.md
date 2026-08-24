@@ -202,6 +202,12 @@ Sender behavior:
 - Legacy-only mode is available with `BLE_SERIAL_TRANSPORT_MODE=legacy`
 - Force framed mode with `BLE_SERIAL_TRANSPORT_MODE=framed`
 
+### Hardware matrix / control panel silk (firmware >= 4.2.7)
+
+- **Menu 12** — primary pinout switch: set `CONTROL_PANEL` to silk **2.0** or **2.2** via `SET_HW_COMPONENT` (version printed on the back of the board). Refuses legacy **5** locally; firmware rejects **5** as `BAD_VERSION`.
+- **Menu 17** — `HWCFG_APPLY_CHANGE` for `CONTROL_PANEL` **2.0** / **2.2**: auto-runs an empty `HWCFG_PROFILE_PUT` (`cp_v2_0_pinout` or `cp_v2_2_pinout`) when the profile is missing on older HWCFG stores, then validate + apply as usual.
+- **Menu 16** — empty params allowed for `CONTROL_PANEL` pinout-only profiles.
+
 ### Environment flags
 
 - `BLE_SERIAL_TRANSPORT_MODE=auto|framed|legacy`

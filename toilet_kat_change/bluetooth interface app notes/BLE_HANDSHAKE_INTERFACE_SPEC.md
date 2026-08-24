@@ -95,7 +95,7 @@ When GPIO2 (`controlPanelWake`) is pulled LOW during `TRUST_WAITING`:
 
 Notes:
 
-- Firmware reads ESP32 GPIO2 only (not MCP expander pins). On **CONTROL_PANEL v5**, GPIO2 is the flush switch. On **v6**, either panel button pulls SW1 (GPIO2) low via diode-OR, so either button confirms trust.
+- Firmware reads ESP32 GPIO2 only (not MCP expander pins). On **CONTROL_PANEL silk 2.0**, GPIO2 is the flush switch. On **silk 2.2**, either panel button pulls SW1 (GPIO2) low via diode-OR, so either button confirms trust.
 - Presses before `TRUST_START` do not count.
 - Firmware should debounce button input.
 
@@ -131,7 +131,7 @@ On timeout:
 
 1. Connect and discover services.
 2. Send `TRUST_START`.
-3. Show prompt: "Press a control panel button to confirm connection." (On v5 this is flush only; on v6 either button pulls GPIO2.)
+3. Show prompt: "Press a control panel button to confirm connection." (On silk 2.0 this is flush only; on silk 2.2 either button pulls GPIO2.)
 4. Poll `TRUST_STATUS` until `TRUST_CONFIRMED` or timeout.
 5. Enable write controls only after confirmation.
 6. On disconnect, clear local trusted state.

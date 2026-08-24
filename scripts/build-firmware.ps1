@@ -6,6 +6,14 @@
 # To build and bundle into CompoCloset-S1-app:
 #   npm run bundle-firmware -- <path-to-bin> 4.0.16
 
+param(
+    # Keep software_version_build.h so OTA regression can bake in -regA/-regB versions.
+    # Production / app-bundling builds must omit this and strip any leftover override.
+    [switch]$AllowVersionOverride,
+    # Optional alternate build output dir (avoids locking fights with Arduino IDE's sketch/build).
+    [string]$BuildPath = ""
+)
+
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 $ToolchainPath = Join-Path $PSScriptRoot "firmware-toolchain.json"
@@ -20,11 +28,17 @@ if (-not $Fqbn) {
     throw "firmware-toolchain.json must define fqbn"
 }
 $SketchDir = Join-Path $Root "toilet_kat_change"
-$BuildDir = Join-Path $SketchDir "build\esp32.esp32.esp32s3"
+if ($BuildPath) {
+    $BuildDir = $BuildPath
+} else {
+    $BuildDir = Join-Path $SketchDir "build\esp32.esp32.esp32s3"
+}
 $VersionOverrideHeader = Join-Path $SketchDir "software_version_build.h"
-if (Test-Path $VersionOverrideHeader) {
+if ((Test-Path $VersionOverrideHeader) -and -not $AllowVersionOverride) {
     Remove-Item -Force $VersionOverrideHeader
     Write-Host "Removed dev-only version override: software_version_build.h"
+} elseif ((Test-Path $VersionOverrideHeader) -and $AllowVersionOverride) {
+    Write-Host "Keeping version override: software_version_build.h"
 }
 $Cli = "C:\Program Files\Arduino CLI\arduino-cli.exe"
 
@@ -35,9 +49,28 @@ if (-not (Test-Path $Cli)) {
 & $Cli core update-index
 & $Cli core install "esp32:esp32@$CoreVersion"
 
-$SketchBuildDir = Join-Path $SketchDir "build"
-if (Test-Path $SketchBuildDir) {
-    Remove-Item -Recurse -Force $SketchBuildDir
+# Prefer a dedicated build path for automated runs; only wipe the default sketch/build
+# when we are actually building into it (Arduino IDE often locks that tree).
+if (-not $BuildPath) {
+    $SketchBuildDir = Join-Path $SketchDir "build"
+    if (Test-Path $SketchBuildDir) {
+        $removed = $false
+        foreach ($attempt in 1..5) {
+            try {
+                Remove-Item -Recurse -Force $SketchBuildDir -ErrorAction Stop
+                $removed = $true
+                break
+            } catch {
+                Write-Host "WARN: could not remove $SketchBuildDir (attempt $attempt/5): $($_.Exception.Message)"
+                Start-Sleep -Seconds 2
+            }
+        }
+        if (-not $removed) {
+            Write-Host "WARN: leaving locked sketch build dir in place; arduino-cli --clean will refresh outputs"
+        }
+    }
+} else {
+    New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 }
 
 Push-Location $SketchDir

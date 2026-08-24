@@ -252,17 +252,20 @@ enum HardwareComponentId {
   HW_COMPONENT_COUNT
 };
 
-// Production: 0 = use hardware matrix (CONTROL_PANEL 5/6). Dev: pass -DCONTROL_PANEL_PINOUT_OVERRIDE=6 at build.
+// Production: 0 = use hardware matrix (CONTROL_PANEL 2.0/2.2). Dev: pass -DCONTROL_PANEL_PINOUT_OVERRIDE=22 at build.
 #ifndef CONTROL_PANEL_PINOUT_OVERRIDE
 #define CONTROL_PANEL_PINOUT_OVERRIDE 0
 #endif
 
 enum ControlPanelPinout : uint8_t {
-  CP_PINOUT_V5_LEGACY = 5,
+  CP_PINOUT_V2_0 = 20,
+  CP_PINOUT_V2_2 = 22,
   CP_PINOUT_V6 = 6
 };
 
-const int CP_V5_BTN2_MCP = 15;
+const int CP_V2_0_BTN2_MCP = 15;
+const int CP_V2_2_BTN1_MCP = 7;
+const int CP_V2_2_BTN2_MCP = 15;
 const int CP_V6_BTN1_MCP = 6;
 const int CP_V6_BTN2_MCP = 14;
 
@@ -311,14 +314,14 @@ struct HWCFGConfigStore {
 #  if __has_include("software_version_build.h")
 #    include "software_version_build.h"
 #  else
-const char* SOFTWARE_VERSION_NUMBER = "4.2.6";
+const char* SOFTWARE_VERSION_NUMBER = "4.2.7";
 const char* FACTORY_SOFTWARE_DATE = "2026-06-18";
-const char* SOFTWARE_BUILD_DATE = "2026-07-14";  // YYYY-MM-DD — update with each build
+const char* SOFTWARE_BUILD_DATE = "2026-08-21";  // YYYY-MM-DD — update with each build
 #  endif
 #else
-const char* SOFTWARE_VERSION_NUMBER = "4.2.6";
+const char* SOFTWARE_VERSION_NUMBER = "4.2.7";
 const char* FACTORY_SOFTWARE_DATE = "2026-06-18";
-const char* SOFTWARE_BUILD_DATE = "2026-07-14";  // YYYY-MM-DD — update with each build
+const char* SOFTWARE_BUILD_DATE = "2026-08-21";  // YYYY-MM-DD — update with each build
 #endif
 
 // Forward declarations
@@ -434,6 +437,10 @@ void resetMotorHomingRetryState(const char* reason);
 bool canStartDeferredHomingRetry();
 void recordMotorHomingFailure(uint8_t phase, unsigned long elapsedMs, int openSw, int closeSw, int m1Nfault);
 void abortMotorHomingOnTimeout(uint8_t phase);
+void startM1JamReverse(int lastSpeed);
+void updateM1JamReverse();
+void clearM1JamReverseState();
+bool isM1OpenStallDetected(unsigned long motionStartMs);
 float readTemperature();
 float readM1Current();
 float readHeaterCurrent();
@@ -559,8 +566,8 @@ void maintainCancelRecoveryLeds();
 #define SerialBLE_println(x) do { Serial.println(x); if(serial_streaming_enabled) sendSerialToBLEImpl(String(x) + "\n"); } while(0)
 #define SerialBLE_println_empty() do { Serial.println(); if(serial_streaming_enabled) sendSerialToBLEImpl("\n"); } while(0)
 
-// LED pins (UI index 0-13 -> MCP pin; v6 uses 15/7 at indices 3/5 instead of v5's 14/6)
-static const int ledPinsV5[] = {1, 9, 13, 14, 10, 6, 11, 12, 8, 0, 2, 3, 4, 5};
+// LED pins (UI index 0-13 -> MCP pin; dormant v6 uses 15/7 at indices 3/5 instead of v2.0's 14/6)
+static const int ledPinsV2_0[] = {1, 9, 13, 14, 10, 6, 11, 12, 8, 0, 2, 3, 4, 5};
 static const int ledPinsV6[] = {1, 9, 13, 15, 10, 7, 11, 12, 8, 0, 2, 3, 4, 5};
 const int totalLeds = 14;
 int ledIndex = 0;
@@ -589,6 +596,14 @@ const unsigned long BLE_STATUS_LOG_INTERVAL_MS = 2000;  // 2s status log cadence
 const unsigned long M1_CURRENT_LOG_INTERVAL_MS = 3000;  // 3s max-current log window
 unsigned long m1CurrentLogWindowStartMillis = 0;
 float m1CurrentMaxInWindow = 0.0;
+const float M1_STALL_CURRENT_A = 0.5f;
+const unsigned long M1_JAM_REVERSE_MS = 2000;
+const unsigned long M1_OPEN_STALL_INRUSH_MS = 300;
+const unsigned long M1_OPEN_STALL_DEBOUNCE_MS = 150;
+bool m1JamReverseActive = false;
+unsigned long m1JamReverseStartMs = 0;
+int m1JamReverseSpeed = 0;
+unsigned long m1OpenStallHighSinceMs = 0;
 bool heaterOutputOn = false;  // Physical heater output state (independent from heater phase state)
 unsigned long maxHeaterWallTimeMs = 0;  // Computed once at flush start (case 0) and reused for that cycle
 
@@ -1041,6 +1056,8 @@ HWCFGConfigStore hwcfgSnapshotStore = {};
 // File-scope verify buffer (~11KB); must not live on loopTask stack in saveHWCFGBlobFile.
 HWCFGConfigStore hwcfgVerifyScratch = {};
 HardwareMatrix hwcfgSnapshotMatrix = {};
+// SET_HW_COMPONENT / matrix mutate must not copy HardwareMatrix onto the BLE onWrite stack.
+HardwareMatrix hardwareMatrixCandidate = {};
 const char* HARDWARE_COMPONENT_NAMES[HW_COMPONENT_COUNT] = {
   "CONTROL_PANEL",
   "HEATING_ELEMENT",
@@ -1874,35 +1891,45 @@ class param_write_characteristic_callbacks: public BLECharacteristicCallbacks {
 };
 
 ControlPanelPinout getControlPanelPinout() {
-  if (CONTROL_PANEL_PINOUT_OVERRIDE == 5) {
-    return CP_PINOUT_V5_LEGACY;
+  if (CONTROL_PANEL_PINOUT_OVERRIDE == 20) {
+    return CP_PINOUT_V2_0;
+  }
+  if (CONTROL_PANEL_PINOUT_OVERRIDE == 22) {
+    return CP_PINOUT_V2_2;
   }
   if (CONTROL_PANEL_PINOUT_OVERRIDE == 6) {
     return CP_PINOUT_V6;
   }
   if (hardwareMatrixInitialized) {
     const char* ver = hardwareMatrix.components[HW_CONTROL_PANEL].current_version;
+    if (strcmp(ver, "2.2") == 0) {
+      return CP_PINOUT_V2_2;
+    }
     if (ver[0] == '6' && ver[1] == '\0') {
       return CP_PINOUT_V6;
     }
   }
-  return CP_PINOUT_V5_LEGACY;
+  return CP_PINOUT_V2_0;
 }
 
 void configureControlPanelMcpInputs() {
   if (!mcpInitialized) {
     return;
   }
-  if (getControlPanelPinout() == CP_PINOUT_V6) {
+  ControlPanelPinout pinout = getControlPanelPinout();
+  if (pinout == CP_PINOUT_V6) {
     mcp.pinMode(CP_V6_BTN1_MCP, INPUT_PULLUP);
     mcp.pinMode(CP_V6_BTN2_MCP, INPUT_PULLUP);
+  } else if (pinout == CP_PINOUT_V2_2) {
+    mcp.pinMode(CP_V2_2_BTN1_MCP, INPUT_PULLUP);
+    mcp.pinMode(CP_V2_2_BTN2_MCP, INPUT_PULLUP);
   } else {
-    mcp.pinMode(CP_V5_BTN2_MCP, INPUT_PULLUP);
+    mcp.pinMode(CP_V2_0_BTN2_MCP, INPUT_PULLUP);
   }
 }
 
 const int* getActiveLedPins() {
-  return getControlPanelPinout() == CP_PINOUT_V6 ? ledPinsV6 : ledPinsV5;
+  return getControlPanelPinout() == CP_PINOUT_V6 ? ledPinsV6 : ledPinsV2_0;
 }
 
 int getLedPin(int uiIndex) {
@@ -1991,12 +2018,16 @@ int mcp_digitalRead(int pin) {
 }
 
 void logControlPanelPinout() {
-  if (getControlPanelPinout() == CP_PINOUT_V6) {
-    Serial.println("Control panel pinout: v6 (MCP6 + MCP14, wake GPIO2); LEDs use v6 map");
-    SerialBLE_println("Control panel pinout: v6 (MCP6 + MCP14, wake GPIO2); LEDs use v6 map");
+  ControlPanelPinout pinout = getControlPanelPinout();
+  if (pinout == CP_PINOUT_V6) {
+    Serial.println("Control panel pinout: v6 dormant (MCP6 + MCP14, wake GPIO2); LEDs use v6 map");
+    SerialBLE_println("Control panel pinout: v6 dormant (MCP6 + MCP14, wake GPIO2); LEDs use v6 map");
+  } else if (pinout == CP_PINOUT_V2_2) {
+    Serial.println("Control panel pinout: silk 2.2 (MCP7 flush + MCP15 feed, wake GPIO2); LEDs use v2.0 map");
+    SerialBLE_println("Control panel pinout: silk 2.2 (MCP7 flush + MCP15 feed, wake GPIO2); LEDs use v2.0 map");
   } else {
-    Serial.println("Control panel pinout: v5 legacy (GPIO2 + MCP15); LEDs use v5 map");
-    SerialBLE_println("Control panel pinout: v5 legacy (GPIO2 + MCP15); LEDs use v5 map");
+    Serial.println("Control panel pinout: silk 2.0 (GPIO2 flush + MCP15 feed); LEDs use v2.0 map");
+    SerialBLE_println("Control panel pinout: silk 2.0 (GPIO2 flush + MCP15 feed); LEDs use v2.0 map");
   }
 }
 
@@ -2004,6 +2035,9 @@ bool readControlPanelButton1() {
   ControlPanelPinout pinout = getControlPanelPinout();
   if (pinout == CP_PINOUT_V6) {
     return mcp_digitalRead(CP_V6_BTN1_MCP) == LOW;
+  }
+  if (pinout == CP_PINOUT_V2_2) {
+    return mcp_digitalRead(CP_V2_2_BTN1_MCP) == LOW;
   }
   return digitalRead(controlPanelWake) == LOW;
 }
@@ -2013,7 +2047,10 @@ bool readControlPanelButton2() {
   if (pinout == CP_PINOUT_V6) {
     return mcp_digitalRead(CP_V6_BTN2_MCP) == LOW;
   }
-  return mcp_digitalRead(CP_V5_BTN2_MCP) == LOW;
+  if (pinout == CP_PINOUT_V2_2) {
+    return mcp_digitalRead(CP_V2_2_BTN2_MCP) == LOW;
+  }
+  return mcp_digitalRead(CP_V2_0_BTN2_MCP) == LOW;
 }
 
 bool readControlPanelWakeLine() {
@@ -3249,7 +3286,7 @@ void initializeDefaultHardwareMatrix(HardwareMatrix& matrix) {
   matrix.matrix_magic = HW_MATRIX_MAGIC;
   matrix.matrix_schema_version = HW_MATRIX_SCHEMA_VERSION;
   matrix.component_count = HW_COMPONENT_COUNT;
-  setHardwareComponentDefaults(matrix.components[HW_CONTROL_PANEL], "5", "CONTROL INTERFACE FOR DEVICE", "2026-02-28");
+  setHardwareComponentDefaults(matrix.components[HW_CONTROL_PANEL], "2.0", "CONTROL INTERFACE FOR DEVICE", "2026-02-28");
   setHardwareComponentDefaults(matrix.components[HW_HEATING_ELEMENT], "1", "VERSION OF THE HEATING ELEMENT IN THE SEALING MECHANISM", "2026-02-28");
   setHardwareComponentDefaults(matrix.components[HW_MAIN_CIRCUIT_BOARD], "5", "MAIN CONROL PANEL FOR LOGIC", "2026-02-28");
   setHardwareComponentDefaults(matrix.components[HW_VACUUM_FAN], "1", "FAN IN THE SEALER HARDWARE TO ADJUST INTERNAL PRESSURE", "2026-02-28");
@@ -3281,11 +3318,32 @@ bool syncSoftwareVersionMatrixEntry(HardwareMatrix& matrix) {
   return changed;
 }
 
+bool migrateControlPanelVersion5To2_0(HardwareMatrix& matrix) {
+  HardwareComponentEntry& entry = matrix.components[HW_CONTROL_PANEL];
+  if (strcmp(entry.current_version, "5") != 0) {
+    return false;
+  }
+  copyBoundedString(entry.previous_version, sizeof(entry.previous_version), entry.current_version);
+  copyBoundedString(entry.previous_description, sizeof(entry.previous_description), entry.current_description);
+  copyBoundedString(entry.previous_install_date, sizeof(entry.previous_install_date), entry.install_date);
+  copyBoundedString(entry.current_version, sizeof(entry.current_version), "2.0");
+  refreshHardwareMatrixCRC(matrix);
+  return true;
+}
+
+bool syncHardwareMatrixRepairs(HardwareMatrix& matrix) {
+  bool changed = syncSoftwareVersionMatrixEntry(matrix);
+  if (migrateControlPanelVersion5To2_0(matrix)) {
+    changed = true;
+  }
+  return changed;
+}
+
 bool tryLoadHardwareMatrixFromNvs(const char* key, HardwareMatrix& outMatrix, String& validationError, bool* outRepaired) {
   if (!loadHardwareMatrixBlob(key, outMatrix)) {
     return false;
   }
-  bool repaired = syncSoftwareVersionMatrixEntry(outMatrix);
+  bool repaired = syncHardwareMatrixRepairs(outMatrix);
   if (outRepaired != NULL) {
     *outRepaired = repaired;
   }
@@ -3447,7 +3505,7 @@ bool initializeHardwareMatrix() {
     hardwareMatrixInitialized = true;
     if (repaired) {
       saveHardwareMatrixBlob(hardwareMatrix, false);
-      Serial.println("Hardware matrix repaired (software version install date)");
+      Serial.println("Hardware matrix repaired (software version / control panel migration)");
     }
     Serial.println("Hardware matrix loaded from active NVS record");
     logBootTiming("hw_matrix_path,active_nvs");
@@ -3466,7 +3524,7 @@ bool initializeHardwareMatrix() {
     hardwareMatrixInitialized = true;
     saveHardwareMatrixBlob(hardwareMatrix, false);
     if (repaired) {
-      Serial.println("Hardware matrix repaired (software version install date)");
+      Serial.println("Hardware matrix repaired (software version / control panel migration)");
     }
     Serial.println("Recovered hardware matrix from last-known-good record");
     logBootTiming("hw_matrix_path,last_good");
@@ -3515,7 +3573,8 @@ bool setHardwareComponentByName(const String& componentName, const String& versi
     errorCode = "BAD_VERSION";
     return false;
   }
-  if (componentId == HW_CONTROL_PANEL && versionTrim != "5" && versionTrim != "6") {
+  if (componentId == HW_CONTROL_PANEL &&
+      versionTrim != "2.0" && versionTrim != "2.2" && versionTrim != "6") {
     errorCode = "BAD_VERSION";
     return false;
   }
@@ -3532,28 +3591,28 @@ bool setHardwareComponentByName(const String& componentName, const String& versi
     return false;
   }
 
-  HardwareMatrix candidate = hardwareMatrix;
-  HardwareComponentEntry& entry = candidate.components[componentId];
+  hardwareMatrixCandidate = hardwareMatrix;
+  HardwareComponentEntry& entry = hardwareMatrixCandidate.components[componentId];
   copyBoundedString(entry.previous_version, sizeof(entry.previous_version), entry.current_version);
   copyBoundedString(entry.previous_description, sizeof(entry.previous_description), entry.current_description);
   copyBoundedString(entry.previous_install_date, sizeof(entry.previous_install_date), entry.install_date);
   copyBoundedString(entry.current_version, sizeof(entry.current_version), versionTrim.c_str());
   copyBoundedString(entry.current_description, sizeof(entry.current_description), descriptionTrim.c_str());
   copyBoundedString(entry.install_date, sizeof(entry.install_date), installTrim.c_str());
-  refreshHardwareMatrixCRC(candidate);
+  refreshHardwareMatrixCRC(hardwareMatrixCandidate);
 
   String validationError;
-  if (!validateHardwareMatrix(candidate, &validationError)) {
+  if (!validateHardwareMatrix(hardwareMatrixCandidate, &validationError)) {
     errorCode = String("INVALID_MATRIX_") + validationError;
     return false;
   }
 
-  if (!saveHardwareMatrixBlob(candidate, true)) {
+  if (!saveHardwareMatrixBlob(hardwareMatrixCandidate, true)) {
     errorCode = "PERSIST_FAIL";
     return false;
   }
 
-  hardwareMatrix = candidate;
+  hardwareMatrix = hardwareMatrixCandidate;
   errorCode = "";
   Serial.printf("Hardware matrix component updated: %s -> version=%s date=%s\n",
                 HARDWARE_COMPONENT_NAMES[componentId],
@@ -4093,7 +4152,7 @@ void initializeDefaultHWCFG(HWCFGConfigStore& store) {
   memset(&store, 0, sizeof(store));
   store.magic = HWCFG_MAGIC;
   store.schema_version = HWCFG_SCHEMA_VERSION;
-  store.profile_count = 1;
+  store.profile_count = 2;
   store.active_profile_id[0] = '\0';
   store.last_good_profile_id[0] = '\0';
   store.active_validated = 0;
@@ -4103,6 +4162,12 @@ void initializeDefaultHWCFG(HWCFGConfigStore& store) {
   copyBoundedString(cpV6.component_name, sizeof(cpV6.component_name), "CONTROL_PANEL");
   copyBoundedString(cpV6.component_version, sizeof(cpV6.component_version), "6");
   cpV6.params_blob[0] = '\0';
+  HWCFGProfileEntry& cpV22 = store.profiles[1];
+  cpV22.in_use = 1;
+  copyBoundedString(cpV22.profile_id, sizeof(cpV22.profile_id), "cp_v2_2_pinout");
+  copyBoundedString(cpV22.component_name, sizeof(cpV22.component_name), "CONTROL_PANEL");
+  copyBoundedString(cpV22.component_version, sizeof(cpV22.component_version), "2.2");
+  cpV22.params_blob[0] = '\0';
   refreshHWCFGCRC(store);
 }
 
@@ -4304,7 +4369,10 @@ String handleHWCFGCommand(const String& cmd) {
     String version = versionPart.substring(String("version=").length());
     component.trim();
     version.trim();
-    if (profileId.length() == 0 || component.length() == 0 || version.length() == 0 || paramsBlob.length() == 0) {
+    if (profileId.length() == 0 || component.length() == 0 || version.length() == 0) {
+      return "HWCFG_VALIDATE_ERR:BAD_FORMAT";
+    }
+    if (paramsBlob.length() == 0 && component != "CONTROL_PANEL") {
       return "HWCFG_VALIDATE_ERR:BAD_FORMAT";
     }
     if (profileId.length() >= HWCFG_PROFILE_ID_LEN || component.length() >= HW_COMPONENT_DESC_LEN ||
@@ -6792,7 +6860,10 @@ void loop() {
     sendSerialToBLE("EEPROM wake alert ended. Normal operation resumed");
   }
 
-  updateMotorHoming();
+  updateM1JamReverse();
+  if (!m1JamReverseActive) {
+    updateMotorHoming();
+  }
   tryStartDeferredHomingIfReady();
   updateHeaterSessionRtc();
   checkHeaterRuntimeSafety();
@@ -7246,7 +7317,9 @@ void loop() {
     }
   }
   if (isFlushing) {
-    flushSequence();
+    if (!m1JamReverseActive) {
+      flushSequence();
+    }
     if (isFlushing && flushStep != 13) {
       if (flushCancelRecoveryActive) {
         maintainCancelRecoveryLeds();
@@ -7504,6 +7577,10 @@ void flushSequence() {
     case 5: {
       if (mechanismMotorRunning && (currentMillis - motorStartMillis > maxOpeningTimeMs()) && ERROR_CODE == 0) {
         SerialBLE_println("Mechanism close timeout in case 5");
+        if (digitalRead(microswitchClosePin) != LOW && readM1Current() > M1_STALL_CURRENT_A) {
+          startM1JamReverse(400);
+          return;
+        }
         ERROR_CODE = 1;
         stopEverything();
         LEDErrorCode(ERROR_CODE);
@@ -7559,8 +7636,8 @@ void flushSequence() {
           case5FeedExecuted = true; // Mark as executed
         }
         
-        // Normal mode: current > 0.5A is acceptable
-        if (m1Current > 0.5) {
+        // Normal mode: stall current at the close switch is the sealed endstop, not a jam
+        if (m1Current > M1_STALL_CURRENT_A) {
           SerialBLE_println("Normal mode: Current > 0.5A confirmed");
         motors.setM1Speed(0);
         setFanSpeed(0);  // Stop M3 motor
@@ -7703,6 +7780,7 @@ void flushSequence() {
         case10FanStarted = false;
         mechanismMotorRunning = true;
         motorStartMillis = millis();
+        m1OpenStallHighSinceMs = 0;
         motors.setM1Speed(-400);
         SerialBLE_print("MOTOR START TIME: ");
         Serial.println(motorStartMillis);
@@ -7734,6 +7812,12 @@ void flushSequence() {
         openSwitchLatched = true;
         motors.setM1Speed(0);
         mechanismMotorRunning = false;
+        m1OpenStallHighSinceMs = 0;
+      } else if (mechanismMotorRunning && ERROR_CODE == 0 &&
+                 isM1OpenStallDetected(motorStartMillis)) {
+        SerialBLE_println("Mechanism open stall in case 8");
+        startM1JamReverse(-400);
+        return;
       }
       if (currentMillis - stepStartMillis >= backupTime * 1000) {
         Serial.println("Stop backing bag up");
@@ -7774,6 +7858,12 @@ void flushSequence() {
         openSwitchLatched = true;
         motors.setM1Speed(0);
         mechanismMotorRunning = false;
+        m1OpenStallHighSinceMs = 0;
+      } else if (mechanismMotorRunning && !openSwitchLatched && ERROR_CODE == 0 &&
+                 isM1OpenStallDetected(motorStartMillis)) {
+        SerialBLE_println("Mechanism open stall in case 10");
+        startM1JamReverse(-400);
+        return;
       }
 
       static int lastSw10Logged = -1;
@@ -9605,7 +9695,8 @@ bool isM1MotorActive() {
   return mechanismMotorRunning
       || case6CutMotorRunning
       || case6PrecoolCutRunning
-      || motorHomingActive;
+      || motorHomingActive
+      || m1JamReverseActive;
 }
 
 void initBrownoutStreak() {
@@ -9894,7 +9985,7 @@ bool shouldDeferHomingAtBoot(const char** reason) {
 
 void tryStartDeferredHomingIfReady() {
   // Retry when homing was deferred; ERROR_CODE is not part of this gate (cleared on assess pass).
-  if (!motorHomingDeferred || motorHomingActive || isFlushing) {
+  if (!motorHomingDeferred || motorHomingActive || isFlushing || m1JamReverseActive) {
     return;
   }
   if (isHardwareLikelyDisconnectedForUserAction()) {
@@ -10154,7 +10245,8 @@ bool isDeviceIdleForDualButton() {
   return !isFlushing
       && !motorHomingActive
       && !manualFeedActive
-      && !mechanismMotorRunning;
+      && !mechanismMotorRunning
+      && !m1JamReverseActive;
 }
 
 bool acceptFlushCancel(bool button1Pressed, bool button2Pressed) {
@@ -10186,6 +10278,10 @@ void stopFlushActiveOperations() {
   heaterOn = false;
   heaterOff();
   motors.setM2Speed(0);
+  if (m1JamReverseActive) {
+    motors.setM1Speed(0);
+    clearM1JamReverseState();
+  }
   if (case6CutMotorRunning) {
     motors.setM1Speed(0);
     case6CutMotorRunning = false;
@@ -10234,6 +10330,7 @@ void clearFlushStateForCancel() {
   m1CurrentMaxInWindow = 0.0;
   heaterMaxWallAtFlushStart = false;
   heaterMaxWallThisFlush = false;
+  clearM1JamReverseState();
 }
 
 void abortFlushPreflight(bool showErrorLed) {
@@ -10342,6 +10439,7 @@ void stopEverything() {
   heaterTargetTemp = K;
   m1CurrentLogWindowStartMillis = 0;
   m1CurrentMaxInWindow = 0.0;
+  clearM1JamReverseState();
 
   for (int i = 0; i < totalLeds; i++) {
     mcp_digitalWrite(getLedPin(i), LOW);
@@ -10689,8 +10787,12 @@ void locateMotorPos() {
     return;
   }
   startMotorHoming(motorHomingDeferred && isBatteryOkForHeaterTest());
-  while (motorHomingActive) {
-    updateMotorHoming();
+  while (motorHomingActive || m1JamReverseActive) {
+    if (m1JamReverseActive) {
+      updateM1JamReverse();
+    } else {
+      updateMotorHoming();
+    }
     feedTaskWatchdog();
     delay(1);
   }
@@ -10731,12 +10833,27 @@ void updateMotorHoming() {
         motors.setM1Speed(-400);
         mechanismMotorRunning = true;
         motorHomingPhase = HOMING_OPEN_FULL;
+        m1OpenStallHighSinceMs = 0;
       }
       motorHomingPhaseStartMillis = millis();
       break;
     }
     case HOMING_PARTIAL_CLOSE: {
       if (millis() - motorHomingPhaseStartMillis > maxOpeningTimeMs()) {
+        if (digitalRead(microswitchClosePin) != LOW && readM1Current() > M1_STALL_CURRENT_A) {
+          unsigned long elapsedMs = millis() - motorHomingPhaseStartMillis;
+          int openSw = (digitalRead(microswitchOpenPin) == LOW) ? 1 : 0;
+          int closeSw = (digitalRead(microswitchClosePin) == LOW) ? 1 : 0;
+          int m1Nfault = digitalRead(M1NFAULT_PIN);
+          SerialBLE_println("Homing close timeout jam — reversing");
+          if (motorHomingDeferred) {
+            recordMotorHomingFailure(motorHomingPhase, elapsedMs, openSw, closeSw, m1Nfault);
+          }
+          startM1JamReverse(400);
+          motorHomingActive = false;
+          motorHomingPhase = HOMING_IDLE;
+          return;
+        }
         abortMotorHomingOnTimeout(motorHomingPhase);
         return;
       }
@@ -10756,6 +10873,7 @@ void updateMotorHoming() {
         mechanismMotorRunning = true;
         motorHomingPhase = HOMING_OPEN_FULL;
         motorHomingPhaseStartMillis = millis();
+        m1OpenStallHighSinceMs = 0;
       }
       break;
     }
@@ -10769,6 +10887,7 @@ void updateMotorHoming() {
         mechanismMotorRunning = false;
         motorHomingActive = false;
         motorHomingPhase = HOMING_IDLE;
+        m1OpenStallHighSinceMs = 0;
         Serial.println("Motor opened fully and positioned (open switch closed).");
         Serial.println("Motor positioning complete.");
         if (motorHomingDeferred) {
@@ -10777,6 +10896,19 @@ void updateMotorHoming() {
         if (cancelRecoveryHomingPending) {
           completeCancelRecoveryReady();
         }
+      } else if (ERROR_CODE == 0 && isM1OpenStallDetected(motorHomingPhaseStartMillis)) {
+        unsigned long elapsedMs = millis() - motorHomingPhaseStartMillis;
+        int openSw = (digitalRead(microswitchOpenPin) == LOW) ? 1 : 0;
+        int closeSw = (digitalRead(microswitchClosePin) == LOW) ? 1 : 0;
+        int m1Nfault = digitalRead(M1NFAULT_PIN);
+        SerialBLE_println("Homing open stall — reversing");
+        if (motorHomingDeferred) {
+          recordMotorHomingFailure(motorHomingPhase, elapsedMs, openSw, closeSw, m1Nfault);
+        }
+        startM1JamReverse(-400);
+        motorHomingActive = false;
+        motorHomingPhase = HOMING_IDLE;
+        return;
       }
       break;
     }
@@ -10914,6 +11046,97 @@ void setFanSpeed(int speed) {
 
 bool getM3Fault() {
   return false;  // PWM fan has no fault pin
+}
+
+void clearM1JamReverseState() {
+  m1JamReverseActive = false;
+  m1JamReverseStartMs = 0;
+  m1JamReverseSpeed = 0;
+  m1OpenStallHighSinceMs = 0;
+}
+
+bool isM1OpenStallDetected(unsigned long motionStartMs) {
+  unsigned long now = millis();
+  if (digitalRead(microswitchOpenPin) == LOW) {
+    m1OpenStallHighSinceMs = 0;
+    return false;
+  }
+  if ((now - motionStartMs) < M1_OPEN_STALL_INRUSH_MS) {
+    m1OpenStallHighSinceMs = 0;
+    return false;
+  }
+  if (readM1Current() > M1_STALL_CURRENT_A) {
+    if (m1OpenStallHighSinceMs == 0) {
+      m1OpenStallHighSinceMs = now;
+    } else if ((now - m1OpenStallHighSinceMs) >= M1_OPEN_STALL_DEBOUNCE_MS) {
+      return true;
+    }
+  } else {
+    m1OpenStallHighSinceMs = 0;
+  }
+  return false;
+}
+
+void startM1JamReverse(int lastSpeed) {
+  if (m1JamReverseActive) {
+    return;
+  }
+  int reverseSpeed = (lastSpeed >= 0) ? -400 : 400;
+  float m1A = readM1Current();
+  int openSw = (digitalRead(microswitchOpenPin) == LOW) ? 1 : 0;
+  int closeSw = (digitalRead(microswitchClosePin) == LOW) ? 1 : 0;
+
+  motors.setM2Speed(0);
+  setFanSpeed(0);
+  m3ReverseActive = false;
+  motors.setM1Speed(reverseSpeed);
+  mechanismMotorRunning = true;
+  m1JamReverseActive = true;
+  m1JamReverseStartMs = millis();
+  m1JamReverseSpeed = reverseSpeed;
+  m1OpenStallHighSinceMs = 0;
+
+  SerialBLE_print("M1 jam reverse start last=");
+  SerialBLE_print(lastSpeed);
+  SerialBLE_print(" reverse=");
+  SerialBLE_print(reverseSpeed);
+  SerialBLE_print(" m1A=");
+  SerialBLE_print(m1A);
+  SerialBLE_print(" open_sw=");
+  SerialBLE_print(openSw);
+  SerialBLE_print(" close_sw=");
+  SerialBLE_println(closeSw);
+}
+
+static void finishM1JamReverse() {
+  motors.setM1Speed(0);
+  mechanismMotorRunning = false;
+  bool doAbort = (ERROR_CODE == 0);
+  clearM1JamReverseState();
+  if (doAbort) {
+    SerialBLE_println("M1 jam reverse complete");
+    ERROR_CODE = 1;
+    stopEverything();
+    LEDErrorCode(ERROR_CODE);
+  }
+}
+
+void updateM1JamReverse() {
+  if (!m1JamReverseActive) {
+    return;
+  }
+  bool hitOpposite = false;
+  if (m1JamReverseSpeed < 0) {
+    hitOpposite = (digitalRead(microswitchOpenPin) == LOW);
+  } else {
+    hitOpposite = (digitalRead(microswitchClosePin) == LOW);
+  }
+  if (hitOpposite || (millis() - m1JamReverseStartMs >= M1_JAM_REVERSE_MS)) {
+    if (hitOpposite) {
+      SerialBLE_println("M1 jam reverse stopped at opposite endstop");
+    }
+    finishM1JamReverse();
+  }
 }
 
 // Current monitoring function

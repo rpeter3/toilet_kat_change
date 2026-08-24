@@ -26,7 +26,9 @@ BUILD_SCRIPT = REPO_ROOT / "scripts" / "build-firmware.ps1"
 EXTRACT_SCRIPT = REPO_ROOT / "scripts" / "extract_factory_app.py"
 SARAH_MERGED = REPO_ROOT / "FACTORY_BINARIES" / "SARAH_toilet_kat_change.ino.merged.bin"
 OUT_DIR = REPO_ROOT / "test-builds" / "ota-regression"
-BUILD_OUTPUT = SKETCH_DIR / "build" / "esp32.esp32.esp32s3" / "toilet_kat_change.ino.bin"
+# Dedicated path so Arduino IDE holding locks on sketch/build does not break auto-build.
+REGRESSION_BUILD_DIR = OUT_DIR / "build" / "esp32.esp32.esp32s3"
+BUILD_OUTPUT = REGRESSION_BUILD_DIR / "toilet_kat_change.ino.bin"
 
 OTA_STEP_VARIANTS = ["regA", "regB", "regB", "regA", "regB"]
 
@@ -67,6 +69,7 @@ def md5_file(path: Path) -> str:
 
 
 def run_build() -> None:
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
     cmd = [
         "powershell",
         "-NoProfile",
@@ -74,6 +77,9 @@ def run_build() -> None:
         "Bypass",
         "-File",
         str(BUILD_SCRIPT),
+        "-AllowVersionOverride",
+        "-BuildPath",
+        str(REGRESSION_BUILD_DIR),
     ]
     result = subprocess.run(cmd, cwd=REPO_ROOT)
     if result.returncode != 0:

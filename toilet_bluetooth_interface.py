@@ -37,6 +37,11 @@ PARAM_WRITE_PERSIST_FAILED = "PARAM_WRITE_ERR:PERSIST_FAILED"
 # Legacy: pre-refactor firmware used fea0 for commands, responses, and params
 CHARACTERISTIC_UUID = COMMAND_CHARACTERISTIC_UUID
 DEVICE_NAME = "ESP32 Toilet"
+CONTROL_PANEL_DEFAULT_DESCRIPTION = "CONTROL INTERFACE FOR DEVICE"
+CONTROL_PANEL_HWCFG_PROFILE_IDS = {
+    "2.0": "cp_v2_0_pinout",
+    "2.2": "cp_v2_2_pinout",
+}
 FRAME_START_BYTE = 0x7E
 FRAME_HEADER_SIZE = 3
 MAX_FRAME_PAYLOAD = 0xFFFF
@@ -1225,7 +1230,8 @@ class ToiletSystemInterface:
         if start_resp != "TRUST_WAITING":
             print(f"Trust handshake failed: unexpected TRUST_START response: {start_resp}")
             return False
-        print("Press a control panel button on device to confirm connection (GPIO2 wake line)...")
+        print("Press a control panel button to confirm (GPIO2 wake line).")
+        print("Silk 2.0: flush only. Silk 2.2: either button. DEV mode skips the press.")
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             status = await self.trust_status()
@@ -1348,6 +1354,53 @@ class ToiletSystemInterface:
             return None
         return response
 
+    def _print_control_panel_silk_hint(self) -> None:
+        print(
+            "CONTROL_PANEL silk version is printed on the back of the board.\n"
+            "Allowed: 2.0 and 2.2. Do not send 5 or 6 unless lab testing."
+        )
+
+    @staticmethod
+    def _refuse_control_panel_version_5(version: str) -> bool:
+        if version == "5":
+            print(
+                "Refusing version 5: firmware >= 4.2.7 rejects it (SET_HW_COMPONENT_ERR:BAD_VERSION). "
+                "Use 2.0 (silk 2.0) or 2.2 (silk 2.2). Stored 5 migrates to 2.0 on device boot."
+            )
+            return True
+        return False
+
+    async def hwcfg_profile_exists(self, component: str, version: str) -> Optional[bool]:
+        command = f"HWCFG_PROFILE_GET:{component}|version={version}"
+        response = await self._send_command_and_read_response(command)
+        if not response:
+            print("No response from firmware for HWCFG_PROFILE_GET")
+            return None
+        if response.startswith("HWCFG_PROFILE:"):
+            return True
+        if response == "HWCFG_VALIDATE_ERR:NO_PROFILE":
+            return False
+        if response.startswith("HWCFG_VALIDATE_ERR:"):
+            print(f"Firmware rejected profile get: {response}")
+            return None
+        print(f"Unexpected profile get response: {response}")
+        return None
+
+    async def ensure_control_panel_hwcfg_profile(self, version: str) -> bool:
+        profile_id = CONTROL_PANEL_HWCFG_PROFILE_IDS.get(version)
+        if profile_id is None:
+            return True
+        exists = await self.hwcfg_profile_exists("CONTROL_PANEL", version)
+        if exists is True:
+            return True
+        if exists is None:
+            return False
+        print(
+            f"HWCFG profile missing for CONTROL_PANEL {version}; "
+            f"storing empty profile {profile_id}..."
+        )
+        return await self.hwcfg_profile_put(profile_id, "CONTROL_PANEL", version, {})
+
     async def hwcfg_profile_put(self, profile_id: str, component: str, version: str, param_pairs: Dict[str, float]) -> bool:
         if component not in self.hardware_components:
             print("Invalid component")
@@ -1355,7 +1408,7 @@ class ToiletSystemInterface:
         if not profile_id.strip() or not version.strip():
             print("profile_id and version are required")
             return False
-        if not param_pairs:
+        if not param_pairs and component != "CONTROL_PANEL":
             print("At least one parameter pair is required")
             return False
         param_blob = ";".join([f"{k}={v}" for k, v in param_pairs.items()])
@@ -1673,7 +1726,7 @@ async def main():
             print("18. HWCFG rollback last good")
             print("19. Read flush count")
             print("20. Read error logs (GET_LOGS)")
-            print("21. Trust handshake (press control panel button / GPIO2 wake line to confirm)")
+            print("21. Trust handshake (silk 2.0: flush; silk 2.2: either button; DEV mode skips press)")
             print("22. Manual OTA rollback to previous firmware")
             print("23. Manual OTA rollback to factory firmware")
             print("24. Prepare OTA update (ENABLE_OTA + PREPARE_UPDATE, no transfer)")
@@ -1890,13 +1943,37 @@ async def main():
                         f"description={current_row['current_description']}"
                     )
 
-                version = input("New version value: ").strip()
-                install_date = input("Install date (YYYY-MM-DD): ").strip()
-                description = input("Description: ").strip()
+                if component_name == "CONTROL_PANEL":
+                    interface._print_control_panel_silk_hint()
 
-                if not version or not install_date or not description:
-                    print("All fields are required.")
+                version = input("New version value: ").strip()
+                if not version:
+                    print("Version is required.")
                     continue
+                if component_name == "CONTROL_PANEL":
+                    if interface._refuse_control_panel_version_5(version):
+                        continue
+                    if version == "6":
+                        lab_confirm = input(
+                            "Version 6 is dormant lab-only. Continue? (y/N): "
+                        ).strip().lower()
+                        if lab_confirm != "y":
+                            print("Hardware update cancelled.")
+                            continue
+
+                install_date = input(
+                    "Install date (YYYY-MM-DD, Enter for today): "
+                ).strip()
+                if not install_date:
+                    install_date = datetime.now().strftime("%Y-%m-%d")
+
+                description = input("Description (Enter for default): ").strip()
+                if not description:
+                    if component_name == "CONTROL_PANEL":
+                        description = CONTROL_PANEL_DEFAULT_DESCRIPTION
+                    else:
+                        print("Description is required.")
+                        continue
 
                 confirm = input(
                     f"Apply update to {component_name}? (y/N): "
@@ -1965,7 +2042,12 @@ async def main():
                 component = input("Component: ").strip().upper()
                 version = input("Version: ").strip()
                 profile_id = input("Profile ID: ").strip()
-                print("Enter parameter pairs as key=value;key=value")
+                if component == "CONTROL_PANEL":
+                    print(
+                        "CONTROL_PANEL profiles may use empty params (pinout-only). "
+                        "Press Enter with no params to store an empty blob."
+                    )
+                print("Enter parameter pairs as key=value;key=value (or leave blank for CONTROL_PANEL)")
                 params_input = input("Params: ").strip()
                 pair_dict: Dict[str, float] = {}
                 try:
@@ -1980,12 +2062,19 @@ async def main():
                 except ValueError as parse_error:
                     print(f"Invalid params input: {parse_error}")
                     continue
+                if not pair_dict and component != "CONTROL_PANEL":
+                    print("At least one parameter pair is required.")
+                    continue
                 ok = await interface.hwcfg_profile_put(profile_id, component, version, pair_dict)
                 print("Profile stored." if ok else "Profile store failed.")
 
             elif choice == "17":
                 component = input("Component: ").strip().upper()
                 version = input("New version: ").strip()
+                if component == "CONTROL_PANEL" and version in CONTROL_PANEL_HWCFG_PROFILE_IDS:
+                    if not await interface.ensure_control_panel_hwcfg_profile(version):
+                        print("Failed to ensure CONTROL_PANEL HWCFG profile. Not applying.")
+                        continue
                 validation_response = await interface.hwcfg_validate_change(component, version)
                 if not validation_response:
                     print("Validation failed. Not applying.")
@@ -2028,6 +2117,8 @@ async def main():
 
             elif choice == "21":
                 print("\nTrust handshake...")
+                print("Silk 2.0: press flush only. Silk 2.2: either button (GPIO2 diode-OR).")
+                print("DEV mode skips the physical press.")
                 if await interface.trust_handshake():
                     print("Trust confirmed. Parameter updates and privileged commands are now allowed.")
                     params = await interface.read_current_params()
